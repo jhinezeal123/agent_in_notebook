@@ -113,7 +113,7 @@ function Tool({ part }: { part: Extract<Part, { type: "tool" }> }) {
 
 function Prompt({ part, actions }: { part: Extract<Part, { type: "prompt" }>; actions: PartActions }) {
   const answered = part.answer !== undefined;
-  const chosen = part.options.find((o) => o.id === part.answer)?.name ?? (part.answer === "cancelled" ? "Cancelled" : part.answer);
+  const chosen = part.options.find((o) => o.id === part.answer)?.name ?? (part.answer === "cancelled" ? "Cancelled" : part.answer === "expired" ? "Expired" : part.answer);
   return (
     <div class={`card prompt ${answered ? "done" : "waiting"}`}>
       <div class="card-title">{part.title}</div>

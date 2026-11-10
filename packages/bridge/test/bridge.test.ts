@@ -295,6 +295,20 @@ describe("review", () => {
     ext.close();
   });
 
+  it("expires a run approval through MCP and refuses a late answer", async () => {
+    const { nb, ext, chatId } = await setup([{ type: "code", source: "a = 1" }], { scope: "auto", review: true });
+    try {
+      const text = await turn(ext, chatId, script([{ tool: "run_cells", args: { cell_ids: ["c1"] } }]));
+      expect(text).toContain("RESULT run_cells (error): run_cells failed: Run approval expired");
+      const prompt = ext.parts().find((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt")!;
+      expect(prompt.answer).toBe("expired");
+      expect(await ext.request("chat.answer", { chatId, promptId: prompt.promptId, optionId: "run" })).toEqual({ answered: false });
+      expect(nb.ran).toEqual([]);
+    } finally {
+      ext.close();
+    }
+  });
+
   it("asks before running in autonomous review mode", async () => {
     const { nb, ext, chatId } = await setup([{ type: "code", source: "a = 1" }], { scope: "auto", review: true });
     const before = ext.statuses.length;

@@ -177,6 +177,14 @@ export class JupyterAdapter implements NotebookAdapter {
   }
 
   showReview(review: ReviewInfo): { decided: Promise<boolean>; resolve(accept: boolean): void } {
+    // A review belongs to the notebook that opened it, even after a tab switch.
+    const panel = this.panel;
+    const notebook = panel.content;
+    const model = notebook.model;
+    const findCell = (): Any | undefined => {
+      if (panel.isDisposed || notebook.model !== model) return undefined;
+      return notebook.widgets.find((c: Any) => c.model.id === review.cellId);
+    };
     let settle!: (accept: boolean) => void;
     let settled = false;
     const decided = new Promise<boolean>((resolve) => {
@@ -187,8 +195,10 @@ export class JupyterAdapter implements NotebookAdapter {
       };
     });
 
-    const { cell } = this.find(review.cellId);
+    const cell = findCell();
+    if (!cell) throw new OpError(`No cell with id "${review.cellId}".`);
     if (review.kind === "insert") cell.model.sharedModel.setSource(review.after);
+    const expectedSource = review.kind === "insert" ? review.after : review.before;
     const card = createReviewCard(review, (accept) => settle(accept));
     this.attachCard(review.reviewId, cell, card);
     if (review.kind === "delete") cell.node?.classList.add("ainb-pending-delete");
@@ -198,29 +208,25 @@ export class JupyterAdapter implements NotebookAdapter {
       card.remove();
       this.cards.delete(review.reviewId);
       clearInterval(keepAttached);
-      let present = true;
-      try {
-        this.find(review.cellId);
-      } catch {
-        present = false;
+      const current = findCell();
+      current?.node?.classList.remove("ainb-pending-delete");
+      // Never overwrite or delete edits made while the diff was waiting.
+      if (!current || current.model.sharedModel.getSource() !== expectedSource) return false;
+      if (review.kind === "update" && accept) current.model.sharedModel.setSource(review.after);
+      if ((review.kind === "insert" && !accept) || (review.kind === "delete" && accept)) {
+        model.sharedModel.deleteCell(notebook.widgets.indexOf(current));
       }
-      const node = present ? this.find(review.cellId).cell.node : null;
-      node?.classList.remove("ainb-pending-delete");
-      if (!present) return accept;
-      if (review.kind === "update" && accept) this.setSource(review.cellId, review.after);
-      if (review.kind === "insert" && !accept) this.deleteCell(review.cellId);
-      if (review.kind === "delete" && accept) this.deleteCell(review.cellId);
       return accept;
     });
 
     // Re-rendering can recreate cell nodes; keep the card on the cell, and give
-    // up the review if the user deletes the cell.
+    // up the review if the user deletes or changes the cell.
     const keepAttached = setInterval(() => {
-      try {
-        const { cell: c } = this.find(review.cellId);
-        if (!c.node.contains(card)) this.attachCard(review.reviewId, c, card);
-      } catch {
+      const c = findCell();
+      if (!c || c.model.sharedModel.getSource() !== expectedSource) {
         settle(false);
+      } else if (!c.node.contains(card)) {
+        this.attachCard(review.reviewId, c, card);
       }
     }, 1000);
 

@@ -238,6 +238,19 @@ describe.skipIf(!RUN || !JUPYTER)("Jupyter (Kaggle's editor)", () => {
     expect(await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets[1].model.sharedModel.getSource())).toBe("x = 1\nprint(x)");
     expect(await card.count()).toBe(0);
 
+    // Editing a cell while a review waits must preserve the user's new source.
+    await send(panel, script([{ tool: "update_cell", args: { cell_id: "calc", source: "x = 2\nprint(x)" } }]));
+    await card.waitFor({ timeout: 30_000 });
+    await nb.evaluate(() => {
+      const cell = (window as any).jupyterapp.shell.currentWidget.content.widgets.find((w: any) => w.model.id === "calc");
+      cell.model.sharedModel.setSource("x = 7\nprint(x) # user edit");
+      // Apply in the same task, before the review's conflict polling runs.
+      (document.querySelector(".ainb-review")!.shadowRoot!.querySelector("button.accept") as HTMLButtonElement).click();
+    });
+    await expect.poll(last, { timeout: 30_000 }).toContain("REJECTED");
+    expect(await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets.find((w: any) => w.model.id === "calc").model.sharedModel.getSource())).toBe("x = 7\nprint(x) # user edit");
+    expect(await card.count()).toBe(0);
+
     // Review on + Autonomous: a run waits for permission.
     await send(panel, script([{ tool: "run_cells", args: { cell_ids: ["calc"] } }]));
     const prompt = panel.locator(".card.prompt.waiting");

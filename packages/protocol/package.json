@@ -7,7 +7,7 @@
   "types": "src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "true",
+    "build": "node -e \"\"",
     "test": "vitest run"
   },
   "devDependencies": {

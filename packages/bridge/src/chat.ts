@@ -60,6 +60,7 @@ export class Chat {
   /** Recap to hand a session that joins mid-conversation. */
   private pendingRecap = "";
   private current: ChatMessage | null = null;
+  private turn: { controller: AbortController; prompting: boolean } | null = null;
   private queue: string[] = [];
   private turnTargets: string[] = [];
   private reviews = new Map<string, ReviewState>();
@@ -147,6 +148,7 @@ export class Chat {
       this.host.emit("chat.snapshot", this.snapshot());
     } catch (e) {
       this.agent = null;
+      if (this.closed) throw e;
       const msg = (e as Error).message;
       const hint = e instanceof AgentStartError && e.authRequired ? `\n${this.spec.loginHint}` : "";
       this.setStatus("error", `${msg}${hint}`);
@@ -156,6 +158,8 @@ export class Chat {
 
   close(): void {
     this.closed = true;
+    this.turn?.controller.abort();
+    this.queue = [];
     this.failPrompts();
     for (const r of this.reviews.values()) r.waiters.forEach((w) => w("pending"));
     this.agent?.dispose();
@@ -178,22 +182,32 @@ export class Chat {
   private async runTurn(text: string): Promise<void> {
     const reply = this.newMessage("agent", []);
     this.current = reply;
+    const turn = { controller: new AbortController(), prompting: false };
+    this.turn = turn;
     this.setStatus("running");
     try {
       await this.ensureStarted();
+      turn.controller.signal.throwIfAborted();
       const prompt = await this.buildPrompt(text);
+      turn.controller.signal.throwIfAborted();
+      turn.prompting = true;
       const res = await this.agent!.prompt(prompt);
+      if (this.closed) return;
       this.sessionFresh = false;
       this.pendingRecap = "";
-      if (res.stopReason === "cancelled") this.addPart(reply, { type: "notice", level: "info", text: "Stopped." });
+      if (res.stopReason === "cancelled" || turn.controller.signal.aborted) this.addPart(reply, { type: "notice", level: "info", text: "Stopped." });
       else if (res.stopReason === "refusal") this.addPart(reply, { type: "notice", level: "error", text: "The agent refused this request." });
       else if (res.stopReason === "max_tokens" || res.stopReason === "max_turn_requests") {
         this.addPart(reply, { type: "notice", level: "info", text: `The agent stopped early (${res.stopReason}). Say "continue" to go on.` });
       }
       this.setStatus("idle");
     } catch (e) {
+      if (this.closed) return;
       const msg = (e as Error).message ?? String(e);
-      if (this.status !== "error") {
+      if (turn.controller.signal.aborted) {
+        this.addPart(reply, { type: "notice", level: "info", text: "Stopped." });
+        if (this.status !== "error") this.setStatus("idle");
+      } else if (this.status !== "error") {
         this.addPart(reply, { type: "notice", level: "error", text: capText(msg, 2000) });
         this.setStatus(this.agent?.running ? "idle" : "error", this.agent?.running ? undefined : msg);
       } else {
@@ -202,6 +216,7 @@ export class Chat {
     } finally {
       this.closeOpenTools(reply);
       this.current = null;
+      this.turn = null;
       this.flush();
       const next = this.queue.shift();
       if (next !== undefined && !this.closed) void this.runTurn(next);
@@ -235,7 +250,8 @@ export class Chat {
     this.queue = [];
     this.failPrompts();
     if (!this.current) return false;
-    await this.agent?.cancel().catch(() => {});
+    this.turn?.controller.abort();
+    if (this.turn?.prompting) await this.agent?.cancel().catch(() => {});
     return true;
   }
 
@@ -333,22 +349,28 @@ export class Chat {
   }
 
   /** Show a question in the transcript and wait for the user's choice. */
-  private ask(title: string, detail: string | undefined, options: { id: string; name: string; kind: string }[], signal?: AbortSignal): Promise<string> {
+  private ask(title: string, detail: string | undefined, options: { id: string; name: string; kind: string }[], signal?: AbortSignal, timeoutMs?: number): Promise<string> {
     const promptId = randomUUID();
     const msg = this.current ?? this.lastAgentMessage();
     const part: Part = { type: "prompt", promptId, title, detail, options };
     msg.parts.push(part);
     this.touch(msg);
     return new Promise<string>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const onAbort = () => done("cancelled");
       const done = (answer: string) => {
         if (!this.prompts.has(promptId)) return;
         this.prompts.delete(promptId);
+        if (timer !== undefined) clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         part.answer = answer;
         this.touch(msg);
         resolve(answer);
       };
       this.prompts.set(promptId, done);
-      signal?.addEventListener("abort", () => done("cancelled"), { once: true });
+      if (timeoutMs !== undefined) timer = setTimeout(() => done("expired"), Math.max(0, timeoutMs));
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 
@@ -370,19 +392,29 @@ export class Chat {
   }
 
   toolContext(): ToolContext {
+    const deadline = Date.now() + this.spec.toolWaitMs;
     return {
       settings: () => this.settings,
       targets: () => (this.settings.targetCellIds.length ? this.settings.targetCellIds : this.turnTargets),
       call: (op, timeoutMs) => this.call(op, timeoutMs),
       awaitReview: (id, ms) => this.awaitReview(id, ms),
       confirmRun: async (summary) => {
-        const answer = await this.ask(summary, "Review is on, so running code waits for your approval.", [
-          { id: "run", name: "Run", kind: "allow_once" },
-          { id: "skip", name: "Don't run", kind: "reject_once" },
-        ]);
+        const answer = await this.ask(
+          summary,
+          "Review is on, so running code waits for your approval.",
+          [
+            { id: "run", name: "Run", kind: "allow_once" },
+            { id: "skip", name: "Don't run", kind: "reject_once" },
+          ],
+          undefined,
+          Math.max(0, deadline - Date.now()),
+        );
+        if (answer === "expired") throw new Error("Run approval expired. Nothing was run. Ask the user before requesting it again.");
         return answer === "run";
       },
-      waitMs: this.spec.toolWaitMs,
+      get waitMs() {
+        return Math.max(0, deadline - Date.now());
+      },
     };
   }
 
