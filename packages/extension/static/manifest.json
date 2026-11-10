@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Agent in Notebook",
+  "description": "Let Claude Code, Codex, Gemini CLI, OpenCode or any ACP agent work in your Colab and Kaggle notebooks.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": { "default_title": "Agent in Notebook", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["sidePanel", "storage", "tabs", "webNavigation", "alarms"],
+  "host_permissions": [
+    "https://colab.research.google.com/*",
+    "https://*.kaggle.com/*",
+    "https://*.kaggle.net/*",
+    "https://*.kaggleusercontent.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://colab.research.google.com/*",
+        "https://*.kaggle.com/*",
+        "https://*.kaggle.net/*",
+        "https://*.kaggleusercontent.com/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://colab.research.google.com/*",
+        "https://*.kaggle.com/*",
+        "https://*.kaggle.net/*",
+        "https://*.kaggleusercontent.com/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["page.js"],
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ]
+}

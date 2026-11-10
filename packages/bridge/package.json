@@ -1,0 +1,33 @@
+{
+  "name": "@ainb/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ainb": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node dist/cli.js serve",
+    "typecheck": "tsc --noEmit",
+    "test": "node build.mjs && vitest run"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.101.0",
+    "@agentclientprotocol/codex-acp": "^2.6.0",
+    "@agentclientprotocol/sdk": "^2.4.0",
+    "@ainb/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "cross-spawn": "^7.0.6",
+    "ws": "^8.22.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
