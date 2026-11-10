@@ -20,7 +20,8 @@ import {
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost } from "./chat.js";
-import { BRIDGE_VERSION, dataDir } from "./config.js";
+import { BRIDGE_VERSION, dataDir, removeCustomAgent } from "./config.js";
+import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
 
 export interface BridgeOptions {
@@ -146,7 +147,40 @@ export class Bridge {
         return fn(p);
       };
 
-    rpc.handle("agents.list", guard<"agents.list">(() => ({ agents: describeAgents() })));
+    const changed = () => this.ext?.rpc.emit("agents.changed", { agents: describeAgents() });
+    const checkIdle = (id: string | undefined) => {
+      for (const chat of this.chats.values()) {
+        if (chat.spec.id === id && (chat.status === "running" || chat.status === "starting")) throw new Error("Wait for this agent to finish starting or stop its turn before editing it.");
+      }
+    };
+    const invalidate = (id: string) => {
+      for (const chat of this.chats.values()) {
+        if (chat.spec.id !== id) continue;
+        chat.close();
+        this.byToken.delete(chat.mcpToken);
+        this.ext?.rpc.emit("chat.snapshot", chat.snapshot());
+      }
+    };
+    rpc.handle("agents.list", guard<"agents.list">((p) => {
+      const agents = describeAgents();
+      if (p.refresh) changed();
+      return { agents };
+    }));
+    rpc.handle("agents.save", guard<"agents.save">((p) => {
+      checkIdle(p.id);
+      const agent = saveAgent(p);
+      if (p.id) invalidate(p.id);
+      changed();
+      return { agent };
+    }));
+    rpc.handle("agents.remove", guard<"agents.remove">((p) => {
+      checkIdle(p.id);
+      const removed = removeCustomAgent(p.id);
+      if (removed) invalidate(p.id);
+      changed();
+      return { removed };
+    }));
+    rpc.handle("agents.test", guard<"agents.test">((p) => testAgent(p.launchCommand)));
 
     rpc.handle(
       "chat.open",

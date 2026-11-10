@@ -5,7 +5,7 @@
 import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
-import type { AgentInfo } from "@ainb/protocol";
+import { formatLaunchCommand, type AgentInfo } from "@ainb/protocol";
 import { loadCustomAgents } from "../config.js";
 
 const require = createRequire(import.meta.url);
@@ -132,9 +132,11 @@ export function findAgent(id: string): AgentSpec | undefined {
 }
 
 export function describeAgents(): AgentInfo[] {
+  const launches = new Map(loadCustomAgents().map((c) => [c.id, formatLaunchCommand(c.command, c.args ?? [])]));
   return allAgents().map((a) => {
     const r = a.resolve();
-    if ("missing" in r) return { id: a.id, name: a.name, available: false, reason: r.missing, command: "", builtin: a.builtin };
-    return { id: a.id, name: a.name, available: true, command: [r.launch.command, ...r.launch.args].join(" "), builtin: a.builtin };
+    const base = { id: a.id, name: a.name, builtin: a.builtin, launchCommand: launches.get(a.id) };
+    if ("missing" in r) return { ...base, available: false, reason: r.missing, command: "" };
+    return { ...base, available: true, command: formatLaunchCommand(r.launch.command, r.launch.args) };
   });
 }

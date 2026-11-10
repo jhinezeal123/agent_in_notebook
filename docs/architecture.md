@@ -48,6 +48,12 @@ Những gì giữ lại từ thiết kế orx:
 
 Thêm platform mới chỉ cần implement `NotebookAdapter` (`page/adapter.ts`) và đăng ký trong `page/main.ts`.
 
+## Chuẩn bị agent và quản lý launch command
+
+Side panel mở session ACP ngay khi notebook và agent đã được chọn. `session/new` cung cấp model/effort qua config options trước khi gửi prompt; thay đổi option được áp dụng xong trước khi bật Send. Mỗi tab vẫn dùng một session chat, kể cả lúc transcript còn trống.
+
+`agents.save`, `agents.remove` và `agents.test` chạy qua liên kết extension đã pairing. Launch command được tách thành executable và argv, không chạy qua shell. Agent tùy chỉnh được lưu nguyên các trường cấu hình đang có trong `agents.json`; các lần lưu cập nhật file bằng rename và phát `agents.changed` để side panel cập nhật ngay. Test connection tạo session tạm, từ chối yêu cầu quyền, đọc options rồi dừng agent; không gửi prompt. Sửa/xóa agent đang chạy bị từ chối; session idle được đóng và transcript được giữ để mở lại bằng cấu hình mới.
+
 ## Bảo mật
 
 Xem README. Hai điểm thiết kế đáng nhớ:

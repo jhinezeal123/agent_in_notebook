@@ -263,6 +263,7 @@ export class Chat {
   }
 
   async setOption(optionId: string, value: string | boolean): Promise<void> {
+    if (this.current) throw new Error("Wait for the turn to finish before changing the agent's settings.");
     await this.ensureStarted();
     await this.agent!.setOption(optionId, value);
     this.host.emit("chat.snapshot", this.snapshot());
@@ -272,6 +273,17 @@ export class Chat {
 
   private onUpdate(n: SessionNotification): void {
     const u = n.update;
+    if (u.sessionUpdate === "config_option_update") {
+      this.agent?.applyConfigUpdate((u as any).configOptions ?? []);
+      this.host.emit("chat.snapshot", this.snapshot());
+      return;
+    }
+    if (u.sessionUpdate === "current_mode_update") {
+      this.agent?.applyModeUpdate((u as any).currentModeId);
+      this.host.emit("chat.snapshot", this.snapshot());
+      return;
+    }
+    if (!["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"].includes(u.sessionUpdate)) return;
     const msg = this.current ?? this.lastAgentMessage();
     switch (u.sessionUpdate) {
       case "agent_message_chunk":
@@ -327,14 +339,6 @@ export class Chat {
         this.touch(msg);
         return;
       }
-      case "config_option_update":
-        this.agent?.applyConfigUpdate((u as any).configOptions ?? []);
-        this.host.emit("chat.snapshot", this.snapshot());
-        return;
-      case "current_mode_update":
-        this.agent?.applyModeUpdate((u as any).currentModeId);
-        this.host.emit("chat.snapshot", this.snapshot());
-        return;
       default:
         return;
     }

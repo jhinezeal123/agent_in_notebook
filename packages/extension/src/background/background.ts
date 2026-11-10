@@ -52,7 +52,11 @@ function connect() {
   const peer = new RpcPeer({ send: (env: Envelope) => socket.send(JSON.stringify(env)), timeoutMs: 60_000 });
 
   peer.handle("notebook.op", ({ tabId, op }: { tabId: number; op: NotebookOp }) => runOp(tabId, op));
-  for (const method of ["chat.snapshot", "chat.message", "chat.status", "agents.changed"]) {
+  peer.on("agents.changed", (params: { agents: BridgeState["agents"] }) => {
+    state.agents = params.agents;
+    broadcast({ event: "state", params: state });
+  });
+  for (const method of ["chat.snapshot", "chat.message", "chat.status"]) {
     peer.on(method, (params) => broadcast({ event: "bridge", params: { method, params } }));
   }
 

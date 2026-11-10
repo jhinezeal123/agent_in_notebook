@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from "vitest";
+import { formatLaunchCommand } from "@ainb/protocol";
 
 const RUN = !!process.env.E2E;
 const JUPYTER = process.env.AINB_E2E_JUPYTER;
@@ -118,6 +119,8 @@ async function openPanel(notebookPage: Page): Promise<Page> {
 async function send(panel: Page, text: string) {
   const box = panel.getByPlaceholder(/Ask about this notebook|Queue a follow-up/);
   await box.fill(text);
+  const sendButton = panel.getByRole("button", { name: "Send", exact: true });
+  if (await sendButton.count()) await expect.poll(() => sendButton.isEnabled(), { timeout: 120_000 }).toBe(true);
   await box.press("Enter");
 }
 
@@ -207,12 +210,16 @@ describe.skipIf(!RUN || !JUPYTER)("Jupyter (Kaggle's editor)", () => {
     await nb.goto(`http://localhost:${JUPYTER_PORT}/notebooks/e2e.ipynb?token=e2e`, { waitUntil: "domcontentloaded" });
     panel = await openPanel(nb);
     await expect.poll(() => panel.locator(".top-title").textContent(), { timeout: 60_000 }).toContain("e2e.ipynb");
+    const model = panel.getByLabel("Model", { exact: true });
+    await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
+    expect(await panel.locator(".msg.user").count()).toBe(0);
+    await model.selectOption("smart");
     await panel.getByRole("radio", { name: "Autonomous" }).click();
     await panel.getByLabel("Review").uncheck();
 
     await send(
       panel,
-      script([
+      "ECHO_MODEL\n" + script([
         { tool: "edit_cell", args: { cell_id: "calc", old_text: "41", new_text: "99" } },
         { tool: "run_cells", args: { cell_ids: ["calc"] } },
         { tool: "insert_cell", args: { cell_type: "code", source: "raise ValueError('nope')", after_cell_id: "calc" } },
@@ -222,6 +229,7 @@ describe.skipIf(!RUN || !JUPYTER)("Jupyter (Kaggle's editor)", () => {
     const last = () => panel.locator(".msg.agent").last().textContent();
     await expect.poll(last, { timeout: 90_000 }).toContain("RESULT run_all");
     const text = (await last())!;
+    expect(text).toContain("[model smart]");
     expect(text).toMatch(/RESULT run_cells: cell calc: ok \(exec 1\)\s*100/);
     expect(text).toContain("[error] ValueError: nope");
     const src = await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets.map((w: any) => w.model.sharedModel.getSource()));
@@ -258,4 +266,32 @@ describe.skipIf(!RUN || !JUPYTER)("Jupyter (Kaggle's editor)", () => {
     await prompt.getByRole("button", { name: "Run", exact: true }).click();
     await expect.poll(last, { timeout: 60_000 }).toContain("cell calc: ok");
   }, 240_000);
+
+  it("manages a custom ACP command and selects its model before chatting", async () => {
+    await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
+    const dialog = panel.getByRole("dialog");
+    const launchCommand = formatLaunchCommand(process.execPath, [FAKE_AGENT]);
+    await dialog.getByLabel("Name (optional)").fill("Browser custom ACP");
+    await dialog.getByLabel("Launch command").fill(launchCommand);
+    await dialog.getByRole("button", { name: "Test connection" }).click();
+    await expect.poll(() => dialog.getByRole("status").textContent(), { timeout: 30_000 }).toContain("Connected");
+    await dialog.getByRole("button", { name: "Add agent", exact: true }).click();
+    await expect.poll(() => panel.getByLabel("Agent", { exact: true }).locator("option:checked").textContent(), { timeout: 30_000 }).toBe("Browser custom ACP");
+    const model = panel.getByLabel("Model", { exact: true });
+    await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
+    await model.selectOption("smart");
+    await send(panel, "ECHO_MODEL custom first prompt");
+    await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 30_000 }).toContain("[model smart]");
+    await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
+    const row = dialog.locator(".manager-agent").filter({ hasText: "Browser custom ACP" });
+    await row.getByRole("button", { name: "Edit", exact: true }).click();
+    await dialog.getByLabel("Name (optional)").fill("Renamed browser ACP");
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect.poll(() => panel.getByLabel("Agent", { exact: true }).locator("option:checked").textContent()).toBe("Renamed browser ACP");
+    await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
+    await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
+    await dialog.locator(".manager-agent").filter({ hasText: "Renamed browser ACP" }).getByRole("button", { name: "Remove", exact: true }).click();
+    await expect.poll(() => panel.getByLabel("Agent", { exact: true }).locator("option").allTextContents()).not.toContain("Renamed browser ACP");
+    await dialog.getByRole("button", { name: "Close agent manager" }).click();
+  }, 120_000);
 });

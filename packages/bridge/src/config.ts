@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BRIDGE_DEFAULT_PORT } from "@ainb/protocol";
@@ -69,5 +69,40 @@ export function loadCustomAgents(): CustomAgentConfig[] {
   } catch (e) {
     console.error(`agents.json is not valid JSON: ${(e as Error).message}`);
     return [];
+  }
+}
+
+/** Preserve existing env settings and unknown fields when editing the catalog. */
+export function saveCustomAgent(agent: CustomAgentConfig): void {
+  updateCustomAgents((agents) => {
+    const index = agents.findIndex((a) => a.id === agent.id);
+    if (index < 0) agents.push(agent);
+    else agents[index] = { ...agents[index], ...agent };
+  });
+}
+
+export function removeCustomAgent(id: string): boolean {
+  let removed = false;
+  updateCustomAgents((agents) => {
+    const index = agents.findIndex((a) => a.id === id);
+    if (index >= 0) { agents.splice(index, 1); removed = true; }
+  });
+  return removed;
+}
+
+function updateCustomAgents(update: (agents: CustomAgentConfig[]) => void): void {
+  const file = join(dataDir(), "agents.json");
+  const document = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
+  const agents = Array.isArray(document) ? document : document?.agents;
+  if (!Array.isArray(agents) || agents.some((a) => !a || typeof a.id !== "string" || typeof a.command !== "string")) {
+    throw new Error(`Cannot update ${file}: expected an array of agent definitions (or an object with an agents array).`);
+  }
+  update(agents);
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(document, null, 2), { mode: 0o600 });
+    renameSync(temporary, file);
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary);
   }
 }

@@ -62,7 +62,13 @@ Mở một notebook Colab hoặc Kaggle (ở chế độ chỉnh sửa), bấm i
 | Gemini CLI | `gemini --acp` | `GEMINI_API_KEY` (Google đã ngừng cho tài khoản cá nhân đăng nhập OAuth dùng Gemini CLI) |
 | OpenCode | `opencode acp` | `opencode auth login` |
 
-Thêm agent ACP bất kỳ bằng file `~/.agent-in-notebook/agents.json`:
+### Thêm agent ACP
+
+Bạn có thể thêm, sửa, xóa và **Test connection** ngay trong side panel qua **Manage agents**. Chỉ cần nhập launch command; tên có thể để trống. Ví dụ: `dsh --profile acp` (DeepSeek Harness) hoặc `claude-fp-acp` (launcher Claude FP đã cài trên máy). Lệnh chạy trên máy đang chạy bridge và dùng lại đăng nhập của agent. Đường dẫn hoặc tham số có khoảng trắng cần đặt trong dấu nháy.
+
+Khi chọn agent, extension mở session ACP để tải các lựa chọn model/effort **trước tin nhắn đầu tiên**, chưa gửi prompt đến model. Chọn model xong rồi gửi tin; nút Send sẽ chờ việc đổi model hoàn tất.
+
+Các agent thêm qua giao diện cũng được lưu vào file `~/.agent-in-notebook/agents.json`, nên vẫn có thể quản lý bằng file:
 
 ```json
 [

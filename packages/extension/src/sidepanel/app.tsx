@@ -3,6 +3,7 @@ import { SCOPE_HINT, SCOPE_LABEL, type AgentOption, type ChatMessage, type ChatS
 import { DEFAULT_PREFS, type BridgeState, type Prefs } from "../shared/panel-messages.js";
 import { client } from "./client.js";
 import { Message, type PartActions } from "./parts.js";
+import { AgentManager } from "./agent-manager.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter" } as const;
 
@@ -37,11 +38,17 @@ export function App() {
   const [chat, setChat] = useState<ChatSnapshot | null>(null);
   const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS);
   const [error, setError] = useState<string | null>(null);
+  const [prefsReady, setPrefsReady] = useState(false);
+  const [loadedTab, setLoadedTab] = useState<number | null>(null);
+  const [managingAgents, setManagingAgents] = useState(false);
+  const [changingOption, setChangingOption] = useState(false);
   const tabRef = useRef(tabId);
   tabRef.current = tabId;
+  const agentRef = useRef(prefs.agentId);
+  agentRef.current = prefs.agentId;
 
   useEffect(() => {
-    void chrome.storage.local.get("prefs").then(({ prefs }) => prefs && setPrefsState({ ...DEFAULT_PREFS, ...prefs }));
+    void chrome.storage.local.get("prefs").then(({ prefs }) => prefs && setPrefsState({ ...DEFAULT_PREFS, ...prefs })).finally(() => setPrefsReady(true));
     void client.request<BridgeState>("state.get").then(setBridge);
     return client.on((e) => {
       if (e.event === "state") setBridge({ ...e.params });
@@ -50,7 +57,7 @@ export function App() {
       } else if (e.event === "bridge") {
         const { method, params } = e.params as { method: string; params: any };
         if (params?.tabId !== tabRef.current) return;
-        if (method === "chat.snapshot") setChat(params as ChatSnapshot);
+        if (method === "chat.snapshot" && params.agentId === agentRef.current) setChat(params as ChatSnapshot);
         else if (method === "chat.message") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, messages: upsert(c.messages, params.message) } : c));
         } else if (method === "chat.status") {
@@ -64,11 +71,16 @@ export function App() {
 
   // Load the tab's notebook and chat whenever the tab or the connection changes.
   useEffect(() => {
+    let stale = false;
     setChat(null);
     setNotebook(null);
+    setLoadedTab(null);
     if (tabId === null) return;
     void client.request<NotebookInfo | null>("tab.notebook", { tabId }).then((info) => tabRef.current === tabId && setNotebook(info), () => {});
-    if (connected) void client.request<ChatSnapshot | null>("chat.get", { tabId }).then((c) => tabRef.current === tabId && setChat(c), () => {});
+    if (connected) void client.request<ChatSnapshot | null>("chat.get", { tabId }).then((c) => {
+      if (!stale) { setChat(c); setLoadedTab(tabId); }
+    }, (e) => { if (!stale) setError((e as Error).message); });
+    return () => { stale = true; };
   }, [tabId, connected]);
 
   const setPrefs = (p: Partial<Prefs>) => {
@@ -91,6 +103,17 @@ export function App() {
   const settings: ChatSettings = chat?.settings ?? { scope: prefs.scope, review: prefs.review, targetCellIds: [] };
   const live = chat && chat.status !== "closed" ? chat : null;
 
+  // ACP exposes model choices when the session opens, before any prompt.
+  useEffect(() => {
+    if (!connected || !prefsReady || tabId === null || loadedTab !== tabId || !notebook || live?.agentId === prefs.agentId) return;
+    if (!bridge?.agents.some((a) => a.id === prefs.agentId && a.available)) return;
+    let stale = false;
+    void client.request<ChatSnapshot>("chat.open", { tabId, agentId: prefs.agentId, settings, platform: notebook.platform }).then((snap) => {
+      if (!stale && tabRef.current === tabId && agentRef.current === snap.agentId) setChat(snap);
+    }, (e) => { if (!stale) setError((e as Error).message); });
+    return () => { stale = true; };
+  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, prefs.agentId, live?.agentId, bridge?.agents]);
+
   const updateSettings = (s: ChatSettings) => {
     setPrefs({ scope: s.scope, review: s.review });
     if (live) void run(client.request<ChatSnapshot>("chat.settings", { chatId: live.chatId, settings: s })).then((c) => c && setChat(c));
@@ -99,11 +122,12 @@ export function App() {
   const openChat = async (agentId: string): Promise<ChatSnapshot | undefined> => {
     if (tabId === null || !notebook) return undefined;
     const snap = await run(client.request<ChatSnapshot>("chat.open", { tabId, agentId, settings, platform: notebook.platform }));
-    if (snap) setChat(snap);
+    if (snap && tabRef.current === tabId && agentRef.current === agentId) setChat(snap);
     return snap;
   };
 
   const send = async (text: string) => {
+    if (changingOption) return false;
     setError(null);
     let c = live;
     if (!c || c.agentId !== prefs.agentId) c = (await openChat(prefs.agentId)) ?? null;
@@ -158,6 +182,7 @@ export function App() {
         <div class="center muted pad">
           <p>Open a notebook on Colab or Kaggle (or a local Jupyter started with app exposure) to chat with an agent about it.</p>
           <p class="small">If the notebook is open, reload its tab once after installing the extension.</p>
+          <button class="secondary" onClick={() => setManagingAgents(true)}>Manage agents</button>
         </div>
       ) : (
         <Transcript chat={live} actions={actions} />
@@ -187,17 +212,15 @@ export function App() {
             </div>
           )}
           <ModeBar settings={settings} notebook={notebook} onChange={updateSettings} />
-          <Composer running={running} disabled={!agents.some((a) => a.id === prefs.agentId && a.available)} onSend={send} onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))} />
+          <Composer running={running} disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agents.some((a) => a.id === prefs.agentId && a.available)} onSend={send} onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))} />
           <div class="agent-row">
             <select
               aria-label="Agent"
               value={prefs.agentId}
-              disabled={running}
+              disabled={running || changingOption}
               onChange={(e) => {
                 const id = (e.target as HTMLSelectElement).value;
                 setPrefs({ agentId: id });
-                // Switching hands the conversation to the new agent.
-                if (live && live.agentId !== id) void openChat(id);
               }}
             >
               {agents.map((a) => (
@@ -207,11 +230,20 @@ export function App() {
                 </option>
               ))}
             </select>
-            {live && live.agentId === prefs.agentId && <AgentOptions chat={live} onSet={(id, v) => void run(client.request<ChatSnapshot>("chat.option", { chatId: live.chatId, optionId: id, value: v })).then((c) => c && setChat(c))} />}
+            {live && live.agentId === prefs.agentId && <AgentOptions chat={live} busy={changingOption} onSet={(id, v) => {
+              setChangingOption(true);
+              void run(client.request<ChatSnapshot>("chat.option", { chatId: live.chatId, optionId: id, value: v })).then((c) => {
+                if (c && tabRef.current === c.tabId && agentRef.current === c.agentId) setChat(c);
+              }).finally(() => setChangingOption(false));
+            }} />}
             {live?.status === "starting" && <span class="muted small">starting…</span>}
+            <button class="linkish" disabled={running || changingOption} onClick={() => setManagingAgents(true)}>Manage agents</button>
           </div>
         </footer>
       )}
+      {managingAgents && <AgentManager agents={agents} onSaved={(id) => { setPrefs({ agentId: id }); setManagingAgents(false); }} onRemoved={(id) => {
+        if (prefs.agentId === id) setPrefs({ agentId: agents.find((a) => a.builtin && a.available)?.id ?? "claude" });
+      }} onClose={() => setManagingAgents(false)} />}
     </div>
   );
 }
@@ -342,14 +374,14 @@ function Composer({ running, disabled, onSend, onStop }: { running: boolean; dis
   );
 }
 
-function AgentOptions({ chat, onSet }: { chat: ChatSnapshot; onSet: (id: string, v: string | boolean) => void }) {
+function AgentOptions({ chat, busy, onSet }: { chat: ChatSnapshot; busy: boolean; onSet: (id: string, v: string | boolean) => void }) {
   const order = (o: AgentOption) => ["model", "thought_level", "mode"].indexOf(o.category ?? "") >>> 0;
   const opts = [...chat.options].sort((a, b) => order(a) - order(b));
   return (
     <>
       {opts.map((o) =>
         o.kind === "select" ? (
-          <select key={o.id} aria-label={o.name} title={o.name} value={String(o.value)} disabled={chat.status === "running"} onChange={(e) => onSet(o.id, (e.target as HTMLSelectElement).value)}>
+          <select key={o.id} aria-label={o.name} title={o.name} value={String(o.value)} disabled={busy || chat.status !== "idle"} onChange={(e) => onSet(o.id, (e.target as HTMLSelectElement).value)}>
             {o.choices?.map((c) => (
               <option key={c.value} value={c.value} title={c.description ?? undefined}>
                 {c.name}
@@ -358,7 +390,7 @@ function AgentOptions({ chat, onSet }: { chat: ChatSnapshot; onSet: (id: string,
           </select>
         ) : (
           <label key={o.id} class="toggle small" title={o.name}>
-            <input type="checkbox" checked={!!o.value} disabled={chat.status === "running"} onChange={(e) => onSet(o.id, (e.target as HTMLInputElement).checked)} />
+            <input type="checkbox" checked={!!o.value} disabled={busy || chat.status !== "idle"} onChange={(e) => onSet(o.id, (e.target as HTMLInputElement).checked)} />
             {o.name}
           </label>
         ),

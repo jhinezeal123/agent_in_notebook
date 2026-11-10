@@ -25,6 +25,8 @@ export interface AgentInfo {
   /** How the agent is launched, for display. */
   command: string;
   builtin: boolean;
+  /** Editable launch command for a saved custom agent. */
+  launchCommand?: string;
 }
 
 /** A selectable agent setting (model, reasoning effort, agent mode) exposed over ACP. */
@@ -103,6 +105,9 @@ export interface ChatSnapshot {
 export interface BridgeMethods {
   hello: { params: { token: string; wire: number; extensionVersion: string }; result: { bridgeVersion: string; agents: AgentInfo[] } };
   "agents.list": { params: { refresh?: boolean }; result: { agents: AgentInfo[] } };
+  "agents.save": { params: { id?: string; name?: string; launchCommand: string }; result: { agent: AgentInfo } };
+  "agents.remove": { params: { id: string }; result: { removed: boolean } };
+  "agents.test": { params: { launchCommand: string }; result: { name: string; options: AgentOption[] } };
   "chat.open": {
     params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform };
     result: ChatSnapshot;

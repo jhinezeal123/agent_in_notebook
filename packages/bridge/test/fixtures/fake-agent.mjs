@@ -50,8 +50,9 @@ const app = agent({ name: "fake-agent" })
     sessions.set(sessionId, { mcp: await connectMcp(params.mcpServers), cancelled: false, turns: 0 });
     return { sessionId, configOptions: configOptions() };
   })
-  .onRequest("session/set_config_option", ({ params }) => {
+  .onRequest("session/set_config_option", async ({ params, client }) => {
     model = String(params.value);
+    await client.notify("session/update", { sessionId: params.sessionId, update: { sessionUpdate: "available_commands_update", availableCommands: [] } });
     return { configOptions: configOptions() };
   })
   .onNotification("session/cancel", ({ params }) => {
@@ -70,10 +71,12 @@ const app = agent({ name: "fake-agent" })
       });
     if (text.includes("<agent-in-notebook>")) await say("[saw playbook]");
     if (text.includes("<earlier-conversation>")) await say("[saw recap]");
+    if (text.includes("ECHO_MODEL")) await say(`[model ${model}]`);
     const ctx = text.match(/<notebook-context>[\s\S]*?<\/notebook-context>/);
     if (ctx && text.includes("ECHO_CONTEXT")) await say(ctx[0]);
     if (text.split("\n").at(-1) === "CRASH") process.exit(3);
-    const m = text.match(/SCRIPT: (\[.*\])/);
+    // A handoff recap may contain earlier scripts; only execute this turn's input.
+    const m = text.split("\n").at(-1).match(/SCRIPT: (\[.*\])/);
     const steps = m ? JSON.parse(m[1]) : [{ say: `echo: ${text.split("\n").at(-1)}` }];
     let n = 0;
     for (const step of steps) {

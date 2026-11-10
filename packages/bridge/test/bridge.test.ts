@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ChatSettings, ChatSnapshot, Part } from "@ainb/protocol";
+import { formatLaunchCommand, type AgentInfo, type ChatSettings, type ChatSnapshot, type Part } from "@ainb/protocol";
 import { Bridge } from "../src/server.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
 
@@ -88,6 +88,18 @@ describe("pairing", () => {
 });
 
 describe("chat with a notebook", () => {
+  it("sets the model before the first prompt", async () => {
+    const { ext, chatId } = await setup([]);
+    try {
+      const before = await ext.request<ChatSnapshot>("chat.get", { tabId: ext.tabId });
+      expect(before.messages).toEqual([]);
+      expect(before.options.find((o) => o.category === "model")?.choices?.some((c) => c.value === "smart")).toBe(true);
+      const configured = await ext.request<ChatSnapshot>("chat.option", { chatId, optionId: "model", value: "smart" });
+      expect(configured.messages).toEqual([]);
+      expect(await turn(ext, chatId, "ECHO_MODEL first prompt")).toContain("[model smart]");
+    } finally { ext.close(); }
+  });
+
   it("accepts a message sent while the agent is still starting", async () => {
     const nb = new FakeNotebook([{ type: "code", source: "a = 1" }]);
     const ext = new FakeExtension(nb, nextTab++);
@@ -165,6 +177,25 @@ describe("chat with a notebook", () => {
     expect(text).toContain("RESULT update_cell (error): Invalid arguments");
     expect(text).toContain("RESULT read_cells: No matching cells.");
     ext.close();
+  });
+});
+
+describe("agent management over the extension link", () => {
+  it("adds, tests, edits and removes a launch command without reconnecting", async () => {
+    const ext = new FakeExtension(new FakeNotebook([]), nextTab++);
+    await ext.connect(port, TOKEN);
+    try {
+      const launchCommand = formatLaunchCommand(process.execPath, [FAKE_AGENT]);
+      const added = await ext.request<{ agent: AgentInfo }>("agents.save", { name: "Custom ACP", launchCommand });
+      expect(added.agent).toMatchObject({ name: "Custom ACP", available: true, builtin: false });
+      const tested = await ext.request<{ options: unknown[] }>("agents.test", { launchCommand });
+      expect(tested.options).not.toHaveLength(0);
+      await ext.request("agents.save", { id: added.agent.id, name: "Renamed ACP", launchCommand });
+      const listed = await ext.request<{ agents: AgentInfo[] }>("agents.list", {});
+      expect(listed.agents.find((a) => a.id === added.agent.id)?.name).toBe("Renamed ACP");
+      expect(await ext.request("agents.remove", { id: added.agent.id })).toEqual({ removed: true });
+      expect((await ext.request<{ agents: AgentInfo[] }>("agents.list", {})).agents.some((a) => a.id === added.agent.id)).toBe(false);
+    } finally { ext.close(); }
   });
 });
 

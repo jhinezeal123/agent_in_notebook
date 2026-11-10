@@ -170,3 +170,14 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .field input { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); font-size: 13px; color: var(--fg); }
 .status { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 .status.unpaired { color: var(--warn); }
+
+.agent-manager { width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); }
+.agent-manager::backdrop { background: rgba(0, 0, 0, .45); }
+.manager-head, .manager-actions, .manager-presets, .manager-agent { display: flex; align-items: center; gap: 8px; }
+.manager-head h1 { flex: 1; margin: 0; font-size: 16px; }
+.manager-presets { flex-wrap: wrap; margin-top: 12px; }
+.manager-actions { justify-content: flex-end; margin-top: 14px; }
+.manager-agent { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.manager-agent > div { flex: 1; min-width: 0; }
+.manager-agent code { display: block; overflow-wrap: anywhere; }
+.manager-connected { color: var(--ok); overflow-wrap: anywhere; }
