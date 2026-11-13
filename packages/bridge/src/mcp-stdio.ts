@@ -49,7 +49,14 @@ export async function runMcpStdio(): Promise<void> {
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
       const result = await post("/mcp/call", { name: req.params.name, arguments: req.params.arguments ?? {} });
-      return { content: [{ type: "text", text: String(result.text ?? "") }], isError: !!result.isError };
+      const images: { mime: string; data: string }[] = Array.isArray(result.images) ? result.images : [];
+      return {
+        content: [
+          { type: "text", text: String(result.text ?? "") },
+          ...images.map((i) => ({ type: "image" as const, data: String(i.data), mimeType: String(i.mime) })),
+        ],
+        isError: !!result.isError,
+      };
     } catch (e) {
       return { content: [{ type: "text", text: (e as Error).message }], isError: true };
     }

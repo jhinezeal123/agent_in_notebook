@@ -16,9 +16,16 @@ export interface ChatSettings {
    * the notebook when the message was sent".
    */
   targetCellIds: string[];
+  /**
+   * Refuse the agent's requests to use its own tools (shell, file edits, web)
+   * without asking: notebook content is untrusted input that could talk the
+   * agent into acting on this computer. Tools the agent runs without asking
+   * for permission are not affected.
+   */
+  notebookOnly: boolean;
 }
 
-export const DEFAULT_SETTINGS: ChatSettings = { scope: "write", review: true, targetCellIds: [] };
+export const DEFAULT_SETTINGS: ChatSettings = { scope: "write", review: true, targetCellIds: [], notebookOnly: true };
 
 export type ToolAction = "read" | "update" | "insert" | "delete" | "move" | "run" | "interrupt";
 

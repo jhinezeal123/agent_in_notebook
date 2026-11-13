@@ -76,6 +76,7 @@ export class JupyterAdapter implements NotebookAdapter {
       selectedCellIds: selected,
       kernel: !k ? "disconnected" : status === "idle" ? "idle" : status === "busy" ? "busy" : status === "dead" ? "disconnected" : "unknown",
       language: String(nb.model?.defaultKernelLanguage || panel.sessionContext?.kernelPreference?.language || "python"),
+      docPath: typeof panel.context?.path === "string" ? panel.context.path : undefined,
     };
   }
 

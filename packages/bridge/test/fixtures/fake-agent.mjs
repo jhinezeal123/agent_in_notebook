@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 const sessions = new Map();
 let model = "fast";
+let clientCapabilities = {};
 
 const configOptions = () => [
   {
@@ -40,11 +41,14 @@ async function connectMcp(servers) {
 }
 
 const app = agent({ name: "fake-agent" })
-  .onRequest("initialize", () => ({
-    protocolVersion: 1,
-    agentCapabilities: { mcpCapabilities: { http: false, sse: false } },
-    authMethods: [],
-  }))
+  .onRequest("initialize", ({ params }) => {
+    clientCapabilities = params.clientCapabilities ?? {};
+    return {
+      protocolVersion: 1,
+      agentCapabilities: { mcpCapabilities: { http: false, sse: false }, promptCapabilities: { image: true } },
+      authMethods: [],
+    };
+  })
   .onRequest("session/new", async ({ params }) => {
     const sessionId = `s${sessions.size + 1}`;
     sessions.set(sessionId, { mcp: await connectMcp(params.mcpServers), cancelled: false, turns: 0 });
@@ -71,6 +75,7 @@ const app = agent({ name: "fake-agent" })
       });
     if (text.includes("<agent-in-notebook>")) await say("[saw playbook]");
     if (text.includes("<earlier-conversation>")) await say("[saw recap]");
+    if (text.includes("<undo-note>")) await say("[saw undo note]");
     if (text.includes("ECHO_MODEL")) await say(`[model ${model}]`);
     const ctx = text.match(/<notebook-context>[\s\S]*?<\/notebook-context>/);
     if (ctx && text.includes("ECHO_CONTEXT")) await say(ctx[0]);
@@ -82,6 +87,15 @@ const app = agent({ name: "fake-agent" })
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
       if (step.say) await say(step.say);
+      // Like Claude's adapter: report a compaction only to clients that support it.
+      if (step.compact) {
+        if (!clientCapabilities.session?.compaction) await say("[compaction not supported by client]");
+        else {
+          for (const status of ["in_progress", "completed"]) {
+            await client.notify("session/update", { sessionId: params.sessionId, update: { sessionUpdate: "compaction_update", compactionId: `k${s.turns}`, status } });
+          }
+        }
+      }
       if (step.sleep) {
         const end = Date.now() + step.sleep;
         while (Date.now() < end && !s.cancelled) await new Promise((r) => setTimeout(r, 20));
@@ -106,12 +120,15 @@ const app = agent({ name: "fake-agent" })
         });
         const mcp = s.mcp.find((c) => c.name === "notebook");
         const r = await mcp.client.callTool({ name: step.tool, arguments: step.args ?? {} }, undefined, { timeout: 600_000 });
-        const out = r.content.map((c) => c.text).join("");
+        const out = r.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+        const images = r.content.filter((c) => c.type === "image");
+        if (images.length) await say(`IMAGES ${images.length} ${images.map((i) => `${i.mimeType}:${i.data.length}`).join(",")}\n`);
         await client.notify("session/update", {
           sessionId: params.sessionId,
           update: { sessionUpdate: "tool_call_update", toolCallId: id, status: r.isError ? "failed" : "completed" },
         });
-        await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${out}\n`);
+        // `quiet` calls say nothing, so several calls in a row sit next to each other like a real agent's.
+        if (!step.quiet) await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${out}\n`);
       }
     }
     return { stopReason: "end_turn" };

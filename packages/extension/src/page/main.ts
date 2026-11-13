@@ -30,7 +30,7 @@ function start(adapter: NotebookAdapter) {
   const announce = () => {
     try {
       const info = adapter.info();
-      const key = `${info.platform}|${info.title}`;
+      const key = `${info.platform}|${info.title}|${info.docPath ?? ""}`;
       if (key !== lastKey) {
         lastKey = key;
         post({ kind: "ready", info });

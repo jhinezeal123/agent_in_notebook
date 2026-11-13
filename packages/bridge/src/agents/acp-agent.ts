@@ -74,6 +74,8 @@ export class AcpAgent {
       env: { ...process.env, ...this.launch.env },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      // Its own process group on POSIX, so stopping it also stops what it spawned.
+      detached: process.platform !== "win32",
     });
     this.child = child;
     child.stderr!.setEncoding("utf8");
@@ -119,7 +121,9 @@ export class AcpAgent {
     const handshake = async () => {
       this.init = await this.conn!.agent.request("initialize", {
         protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        // `session.compaction`: the agent reports compacting its context (compaction_update),
+        // after which the notebook rules are sent again.
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, session: { compaction: {} } },
         clientInfo: { name: "agent-in-notebook", title: "Agent in Notebook", version: BRIDGE_VERSION },
       });
       try {
@@ -243,11 +247,22 @@ function killTree(child: ChildProcess): void {
   if (!child.pid) return;
   if (process.platform === "win32") {
     spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
-  } else {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // gone
-    }
+    return;
   }
+  // The agent leads its own process group (spawned detached): signal the whole
+  // group, then make sure nothing is left after a grace period.
+  const pid = child.pid;
+  const signal = (sig: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, sig);
+    } catch {
+      try {
+        child.kill(sig);
+      } catch {
+        // gone
+      }
+    }
+  };
+  signal("SIGTERM");
+  setTimeout(() => signal("SIGKILL"), 3000).unref();
 }

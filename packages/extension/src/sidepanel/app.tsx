@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { EXTENSION_ID, SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type Prefs } from "../shared/panel-messages.js";
 import { client } from "./client.js";
-import { Message, type PartActions } from "./parts.js";
+import { copyText, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { AgentManager } from "./agent-manager.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter" } as const;
@@ -46,6 +46,8 @@ export function App() {
   tabRef.current = tabId;
   const agentRef = useRef(prefs.agentId);
   agentRef.current = prefs.agentId;
+  /** Mode changes made while no chat was open yet; applied to the chat once it opens. */
+  const unsentSettings = useRef<Partial<ChatSettings> | null>(null);
 
   useEffect(() => {
     void chrome.storage.local.get("prefs").then(({ prefs }) => prefs && setPrefsState({ ...DEFAULT_PREFS, ...prefs })).finally(() => setPrefsReady(true));
@@ -58,8 +60,19 @@ export function App() {
         const { method, params } = e.params as { method: string; params: any };
         if (params?.tabId !== tabRef.current) return;
         if (method === "chat.snapshot" && params.agentId === agentRef.current) setChat(params as ChatSnapshot);
-        else if (method === "chat.message") {
-          setChat((c) => (c && c.chatId === params.chatId ? { ...c, messages: upsert(c.messages, params.message) } : c));
+        else if (method === "chat.patch") {
+          setChat((c) => {
+            if (!c || c.chatId !== params.chatId) return c;
+            const messages = applyMessagePatch(c.messages, params as MessagePatch);
+            if (messages) return { ...c, messages };
+            // An update was missed (the panel was busy reconnecting): fetch the whole chat.
+            queueMicrotask(() => void client.request<ChatSnapshot | null>("chat.get", { tabId: params.tabId }).then((snap) => {
+              if (snap && snap.tabId === tabRef.current) setChat(snap);
+            }, () => {}));
+            return c;
+          });
+        } else if (method === "chat.usage") {
+          setChat((c) => (c && c.chatId === params.chatId ? { ...c, usage: params.usage } : c));
         } else if (method === "chat.status") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, status: params.status, error: params.error } : c));
         }
@@ -100,29 +113,48 @@ export function App() {
     }
   }, []);
 
-  const settings: ChatSettings = chat?.settings ?? { scope: prefs.scope, review: prefs.review, targetCellIds: [] };
-  const live = chat && chat.status !== "closed" ? chat : null;
+  // The open chat's settings, unless it belongs to another agent (being switched away from).
+  const settings: ChatSettings =
+    chat && chat.agentId === prefs.agentId ? chat.settings : { scope: prefs.scope, review: prefs.review, targetCellIds: [], notebookOnly: prefs.notebookOnly };
+  // A chat belongs to one notebook: when another notebook fills the tab, the
+  // old chat is not shown and a chat for the new notebook is opened (or restored).
+  const live = chat && chat.status !== "closed" && (!chat.notebookKey || !notebook?.key || chat.notebookKey === notebook.key) ? chat : null;
 
   // ACP exposes model choices when the session opens, before any prompt.
   useEffect(() => {
     if (!connected || !prefsReady || tabId === null || loadedTab !== tabId || !notebook || live?.agentId === prefs.agentId) return;
     if (!bridge?.agents.some((a) => a.id === prefs.agentId && a.available)) return;
     let stale = false;
-    void client.request<ChatSnapshot>("chat.open", { tabId, agentId: prefs.agentId, settings, platform: notebook.platform }).then((snap) => {
-      if (!stale && tabRef.current === tabId && agentRef.current === snap.agentId) setChat(snap);
+    void client.request<ChatSnapshot>("chat.open", { tabId, agentId: prefs.agentId, settings, platform: notebook.platform, notebookKey: notebook.key }).then((snap) => {
+      if (!stale && tabRef.current === tabId && agentRef.current === snap.agentId) adopt(snap);
     }, (e) => { if (!stale) setError((e as Error).message); });
     return () => { stale = true; };
-  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, prefs.agentId, live?.agentId, bridge?.agents]);
+  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, notebook?.key, prefs.agentId, live?.agentId, bridge?.agents]);
 
   const updateSettings = (s: ChatSettings) => {
-    setPrefs({ scope: s.scope, review: s.review });
-    if (live) void run(client.request<ChatSnapshot>("chat.settings", { chatId: live.chatId, settings: s })).then((c) => c && setChat(c));
+    setPrefs({ scope: s.scope, review: s.review, notebookOnly: s.notebookOnly });
+    if (live && live.agentId === prefs.agentId) {
+      // Show the change at once; the bridge's answer confirms it.
+      setChat((c) => (c && c.chatId === live.chatId ? { ...c, settings: s } : c));
+      void run(client.request<ChatSnapshot>("chat.settings", { chatId: live.chatId, settings: s })).then((c) => c && setChat(c));
+    } else unsentSettings.current = { ...unsentSettings.current, scope: s.scope, review: s.review, notebookOnly: s.notebookOnly };
+  };
+
+  /** Show a freshly opened chat, carrying over mode changes made while it was opening. */
+  const adopt = (snap: ChatSnapshot) => {
+    setChat(snap);
+    const unsent = unsentSettings.current;
+    unsentSettings.current = null;
+    if (!unsent || snap.status === "closed") return;
+    const next = { ...snap.settings, ...unsent };
+    if (next.scope === snap.settings.scope && next.review === snap.settings.review && next.notebookOnly === snap.settings.notebookOnly) return;
+    void run(client.request<ChatSnapshot>("chat.settings", { chatId: snap.chatId, settings: next })).then((c) => c && setChat(c));
   };
 
   const openChat = async (agentId: string): Promise<ChatSnapshot | undefined> => {
     if (tabId === null || !notebook) return undefined;
-    const snap = await run(client.request<ChatSnapshot>("chat.open", { tabId, agentId, settings, platform: notebook.platform }));
-    if (snap && tabRef.current === tabId && agentRef.current === agentId) setChat(snap);
+    const snap = await run(client.request<ChatSnapshot>("chat.open", { tabId, agentId, settings, platform: notebook.platform, notebookKey: notebook.key }));
+    if (snap && tabRef.current === tabId && agentRef.current === agentId) adopt(snap);
     return snap;
   };
 
@@ -141,6 +173,11 @@ export function App() {
       answer: (promptId, optionId) => live && void run(client.request("chat.answer", { chatId: live.chatId, promptId, optionId })),
       review: (reviewId, accept) => live && void run(client.request("chat.review", { chatId: live.chatId, reviewId, accept })),
       focusCell: (cellId) => tabId !== null && void run(client.request("notebook.focus", { tabId, cellId })),
+      insertCell: (source, cellType) => tabId !== null && void run(client.request("notebook.insert", { tabId, source, cellType })),
+      // The transcript shows the outcome (a notice on the message); errors show in the banner.
+      undo: async (messageId) => {
+        if (live) await run(client.request("chat.undo", { chatId: live.chatId, messageId }));
+      },
     }),
     [live?.chatId, tabId],
   );
@@ -150,7 +187,10 @@ export function App() {
 
   const agents = bridge.agents;
   const running = live?.status === "running";
-  const pendingReviews = (live?.messages ?? []).flatMap((m) => m.parts).filter((p): p is Extract<Part, { type: "review" }> => p.type === "review" && p.status === "pending");
+  const allParts = (live?.messages ?? []).flatMap((m) => m.parts);
+  const pendingReviews = allParts.filter((p): p is Extract<Part, { type: "review" }> => p.type === "review" && p.status === "pending");
+  const pendingPrompts = allParts.filter((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt" && p.answer === undefined);
+  const history = (live?.messages ?? []).filter((m) => m.role === "user").map((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(""));
 
   return (
     <div class="app">
@@ -169,7 +209,7 @@ export function App() {
         {live && (
           <button
             class="icon"
-            title="New chat"
+            title="New chat (clears the saved conversation for this notebook)"
             aria-label="New chat"
             onClick={() => void run(client.request("chat.close", { chatId: live.chatId })).then(() => setChat(null))}
           >
@@ -200,6 +240,7 @@ export function App() {
 
       {notebook && (
         <footer class="bottom">
+          {pendingPrompts[0] && <PendingPrompt part={pendingPrompts[0]} more={pendingPrompts.length - 1} actions={actions} />}
           {pendingReviews.length > 1 && (
             <div class="bulk">
               {pendingReviews.length} changes await review
@@ -212,7 +253,7 @@ export function App() {
             </div>
           )}
           <ModeBar settings={settings} notebook={notebook} onChange={updateSettings} />
-          <Composer running={running} disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agents.some((a) => a.id === prefs.agentId && a.available)} onSend={send} onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))} />
+          <Composer history={history} running={running} disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agents.some((a) => a.id === prefs.agentId && a.available)} onSend={send} onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))} />
           <div class="agent-row">
             <select
               aria-label="Agent"
@@ -237,6 +278,7 @@ export function App() {
               }).finally(() => setChangingOption(false));
             }} />}
             {live?.status === "starting" && <span class="muted small">starting…</span>}
+            {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
             <button class="linkish" disabled={running || changingOption} onClick={() => setManagingAgents(true)}>Manage agents</button>
           </div>
         </footer>
@@ -248,20 +290,33 @@ export function App() {
   );
 }
 
-function upsert(list: ChatMessage[], m: ChatMessage): ChatMessage[] {
-  const i = list.findIndex((x) => x.id === m.id);
-  if (i < 0) return [...list, m];
-  const next = list.slice();
-  next[i] = m;
-  return next;
+/** Elapsed time, written straight into the node each second so the transcript does not re-render. */
+function Elapsed({ since }: { since: number }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const write = () => {
+      const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
+      const text = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+      if (ref.current && ref.current.textContent !== text) ref.current.textContent = text;
+    };
+    write();
+    const timer = setInterval(write, 1000);
+    return () => clearInterval(timer);
+  }, [since]);
+  return <span ref={ref} class="elapsed" />;
 }
 
 function Transcript({ chat, actions }: { chat: ChatSnapshot | null; actions: PartActions }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const lastHeight = useRef(0);
+  const [behind, setBehind] = useState(false);
   useLayoutEffect(() => {
     const el = ref.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (stick.current) el.scrollTop = el.scrollHeight;
+    else if (el.scrollHeight > lastHeight.current && !behind) setBehind(true);
+    lastHeight.current = el.scrollHeight;
   });
   if (!chat || !chat.messages.length) {
     return (
@@ -277,19 +332,42 @@ function Transcript({ chat, actions }: { chat: ChatSnapshot | null; actions: Par
       </div>
     );
   }
+  const running = chat.status === "running";
+  const last = chat.messages.at(-1);
+  const liveId = running && last?.role === "agent" ? last.id : null;
   return (
-    <div
-      class="transcript"
-      ref={ref}
-      onScroll={(e) => {
-        const el = e.currentTarget as HTMLDivElement;
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      }}
-    >
-      {chat.messages.map((m) => (
-        <Message key={m.id} msg={m} actions={actions} />
-      ))}
-      {chat.status === "running" && <div class="typing" aria-label="Agent is working">●●●</div>}
+    <div class="transcript-wrap">
+      <div
+        class="transcript"
+        ref={ref}
+        onScroll={(e) => {
+          const el = e.currentTarget as HTMLDivElement;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          if (stick.current && behind) setBehind(false);
+        }}
+      >
+        {chat.messages.map((m) => (
+          <Message key={m.id} msg={m} actions={actions} live={m.id === liveId} />
+        ))}
+        {running && (
+          <div class="working" aria-label="Agent is working">
+            <span class="spinner" aria-hidden="true" /> Working <Elapsed since={last?.role === "agent" ? last.createdAt : Date.now()} />
+          </div>
+        )}
+      </div>
+      {behind && (
+        <button
+          class="jump"
+          onClick={() => {
+            const el = ref.current;
+            if (el) el.scrollTop = el.scrollHeight;
+            stick.current = true;
+            setBehind(false);
+          }}
+        >
+          ↓ New messages
+        </button>
+      )}
     </div>
   );
 }
@@ -311,6 +389,10 @@ function ModeBar({ settings, notebook, onChange }: { settings: ChatSettings; not
         <input type="checkbox" checked={settings.review} onChange={(e) => onChange({ ...settings, review: (e.target as HTMLInputElement).checked })} />
         Review
       </label>
+      <label class="toggle" title="Refuse the agent's requests to use its own tools on this computer (shell, file edits, web). Notebook content could try to talk the agent into them.">
+        <input type="checkbox" checked={settings.notebookOnly} onChange={(e) => onChange({ ...settings, notebookOnly: (e.target as HTMLInputElement).checked })} />
+        Notebook only
+      </label>
       {settings.scope === "cell" && (
         <div class="targets">
           <span class="muted">{pinned ? "Pinned:" : "Target (selected):"}</span> {targets.length ? targets.map((t) => t.slice(0, 10)).join(", ") : <em>select a cell</em>}
@@ -331,9 +413,11 @@ function ModeBar({ settings, notebook, onChange }: { settings: ChatSettings; not
   );
 }
 
-function Composer({ running, disabled, onSend, onStop }: { running: boolean; disabled: boolean; onSend: (t: string) => Promise<boolean>; onStop: () => void }) {
+function Composer({ history, running, disabled, onSend, onStop }: { history: string[]; running: boolean; disabled: boolean; onSend: (t: string) => Promise<boolean>; onStop: () => void }) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
+  /** Position in `history` while recalling earlier prompts with the arrow keys. */
+  const recall = useRef<number | null>(null);
   const submit = async () => {
     const t = text.trim();
     if (!t || disabled) return;
@@ -353,11 +437,30 @@ function Composer({ running, disabled, onSend, onStop }: { running: boolean; dis
         rows={2}
         placeholder={running ? "Queue a follow-up…" : "Ask about this notebook…"}
         value={text}
-        onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+        onInput={(e) => {
+          recall.current = null;
+          setText((e.target as HTMLTextAreaElement).value);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
+            recall.current = null;
             void submit();
+            return;
+          }
+          // Arrow keys walk through earlier prompts when the box is empty or shows a recalled one.
+          const el = e.currentTarget as HTMLTextAreaElement;
+          const browsing = recall.current !== null && text === history[recall.current];
+          const oneLine = !text.includes("\n");
+          if (e.key === "ArrowUp" && history.length && (text === "" || browsing) && (el.selectionStart === 0 || (browsing && oneLine))) {
+            e.preventDefault();
+            recall.current = recall.current === null ? history.length - 1 : Math.max(0, recall.current - 1);
+            setText(history[recall.current]!);
+          } else if (e.key === "ArrowDown" && browsing && (el.selectionEnd === text.length || oneLine)) {
+            e.preventDefault();
+            const next = recall.current! + 1;
+            recall.current = next < history.length ? next : null;
+            setText(next < history.length ? history[next]! : "");
           }
         }}
       />
@@ -371,6 +474,20 @@ function Composer({ running, disabled, onSend, onStop }: { running: boolean; dis
         </button>
       )}
     </div>
+  );
+}
+
+/** How full the agent's context window is, as the agent reported it. */
+function ContextMeter({ usage }: { usage: ChatUsage }) {
+  const share = usage.size > 0 ? Math.min(1, usage.used / usage.size) : 0;
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+  const cost = usage.cost ? ` · ${usage.cost.amount.toFixed(2)} ${usage.cost.currency}` : "";
+  const level = share >= 0.85 ? " full" : share >= 0.6 ? " filling" : "";
+  return (
+    <span class={`context-meter${level}`} title={`Context: ${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens${cost}. Start a new chat when it is nearly full.`}>
+      <span class="bar"><span style={{ width: `${Math.round(share * 100)}%` }} /></span>
+      {k(usage.used)}/{k(usage.size)}
+    </span>
   );
 }
 
@@ -401,40 +518,81 @@ function AgentOptions({ chat, busy, onSet }: { chat: ChatSnapshot; busy: boolean
 
 function Setup({ bridge }: { bridge: BridgeState }) {
   const [port, setPort] = useState(String(bridge.config.port));
-  const [token, setToken] = useState(bridge.config.token);
+  const [token, setToken] = useState(bridge.config.source === "manual" ? bridge.config.token : "");
   const [saving, setSaving] = useState(false);
+  const manual = bridge.config.source === "manual";
+  const native = bridge.native?.status;
+  const needsInstall = native === "missing" || native === "forbidden";
+  const busy = bridge.conn === "connecting";
+  // The ID is fixed by the manifest's key; a copy loaded without it needs its own entry.
+  const command = `ainb install${bridge.extensionId !== EXTENSION_ID ? ` --extension-id ${bridge.extensionId}` : ""}`;
+  const auto = () => void client.request("config.auto", {}).catch(() => {});
+  // Before installing, "paste the token" is not the next step; installing is.
+  const status = needsInstall && !manual && bridge.conn === "unpaired" ? null : busy ? null : bridge.error ?? (bridge.conn === "unpaired" ? "Not paired yet." : "Not connected.");
   return (
     <div class="setup pad">
       <h1>Connect to the bridge</h1>
       <p>The agents run on your computer through a small local bridge.</p>
-      <ol>
-        <li>
-          Start it: <code>pnpm bridge</code> in the project folder (or <code>node packages/bridge/dist/cli.js serve</code>).
-        </li>
-        <li>Paste the pairing token it prints below.</li>
-      </ol>
-      <label class="field">
-        Pairing token
-        <input type="password" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} placeholder="from the bridge's console" autocomplete="off" />
-      </label>
-      <label class="field">
-        Port
-        <input inputMode="numeric" value={port} onInput={(e) => setPort((e.target as HTMLInputElement).value)} />
-      </label>
-      <button
-        class="primary"
-        disabled={saving || !token.trim()}
-        onClick={async () => {
-          setSaving(true);
-          await client.request("config.set", { port: Number(port), token }).catch(() => {});
-          setSaving(false);
-        }}
-      >
-        {bridge.conn === "connecting" ? "Connecting…" : "Connect"}
-      </button>
-      <p class={`status ${bridge.conn}`}>
-        {bridge.conn === "connecting" ? "Connecting…" : bridge.error ?? (bridge.conn === "unpaired" ? "Not paired yet." : "Not connected.")}
-      </p>
+      {!manual &&
+        (needsInstall ? (
+          <>
+            <p>
+              {native === "forbidden"
+                ? "The bridge is set up for another copy of this extension. Run this once in a terminal:"
+                : "Set it up once: run this in a terminal, then come back here. The panel then starts the bridge by itself."}
+            </p>
+            <div class="cmd">
+              <code>{command}</code>
+              <button class="linkish" onClick={(e) => void copyText(command, e.currentTarget)}>
+                Copy
+              </button>
+            </div>
+            <p class="muted small">
+              From the project folder: <code>pnpm ainb {command.slice(5)}</code>
+            </p>
+            <button class="primary" disabled={busy} onClick={auto}>
+              {busy ? "Checking…" : "Check again"}
+            </button>
+          </>
+        ) : (
+          <button class="primary" disabled={busy} onClick={auto}>
+            {busy ? "Starting the bridge…" : bridge.conn === "replaced" ? "Connect here" : "Start the bridge"}
+          </button>
+        ))}
+      {status && <p class={`status ${bridge.conn}`}>{status}</p>}
+      {bridge.native?.log && <pre class="setup-log">{bridge.native.log}</pre>}
+      <details class="manual" open={manual}>
+        <summary>Connect with a pairing token instead</summary>
+        <p class="muted small">
+          For a bridge started by hand (<code>ainb serve</code> prints the token), for example in WSL or on another port.
+        </p>
+        <label class="field">
+          Pairing token
+          <input type="password" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} placeholder="from the bridge's console" autocomplete="off" />
+        </label>
+        <label class="field">
+          Port
+          <input inputMode="numeric" value={port} onInput={(e) => setPort((e.target as HTMLInputElement).value)} />
+        </label>
+        <div class="row-actions">
+          <button
+            class={manual ? "primary" : "secondary"}
+            disabled={saving || !token.trim()}
+            onClick={async () => {
+              setSaving(true);
+              await client.request("config.set", { port: Number(port), token }).catch(() => {});
+              setSaving(false);
+            }}
+          >
+            {manual && busy ? "Connecting…" : manual && bridge.conn === "replaced" ? "Connect here" : "Connect"}
+          </button>
+          {manual && (
+            <button class="linkish" onClick={auto}>
+              Set up automatically instead
+            </button>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

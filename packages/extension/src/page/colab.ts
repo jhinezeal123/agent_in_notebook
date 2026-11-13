@@ -134,12 +134,17 @@ export class ColabAdapter implements NotebookAdapter {
     this.nb.removeCells([this.cell(cellId)]);
   }
 
-  moveCell(cellId: string, index: number): number {
+  async moveCell(cellId: string, index: number): Promise<number> {
     const max = this.cells().length - 1;
     const target = Math.max(0, Math.min(index, max));
     this.cell(cellId);
-    void this.tool("move_cell").toolCallback({ cellId, cellIndex: target });
-    return target;
+    // Colab's tool reports failure by rejecting; let that reach the agent, but
+    // never hang on a callback that does not settle.
+    const moved = Promise.resolve(this.tool("move_cell").toolCallback({ cellId, cellIndex: target }));
+    const r = await within(moved.then(() => null, (e: Error) => e), 5_000);
+    if (r.done && r.value) throw new OpError(`Colab could not move the cell: ${r.value.message}`);
+    const now = this.cells().findIndex((c) => c.getId() === cellId);
+    return now >= 0 ? now : target;
   }
 
   async runCell(cellId: string, timeoutMs: number): Promise<RunResult> {

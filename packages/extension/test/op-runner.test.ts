@@ -132,4 +132,34 @@ describe("OpRunner", () => {
     const r = (await runner.run({ op: "run_cells", cellIds: ["a", "c"], timeoutMs: 30, stopOnError: true })) as { results: RunResult[] };
     expect(r.results.map((x) => x.status)).toEqual(["timeout", "skipped"]);
   });
+
+  it("journals the agent's applied changes for undo, but not the user's own", async () => {
+    const { events, runner, adapter } = setup();
+    const changes = () => events.flatMap((e) => (e.type === "change_applied" ? [e.change] : []));
+    await runner.run({ op: "update_cell", cellId: "a", source: "x = 5", review: false });
+    await runner.run({ op: "update_cell", cellId: "a", source: "x = 5", review: false }); // no-op: not journaled
+    const ins = (await runner.run({ op: "insert_cell", index: 1, cellType: "markdown", source: "# hi", review: false })) as { cellId: string };
+    await runner.run({ op: "delete_cell", cellId: "c", review: false });
+    await runner.run({ op: "move_cell", cellId: "a", index: 1 });
+    await runner.run({ op: "insert_cell", index: 0, cellType: "code", source: "mine", review: false, byUser: true });
+    await runner.run({ op: "update_cell", cellId: "b", source: "undo", review: false, byUser: true });
+    expect(changes()).toEqual([
+      { kind: "update", cellId: "a", cellType: "code", index: 0, before: "x = 1", after: "x = 5" },
+      { kind: "insert", cellId: ins.cellId, cellType: "markdown", index: 1, before: "", after: "# hi" },
+      { kind: "delete", cellId: "c", cellType: "code", index: 3, before: "y = 2", after: "" },
+      { kind: "move", cellId: "a", cellType: "code", index: 0, toIndex: 1, before: "", after: "" },
+    ]);
+
+    // A review is journaled when accepted (before it closes), with the cell's place when it opened.
+    const del = (await runner.run({ op: "delete_cell", cellId: "b", review: true })) as { reviewId: string };
+    const rej = (await runner.run({ op: "update_cell", cellId: ins.cellId, source: "# no", review: true })) as { reviewId: string };
+    const bIndex = adapter.cells.findIndex((c) => c.id === "b");
+    adapter.shown.find((s) => s.review.reviewId === del.reviewId)!.decide(true);
+    adapter.shown.find((s) => s.review.reviewId === rej.reviewId)!.decide(false);
+    await tick();
+    await tick();
+    expect(changes().slice(4)).toEqual([{ kind: "delete", cellId: "b", cellType: "code", index: bIndex, before: "undo", after: "", reviewId: del.reviewId }]);
+    const order = events.map((e) => e.type).filter((t) => t === "change_applied" || t === "review_closed");
+    expect(order.slice(-3)).toEqual(["change_applied", "review_closed", "review_closed"]);
+  });
 });

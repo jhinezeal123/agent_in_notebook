@@ -83,6 +83,9 @@ beforeAll(async () => {
   });
   const sw = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent("serviceworker"));
   extId = new URL(sw.url()).host;
+  // Pair by hand with this test's bridge, before any panel opens: a native host
+  // registered on this machine (`ainb install`) would start and pair with the user's own.
+  await sw.evaluate(([port, token]) => chrome.storage.local.set({ config: { port, token, source: "manual" } }), [PORT, TOKEN] as const);
 }, 120_000);
 
 afterAll(async () => {
@@ -107,7 +110,11 @@ async function openPanel(notebookPage: Page): Promise<Page> {
   const tabId = await tabIdOf(notebookPage);
   const panel = await ctx.newPage();
   await panel.goto(`chrome-extension://${extId}/sidepanel.html?tab=${tabId}`);
-  if (await panel.getByText("Connect to the bridge").isVisible().catch(() => false)) {
+  // Either the setup screen or, once paired, the main view.
+  await panel.locator(".setup, .app").first().waitFor({ timeout: 30_000 });
+  if (await panel.locator(".setup").count()) {
+    // No native host in this browser: pair by hand.
+    await panel.getByText("Connect with a pairing token instead").click();
     await panel.getByPlaceholder("from the bridge's console").fill(TOKEN);
     await panel.getByLabel("Port").fill(String(PORT));
     await panel.getByRole("button", { name: "Connect" }).click();
@@ -162,7 +169,42 @@ describe.skipIf(!RUN)("Colab", () => {
     expect(cells.length).toBe(before + 2);
     expect(cells[1]).toEqual(["text", "## Added by the agent"]);
     expect(cells[2]).toEqual(["code", "print('from agent')"]);
+    // The fake agent writes a line after each call, so no two calls are adjacent and none are grouped.
     await expect.poll(() => panel.locator(".tool-title").first().textContent()).toBe("notebook · list_cells");
+  }, 120_000);
+
+  it("inserts a code block from the transcript as a cell below the selected one", async () => {
+    dumpOnFailure("insert");
+    const before = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
+    await send(panel, script([{ say: "Try this:\n\n```python\nprint('from the panel')\n```\n" }]));
+    const block = panel.locator(".msg.agent").last().locator(".code");
+    await block.waitFor({ timeout: 30_000 });
+    expect(await block.locator(".code-lang").textContent()).toBe("python");
+    await block.getByRole("button", { name: "Insert as cell" }).click();
+    await expect.poll(() => nb.evaluate(() => (window as any).colab.global.notebook.cells.length), { timeout: 30_000 }).toBe(before + 1);
+    const texts = await nb.evaluate(() => (window as any).colab.global.notebook.cells.map((c: any) => c.getText()));
+    expect(texts).toContain("print('from the panel')");
+  }, 120_000);
+
+  it("undoes the agent's changes to the notebook from the side panel", async () => {
+    dumpOnFailure("undo");
+    const texts = () => nb.evaluate(() => (window as any).colab.global.notebook.cells.map((c: any) => c.getText()));
+    const before = await texts();
+    const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells[1].getId());
+    await send(
+      panel,
+      script([
+        { tool: "update_cell", args: { cell_id: cellId, source: "print('to be undone')" } },
+        { tool: "insert_cell", args: { cell_type: "markdown", source: "## temporary", index: 0 } },
+      ]),
+    );
+    const changes = panel.locator(".msg.agent").last().locator(".changes");
+    await expect.poll(() => changes.textContent(), { timeout: 60_000 }).toContain("2 notebook changes");
+    expect((await texts()).length).toBe(before.length + 1);
+    await changes.getByRole("button", { name: "Undo", exact: true }).click();
+    await changes.getByRole("button", { name: "Undo", exact: true }).click(); // confirm
+    await expect.poll(texts, { timeout: 30_000 }).toEqual(before);
+    await expect.poll(() => changes.textContent()).toContain("undone");
   }, 120_000);
 
   it("shows a change in Colab's inline diff and applies it from the side panel", async () => {

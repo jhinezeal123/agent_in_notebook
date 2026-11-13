@@ -6,7 +6,20 @@ import type { ChatSettings } from "./modes.js";
 import type { NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
-export const WIRE_VERSION = 1;
+export const WIRE_VERSION = 2;
+
+// ---------------------------------------------------------------- native messaging
+
+/** The name `ainb install` registers the bridge under as a browser native messaging host. */
+export const NATIVE_HOST = "com.agent_in_notebook.bridge";
+/** The extension's ID, fixed by the `key` in its manifest. */
+export const EXTENSION_ID = "mkdjlgboacefhokakjlobfailhipgklf";
+
+/** One request to the native host: start the bridge if needed and say how to reach it. */
+export type NativeRequest = { type: "connect" };
+export type NativeReply =
+  | { ok: true; port: number; token: string; version: string; started: boolean }
+  | { ok: false; error: string; log?: string };
 
 export type Envelope =
   | { kind: "req"; id: number; method: string; params: unknown }
@@ -45,6 +58,9 @@ export interface AgentOption {
 
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
 
+/** `discarded`: the page reloaded or navigated away before the user decided; nothing was applied. */
+export type ReviewStatus = "pending" | "accepted" | "rejected" | "discarded";
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
@@ -74,7 +90,7 @@ export type Part =
       /** Option chosen, or "cancelled". Absent while waiting. */
       answer?: string;
     }
-  | { type: "review"; review: ReviewInfo; status: "pending" | "accepted" | "rejected" }
+  | { type: "review"; review: ReviewInfo; status: ReviewStatus }
   | { type: "notice"; level: "info" | "error"; text: string };
 
 export interface ChatMessage {
@@ -82,6 +98,8 @@ export interface ChatMessage {
   role: "user" | "agent" | "system";
   parts: Part[];
   createdAt: number;
+  /** Notebook changes the agent applied in this turn; the bridge keeps their content for undo. */
+  changes?: { count: number; undone?: boolean };
 }
 
 export type ChatStatus = "starting" | "idle" | "running" | "error" | "closed";
@@ -91,12 +109,74 @@ export interface ChatSnapshot {
   tabId: number;
   agentId: string;
   agentName: string;
+  /** The notebook this chat belongs to (absent for chats opened without one). */
+  notebookKey?: string;
   status: ChatStatus;
   error?: string;
   settings: ChatSettings;
   options: AgentOption[];
   messages: ChatMessage[];
   notebook: NotebookInfo | null;
+  /** How full the agent's context is, when the agent reports it. */
+  usage?: ChatUsage;
+}
+
+/** Context use the agent reported over ACP (usage_update). */
+export interface ChatUsage {
+  /** Tokens in the agent's context now. */
+  used: number;
+  /** The context window, in tokens. */
+  size: number;
+  cost?: { amount: number; currency: string };
+}
+
+/**
+ * What changed in one message since the bridge last sent it. Streaming sends
+ * these instead of the whole message every few dozen milliseconds: text grows
+ * by appending, other parts are replaced whole when they change.
+ */
+export type PartOp = { i: number; part: Part } | { i: number; at: number; append: string };
+
+export interface MessagePatch {
+  chatId: string;
+  tabId: number;
+  id: string;
+  role: ChatMessage["role"];
+  createdAt: number;
+  changes?: ChatMessage["changes"];
+  /** Number of parts the message has now. */
+  length: number;
+  ops: PartOp[];
+}
+
+/**
+ * Apply a patch to a list of messages, returning a new list (the old one is
+ * not modified). Null means the patch does not fit what the list holds (an
+ * event was missed): fetch the chat again.
+ */
+export function applyMessagePatch(list: ChatMessage[], p: MessagePatch): ChatMessage[] | null {
+  const index = list.findIndex((m) => m.id === p.id);
+  const old = index >= 0 ? list[index]! : undefined;
+  const parts: (Part | undefined)[] = (old?.parts ?? []).slice(0, p.length);
+  for (const op of p.ops) {
+    if ("part" in op) {
+      parts[op.i] = op.part;
+      continue;
+    }
+    const cur = parts[op.i];
+    // `at` anchors the append, so applying a patch to text that already has it changes nothing.
+    if (!cur || (cur.type !== "text" && cur.type !== "thought") || cur.text.length < op.at) return null;
+    parts[op.i] = { ...cur, text: cur.text.slice(0, op.at) + op.append };
+  }
+  if (parts.length !== p.length) return null;
+  // A plain loop: some() skips the holes a missed part leaves.
+  for (let k = 0; k < parts.length; k++) if (parts[k] === undefined) return null;
+  const message: ChatMessage = { id: p.id, role: p.role, createdAt: p.createdAt, parts: parts as Part[] };
+  if (p.changes) message.changes = p.changes;
+  if (index < 0) return [...list, message];
+  const next = list.slice();
+  next[index] = message;
+  return next;
 }
 
 // ---------------------------------------------------------------- methods
@@ -109,7 +189,8 @@ export interface BridgeMethods {
   "agents.remove": { params: { id: string }; result: { removed: boolean } };
   "agents.test": { params: { launchCommand: string }; result: { name: string; options: AgentOption[] } };
   "chat.open": {
-    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform };
+    /** With a notebookKey the chat is saved and restored per notebook. */
+    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string };
     result: ChatSnapshot;
   };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };
@@ -120,7 +201,15 @@ export interface BridgeMethods {
   "chat.option": { params: { chatId: string; optionId: string; value: string | boolean }; result: ChatSnapshot };
   "chat.answer": { params: { chatId: string; promptId: string; optionId: string }; result: { answered: boolean } };
   "chat.review": { params: { chatId: string; reviewId: string; accept: boolean }; result: { resolved: boolean } };
+  /** Revert the notebook changes of one agent turn, newest first, skipping cells edited since. */
+  "chat.undo": { params: { chatId: string; messageId: string }; result: UndoResult };
   "tab.closed": { params: { tabId: number }; result: { ok: true } };
+}
+
+export interface UndoResult {
+  undone: number;
+  /** One line per change left alone, with the reason. */
+  skipped: string[];
 }
 
 /** Requests the bridge sends to the extension. */
@@ -131,7 +220,8 @@ export interface ExtensionMethods {
 /** Events from the bridge to the extension. */
 export interface BridgeEvents {
   "chat.snapshot": ChatSnapshot;
-  "chat.message": { chatId: string; tabId: number; message: ChatMessage };
+  "chat.patch": MessagePatch;
+  "chat.usage": { chatId: string; tabId: number; usage: ChatUsage };
   "chat.status": { chatId: string; tabId: number; status: ChatStatus; error?: string };
   "agents.changed": { agents: AgentInfo[] };
   ping: { t: number };

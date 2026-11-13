@@ -24,6 +24,11 @@ export interface AgentSpec {
   toolWaitMs: number;
   /** Shown when the agent needs a sign-in. */
   loginHint: string;
+  /**
+   * Whether the agent reads images in MCP tool results (plots). Unset: trust
+   * the image prompt capability it declares over ACP.
+   */
+  images?: boolean;
   resolve(): { launch: LaunchSpec } | { missing: string };
 }
 
@@ -82,6 +87,8 @@ const BUILTIN: AgentSpec[] = [
     builtin: true,
     toolWaitMs: 300_000,
     loginHint: "Sign in by running `claude` once in a terminal, or set ANTHROPIC_API_KEY.",
+    // Verified: reads plot images returned by MCP tools.
+    images: true,
     resolve: nodeScript("@agentclientprotocol/claude-agent-acp", "claude-agent-acp", "The Claude ACP adapter is not installed (pnpm install in the bridge)."),
   },
   {
@@ -91,6 +98,8 @@ const BUILTIN: AgentSpec[] = [
     // Codex gives MCP tools 60s by default.
     toolWaitMs: 50_000,
     loginHint: "Sign in by running `codex login` in a terminal, or set OPENAI_API_KEY.",
+    // Verified: reads plot images returned by MCP tools.
+    images: true,
     resolve: nodeScript("@agentclientprotocol/codex-acp", "codex-acp", "The Codex ACP adapter is not installed (pnpm install in the bridge)."),
   },
   {
@@ -107,6 +116,9 @@ const BUILTIN: AgentSpec[] = [
     builtin: true,
     toolWaitMs: 120_000,
     loginHint: "Configure a provider by running `opencode auth login` in a terminal.",
+    // Declares image support, but did not see MCP image results in testing
+    // (v2.1.2); override with an "opencode" entry in agents.json.
+    images: false,
     resolve: onPath("opencode", ["acp"], "`opencode` is not on PATH. Install it from https://opencode.ai."),
   },
 ];
@@ -118,6 +130,7 @@ export function allAgents(): AgentSpec[] {
     builtin: false,
     toolWaitMs: (c.toolWaitSeconds ?? 120) * 1000,
     loginHint: "Check the agent's own sign-in.",
+    images: typeof c.images === "boolean" ? c.images : undefined,
     resolve: () => {
       const full = existsSync(c.command) ? c.command : which(c.command);
       return full ? { launch: { command: full, args: c.args ?? [], env: c.env } } : { missing: `\`${c.command}\` was not found.` };

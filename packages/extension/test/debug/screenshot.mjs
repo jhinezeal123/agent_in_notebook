@@ -39,6 +39,8 @@ try {
   await panel.goto(`chrome-extension://${extId}/sidepanel.html?tab=${tabId}`);
   await panel.waitForSelector(".setup");
   await panel.screenshot({ path: "test/debug/shot-setup.png" });
+  // No native host in this browser: pair by hand.
+  await panel.getByText("Connect with a pairing token instead").click();
   await panel.getByPlaceholder("from the bridge's console").fill(TOKEN);
   await panel.getByLabel("Port").fill(String(PORT));
   await panel.getByRole("button", { name: "Connect" }).click();

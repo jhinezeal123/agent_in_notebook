@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decide, DEFAULT_SETTINGS, type ChatSettings } from "../src/modes.js";
 import { diffLines, diffStats, withContext } from "../src/diff.js";
-import { normalizeIpynbOutputs, outputsToText } from "../src/outputs.js";
+import { IMAGE_MAX_BASE64, normalizeIpynbOutput, normalizeIpynbOutputs, outputsToText } from "../src/outputs.js";
 import { RpcPeer } from "../src/rpc.js";
 import { capText } from "../src/text.js";
 import type { Envelope } from "../src/wire.js";
@@ -77,7 +77,7 @@ describe("outputs", () => {
   const raw = [
     { output_type: "stream", name: "stdout", text: ["hello\n", "world\n"] },
     { output_type: "execute_result", data: { "text/plain": "42", "text/html": "<b>42</b>" }, execution_count: 1 },
-    { output_type: "display_data", data: { "image/png": "iVBOR..." } },
+    { output_type: "display_data", data: { "image/png": "iVBORw0K\nGgo=\n", "text/plain": ["<Figure size 640x480>"] } },
     { output_type: "error", ename: "ValueError", evalue: "bad", traceback: ["\u001b[31mTraceback\u001b[0m", "ValueError: bad"] },
     { output_type: "weird" },
   ];
@@ -87,8 +87,16 @@ describe("outputs", () => {
     expect(outs).toHaveLength(4);
     expect(outs[0]).toEqual({ kind: "stream", name: "stdout", text: "hello\nworld\n" });
     expect(outs[1]).toEqual({ kind: "result", text: "42", mimes: ["text/html"] });
-    expect(outs[2]).toEqual({ kind: "display", text: undefined, mimes: ["image/png"] });
+    expect(outs[2]).toEqual({ kind: "display", text: "<Figure size 640x480>", image: { mime: "image/png", data: "iVBORw0KGgo=" }, mimes: undefined });
     expect(outs[3]!.traceback).toBe("Traceback\nValueError: bad");
+  });
+
+  it("leaves out images that are too large or not base64", () => {
+    const big = normalizeIpynbOutput({ output_type: "display_data", data: { "image/png": "A".repeat(IMAGE_MAX_BASE64 + 4) } });
+    expect(big).toEqual({ kind: "display", text: undefined, mimes: ["image/png"] });
+    const svg = normalizeIpynbOutput({ output_type: "display_data", data: { "image/svg+xml": "<svg/>", "image/jpeg": "not base64!" } });
+    expect(svg?.image).toBeUndefined();
+    expect(svg?.mimes).toEqual(["image/svg+xml", "image/jpeg"]);
   });
 
   it("renders text for an agent", () => {
@@ -96,6 +104,17 @@ describe("outputs", () => {
     expect(text).toContain("hello\nworld");
     expect(text).toContain("[image/png output not shown]");
     expect(text).toContain("[error] ValueError: bad");
+  });
+
+  it("labels images the caller attaches", () => {
+    const seen: string[] = [];
+    const text = outputsToText(normalizeIpynbOutputs(raw), 8000, (img) => {
+      seen.push(img.data);
+      return "[image 1 attached]";
+    });
+    expect(seen).toEqual(["iVBORw0KGgo="]);
+    expect(text).toContain("<Figure size 640x480>\n[image 1 attached]");
+    expect(text).not.toContain("image/png output not shown");
   });
 
   it("caps long text keeping head and tail", () => {

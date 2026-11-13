@@ -3,8 +3,14 @@
 import WebSocket from "ws";
 import {
   RpcPeer,
+  applyMessagePatch,
+  summarizeCell,
+  type ChatUsage,
+  type MessagePatch,
+  type AppliedChange,
   WIRE_VERSION,
   type CellInfo,
+  type CellOutput,
   type ChatMessage,
   type ChatSnapshot,
   type Envelope,
@@ -14,16 +20,19 @@ import {
   type RunResult,
 } from "@ainb/protocol";
 
+export const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 interface Cell {
   id: string;
   type: "code" | "markdown";
   source: string;
-  outputs: { kind: "stream"; name: string; text: string }[];
+  outputs: CellOutput[];
   executionCount: number | null;
 }
 
 interface PendingReview {
   info: ReviewInfo;
+  index: number;
   apply(): void;
   revert(): void;
 }
@@ -73,10 +82,16 @@ export class FakeNotebook {
     return c;
   }
 
+  /** Like the page's OpRunner: report each change applied for the agent. */
+  private journal(change: AppliedChange, byUser?: boolean) {
+    if (!byUser) this.onEvent({ type: "change_applied", change });
+  }
+
   private openReview(info: Omit<ReviewInfo, "reviewId">, apply: () => void, revert: () => void): string {
     const reviewId = `r${this.reviews.size + 1}-${Date.now() % 10000}`;
     const review = { ...info, reviewId };
-    this.reviews.set(reviewId, { info: review, apply, revert });
+    const index = this.cells.findIndex((c) => c.id === info.cellId);
+    this.reviews.set(reviewId, { info: review, index, apply, revert });
     this.onEvent({ type: "review_opened", review });
     return reviewId;
   }
@@ -85,8 +100,11 @@ export class FakeNotebook {
     const r = this.reviews.get(reviewId);
     if (!r) return false;
     this.reviews.delete(reviewId);
-    if (accept) r.apply();
-    else r.revert();
+    if (accept) {
+      r.apply();
+      const { kind, cellId, cellType, before, after } = r.info;
+      this.journal({ kind, cellId, cellType, index: r.index, before, after, reviewId });
+    } else r.revert();
     this.onEvent({ type: "review_closed", reviewId, accepted: accept });
     return true;
   }
@@ -99,12 +117,14 @@ export class FakeNotebook {
         let list = this.cells;
         if (op.cellIds) list = op.cellIds.map((id) => this.cells.find((c) => c.id === id)).filter((c): c is Cell => !!c);
         else if (op.start !== undefined || op.end !== undefined) list = this.cells.slice(op.start ?? 0, (op.end ?? this.cells.length - 1) + 1);
-        return { cells: list.map((c) => this.cellInfo(c, !!op.includeOutputs)) };
+        const cells = list.map((c) => this.cellInfo(c, !!op.includeOutputs && !op.summary));
+        return { cells: op.summary ? cells.map(summarizeCell) : cells };
       }
       case "update_cell": {
         const c = this.find(op.cellId);
         if (c.source === op.source) return { applied: false };
         if (!op.review) {
+          this.journal({ kind: "update", cellId: c.id, cellType: c.type, index: this.cells.indexOf(c), before: c.source, after: op.source }, op.byUser);
           c.source = op.source;
           return { applied: true };
         }
@@ -119,7 +139,10 @@ export class FakeNotebook {
       case "insert_cell": {
         const cell: Cell = { id: `c${this.nextId++}`, type: op.cellType, source: op.source, outputs: [], executionCount: null };
         this.cells.splice(Math.min(op.index, this.cells.length), 0, cell);
-        if (!op.review) return { applied: true, cellId: cell.id };
+        if (!op.review) {
+          this.journal({ kind: "insert", cellId: cell.id, cellType: cell.type, index: this.cells.indexOf(cell), before: "", after: op.source }, op.byUser);
+          return { applied: true, cellId: cell.id };
+        }
         const reviewId = this.openReview(
           { cellId: cell.id, kind: "insert", cellType: cell.type, before: "", after: op.source },
           () => {},
@@ -130,6 +153,7 @@ export class FakeNotebook {
       case "delete_cell": {
         const c = this.find(op.cellId);
         if (!op.review) {
+          this.journal({ kind: "delete", cellId: c.id, cellType: c.type, index: this.cells.indexOf(c), before: c.source, after: "" }, op.byUser);
           this.cells = this.cells.filter((x) => x !== c);
           return { applied: true };
         }
@@ -142,9 +166,11 @@ export class FakeNotebook {
       }
       case "move_cell": {
         const c = this.find(op.cellId);
+        const from = this.cells.indexOf(c);
         this.cells = this.cells.filter((x) => x !== c);
         const index = Math.min(op.index, this.cells.length);
         this.cells.splice(index, 0, c);
+        if (index !== from) this.journal({ kind: "move", cellId: c.id, cellType: c.type, index: from, toIndex: index, before: "", after: "" }, op.byUser);
         return { index };
       }
       case "run_cells": {
@@ -159,6 +185,8 @@ export class FakeNotebook {
             continue;
           }
           c.outputs = [{ kind: "stream", name: "stdout", text: `ran ${c.source}\n` }];
+          // "plot" cells draw a (tiny, valid) PNG, like matplotlib would.
+          if (c.source.includes("plot")) c.outputs.push({ kind: "display", text: "<Figure size 640x480>", image: { mime: "image/png", data: TINY_PNG } });
           results.push({ cellId: id, status: "ok", executionCount: c.executionCount, outputs: c.outputs });
         }
         return { results };
@@ -179,6 +207,8 @@ export class FakeExtension {
   rpc!: RpcPeer;
   messages = new Map<string, ChatMessage>();
   snapshots: ChatSnapshot[] = [];
+  patches: MessagePatch[] = [];
+  usage: ChatUsage | undefined;
   statuses: string[] = [];
   /** Accept (true) / reject (false) every review as it opens, or leave pending (undefined). */
   autoReview: boolean | undefined = undefined;
@@ -201,7 +231,14 @@ export class FakeExtension {
       if (tabId !== this.tabId) throw new Error("no notebook in that tab");
       return this.notebook.handle(op);
     });
-    this.rpc.on("chat.message", (p: { message: ChatMessage }) => this.messages.set(p.message.id, p.message));
+    this.rpc.on("chat.patch", (p: MessagePatch) => {
+      const old = this.messages.get(p.id);
+      const next = applyMessagePatch(old ? [old] : [], p);
+      if (!next) throw new Error(`patch for ${p.id} does not apply`);
+      this.messages.set(p.id, next.find((m) => m.id === p.id)!);
+      this.patches.push(p);
+    });
+    this.rpc.on("chat.usage", (p: { usage: ChatUsage }) => (this.usage = p.usage));
     this.rpc.on("chat.snapshot", (p: ChatSnapshot) => this.snapshots.push(p));
     this.rpc.on("chat.status", (p: { status: string }) => this.statuses.push(p.status));
     this.notebook.onEvent = (event) => {

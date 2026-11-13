@@ -6,6 +6,9 @@ import { BRIDGE_DEFAULT_PORT } from "@ainb/protocol";
 
 export const BRIDGE_VERSION = "0.1.0";
 
+/** `serve --log` ends its log with this when it exits on an error. */
+export const STOPPED_MARK = "[bridge exited]";
+
 export function dataDir(): string {
   const dir = process.env.AINB_HOME ?? join(homedir(), ".agent-in-notebook");
   mkdirSync(dir, { recursive: true });
@@ -57,6 +60,8 @@ export interface CustomAgentConfig {
   env?: Record<string, string>;
   /** Longest a notebook tool call may block before returning "still pending". */
   toolWaitSeconds?: number;
+  /** Send plot images in tool results (default: what the agent declares over ACP). */
+  images?: boolean;
 }
 
 export function loadCustomAgents(): CustomAgentConfig[] {

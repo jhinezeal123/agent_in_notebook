@@ -4,13 +4,21 @@ export type Platform = "colab" | "kaggle" | "jupyter";
 
 export type CellType = "code" | "markdown";
 
-/** One output of a code cell, flattened to text. Rich outputs keep only their mime types. */
+/** A raster image from a cell output, base64-encoded. */
+export interface OutputImage {
+  mime: "image/png" | "image/jpeg";
+  data: string;
+}
+
+/** One output of a code cell, flattened to text plus at most one image. */
 export interface CellOutput {
   kind: "stream" | "result" | "display" | "error";
   /** stdout / stderr for streams. */
   name?: string;
   text?: string;
-  /** Non-text mime types the output carried (image/png, text/html...), which the agent cannot see. */
+  /** A PNG/JPEG the output carried, which agents that read images can see. */
+  image?: OutputImage;
+  /** Other non-text mime types the output carried (text/html, image/svg+xml...), which the agent cannot see. */
   mimes?: string[];
   ename?: string;
   evalue?: string;
@@ -28,6 +36,8 @@ export interface CellInfo {
   outputs?: CellOutput[];
   /** True while a review of this cell is pending. */
   pendingReview?: boolean;
+  /** Set by a `summary` read: `source` then holds only the first line. */
+  lineCount?: number;
 }
 
 export type KernelState = "idle" | "busy" | "disconnected" | "unknown";
@@ -41,6 +51,10 @@ export interface NotebookInfo {
   selectedCellIds: string[];
   kernel: KernelState;
   language: string;
+  /** Path of the document inside the notebook server (Jupyter), to tell notebooks apart. */
+  docPath?: string;
+  /** Stable identity of the notebook (see notebookKey), added by the extension from the tab URL. */
+  key?: string;
 }
 
 export interface RunResult {
@@ -62,18 +76,38 @@ export interface ReviewInfo {
 }
 
 /**
+ * A change that was applied to the notebook on the agent's behalf (directly,
+ * or when the user accepted its review), recorded so the user can undo it.
+ * `index` is the cell's position before the change; a move also has `toIndex`.
+ */
+export interface AppliedChange {
+  kind: "update" | "insert" | "delete" | "move";
+  cellId: string;
+  cellType: CellType;
+  index: number;
+  toIndex?: number;
+  before: string;
+  after: string;
+  /** Set when the change was applied by accepting this review. */
+  reviewId?: string;
+}
+
+/**
  * Operations the bridge asks the page to perform. Every mutating op carries
  * `review`: when true, the page shows the change for approval and answers at
  * once with a `reviewId` and `applied: false`; the decision arrives later as a
- * `review_closed` event.
+ * `review_closed` event. Mutating ops are journaled as `change_applied`
+ * events unless `byUser` marks them as the user's own (an undo, a cell
+ * inserted from the side panel).
  */
 export type NotebookOp =
   | { op: "info" }
-  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean }
-  | { op: "update_cell"; cellId: string; source: string; review: boolean }
-  | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean }
-  | { op: "delete_cell"; cellId: string; review: boolean }
-  | { op: "move_cell"; cellId: string; index: number }
+  /** `summary`: each source is cut to its first line (with `lineCount`), for outlines of big notebooks. */
+  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean; summary?: boolean }
+  | { op: "update_cell"; cellId: string; source: string; review: boolean; byUser?: boolean }
+  | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean; byUser?: boolean }
+  | { op: "delete_cell"; cellId: string; review: boolean; byUser?: boolean }
+  | { op: "move_cell"; cellId: string; index: number; byUser?: boolean }
   | { op: "run_cells"; cellIds: string[]; timeoutMs: number; stopOnError: boolean }
   | { op: "interrupt" }
   | { op: "focus_cell"; cellId: string }
@@ -92,6 +126,14 @@ export interface NotebookOpResults {
   resolve_review: { resolved: boolean };
 }
 
+/** The outline form of a cell (see the `summary` flag of get_cells). */
+export function summarizeCell(c: CellInfo): CellInfo {
+  const lines = c.source ? c.source.split("\n").length : 0;
+  const first = c.source.split("\n").find((l) => l.trim() !== "") ?? "";
+  // Long enough for an outline; a pasted image's data: URI would otherwise ride along.
+  return { ...c, source: first.length > 120 ? `${first.slice(0, 119)}…` : first, lineCount: lines };
+}
+
 export type NotebookOpName = NotebookOp["op"];
 export type NotebookOpOf<N extends NotebookOpName> = Extract<NotebookOp, { op: N }>;
 
@@ -99,4 +141,5 @@ export type NotebookOpOf<N extends NotebookOpName> = Extract<NotebookOp, { op: N
 export type NotebookEvent =
   | { type: "review_opened"; review: ReviewInfo }
   | { type: "review_closed"; reviewId: string; accepted: boolean }
-  | { type: "selection_changed"; activeCellId: string | null; selectedCellIds: string[] };
+  | { type: "selection_changed"; activeCellId: string | null; selectedCellIds: string[] }
+  | { type: "change_applied"; change: AppliedChange };

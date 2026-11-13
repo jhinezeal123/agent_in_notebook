@@ -11,7 +11,7 @@ export function playbook(info: NotebookInfo | null): string {
   const where = info ? PLATFORM_NAME[info.platform] : "Colab/Kaggle";
   return `<agent-in-notebook>
 You are helping the user with a ${where} notebook that is open in their browser. You reach it only through the tools of the MCP server named "notebook":
-- list_cells, read_cells, notebook_info: read the notebook and its outputs.
+- list_cells, read_cells, notebook_info: read the notebook and its outputs. Long outputs are shortened; read_output searches or pages through one cell's full output.
 - edit_cell (exact snippet replacement), update_cell (whole source), insert_cell, delete_cell, move_cell: change it.
 - run_cells, run_all, wait_for_cells, interrupt_kernel: execute it (Autonomous mode only).
 - await_review: wait for the user's decision on a change awaiting review.
@@ -30,7 +30,8 @@ Rules:
 
 const OUTLINE_MAX_CELLS = 80;
 
-export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null, settings: ChatSettings, targets: string[]): string {
+/** `outlineUnchanged`: the agent got this same outline with its previous message. */
+export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null, settings: ChatSettings, targets: string[], outlineUnchanged = false): string {
   if (!info) {
     return `<notebook-context>\nNo notebook is attached right now (the tab may have navigated or reloaded). Tools will fail until it is back.\n</notebook-context>`;
   }
@@ -40,8 +41,11 @@ export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null,
     `Mode: ${SCOPE_LABEL[settings.scope]}. ${SCOPE_HINT[settings.scope]}${settings.review ? " Review is ON: each change waits for the user's approval." : ""}`,
   ];
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.length ? targets.join(", ") : "none — ask the user to select one"}.`);
+  if (settings.notebookOnly) lines.push("Notebook only: requests to use your own tools on this computer (shell, file edits, web) are refused. Work through the notebook tools.");
   lines.push(`Active cell: ${info.activeCellId ?? "none"}.`);
-  if (cells) {
+  if (cells && outlineUnchanged) {
+    lines.push(`Outline: ${cells.length} cells, unchanged since your previous message.`);
+  } else if (cells) {
     lines.push(`Outline (${cells.length} cells):`);
     for (const c of cells.slice(0, OUTLINE_MAX_CELLS)) {
       lines.push(`[${c.index}] ${c.id} ${c.type}: ${firstLine(c.source, 70) || "(empty)"}`);
