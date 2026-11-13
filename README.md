@@ -28,11 +28,15 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 - Trên Kaggle/Jupyter, extension chèn thẻ diff vào ngay trên cell.
 - Đổi mode giữa chừng có hiệu lực ngay từ lời gọi tool tiếp theo của agent.
 - Đổi agent giữa cuộc trò chuyện được: agent mới nhận tóm tắt cuộc trò chuyện. Agent bị crash sẽ được khởi động lại kèm tóm tắt.
-- Mỗi notebook có cuộc trò chuyện riêng, được lưu lại: reload tab, đóng tab rồi mở lại, hay khởi động lại bridge đều thấy lại lịch sử (agent nhận tóm tắt). Mở notebook khác trong cùng tab thì chat của notebook cũ được lưu và đóng lại. Nút **＋ (New chat)** xóa lịch sử đã lưu của notebook đó.
+- Mỗi notebook có cuộc trò chuyện riêng, được lưu lại: reload tab, đóng tab rồi mở lại, hay khởi động lại bridge đều thấy lại lịch sử (agent nhận tóm tắt). Mở notebook khác trong cùng tab thì chat của notebook cũ được lưu và đóng lại. Nút **Clear Chat** trên thanh tiêu đề của khung chat xóa lịch sử đã lưu của notebook đó.
 - Sidebar có một ô chọn notebook khi đang mở nhiều notebook (trong VS Code và trong các tab Chrome). Chat tự theo notebook bạn vừa đưa lên trước: chuyển sang một tab Colab trong Chrome, hay mở một notebook trong VS Code.
 - **Hoàn tác theo lượt**: dưới mỗi câu trả lời có sửa notebook có dòng "N notebook changes · Undo". Bấm Undo (rồi xác nhận) để đưa notebook về như trước lượt đó: cell bị sửa lấy lại nội dung cũ, cell agent thêm bị xóa, cell agent xóa được chèn lại đúng chỗ, cell bị di chuyển về vị trí cũ. Cell nào bạn (hoặc một lượt sau) đã sửa thì được giữ nguyên và được liệt kê ra. Review được chấp nhận cũng tính vào lượt đã đề xuất nó. Lần gửi tin tiếp theo, agent được báo là thay đổi đã bị hoàn tác. Hoàn tác được cả sau khi khởi động lại bridge, vì nhật ký được lưu cùng lịch sử chat.
 - Trang notebook reload khi một thay đổi đang chờ duyệt thì thay đổi đó được đánh dấu **Discarded** (không áp dụng) và agent được báo để đọc lại notebook.
-- Chọn model, effort, mode riêng của từng agent ngay trong sidebar (lấy từ agent qua ACP).
+- Khung chat theo kiểu chat có sẵn của VS Code (Copilot Chat): màn chào có gợi ý câu hỏi, tin nhắn của bạn là bong bóng, các bước tool thành dòng gọn.
+  - Ô nhập có thẻ ngữ cảnh ở trên: notebook đang chat, chấm màu là trạng thái kernel. Mở nhiều notebook thì chọn notebook ngay trong thẻ này.
+  - Dưới ô nhập là thanh công cụ: chế độ (Edit cell / Write / Autonomous), agent, model, effort và các lựa chọn riêng của agent lấy qua ACP, nút gửi ↑ (khi agent đang chạy là nút dừng ■).
+  - Review và Notebook only nằm ngay dưới ô nhập.
+  - Quản lý agent (thêm, xóa, thử kết nối) chỉ nằm trong **Settings › Agents**. Mục cuối của ô chọn agent, **Manage agents…**, mở trang đó.
 - Giao diện chat (một số ý tưởng tham khảo từ [T3 Code](https://github.com/pingdotgg/t3code)): các tool call liền nhau gom thành một dòng tóm tắt ("Read ×3 · Edited · Ran ×2"), bấm để xem từng lệnh; khối code có nút **Copy** và **Insert as cell** (chèn thành cell mới ngay dưới cell đang chọn); câu hỏi xin quyền được ghim phía trên ô nhập; đồng hồ thời gian chạy; dòng tóm tắt khi agent đang suy nghĩ; ↑/↓ trong ô nhập trống để gọi lại tin nhắn cũ; nút **↓ New messages** khi bạn đang cuộn lên.
 - **Agent làm việc ngay trên máy của notebook** (VM của Colab/Kaggle), như trên máy của chính nó: bridge cấp bộ tool quen thuộc `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, tất cả chạy trên VM, đường dẫn tương đối tính từ thư mục làm việc của notebook (`/content` trên Colab, `/kaggle/working` trên Kaggle). Với Claude Code, các tool Bash/Read/Edit… gốc trên máy bạn bị tắt hẳn để agent không nhầm hai máy; agent khác được dặn trong luật làm việc và bị "Notebook only" chặn.
 - **Notebook là một file `.ipynb` thật** nằm trong thư mục làm việc (ví dụ `/content/Untitled0.ipynb`), luôn khớp với notebook trên trình duyệt theo cả hai chiều:
@@ -56,6 +60,36 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 
   So sánh: trên **Kaggle** (và Jupyter), notebook và terminal làm song song được cả khi cell đang chạy. Colab sẽ làm được như vậy qua SSH chính thức của Colab khi dùng gói trả phí (xem [docs/du-dinh-colab.md](docs/du-dinh-colab.md)). Server không có terminal (hoặc chạy Windows), và notebook mở trong VS Code, cũng đi qua kernel như Colab; terminal cần máy Linux/macOS.
 - **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên sidebar để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
+
+## Research (OpenResearch)
+
+Ngoài chat về notebook, app có **chat Research** dựa trên [OpenResearch](https://github.com/jhinezeal123/OpenResearch) (chương trình `orx`). Agent tạo thử nghiệm (mỗi thử nghiệm là một nhánh git), gửi lần chạy nền lên máy khác (Kaggle SSH, SSH, Vast, Modal…) và đọc paper. Tất cả nằm trong VS Code:
+
+- **Thanh Research** (biểu tượng Agent in Notebook ở thanh Activity Bar bên trái) có các mục:
+  - Notebooks: notebook đang mở;
+  - Projects: project và các chat của từng project;
+  - Experiments: cây thử nghiệm của project, có trạng thái lần chạy mới nhất; bấm vào một thử nghiệm để mở trang chi tiết; nút terminal mở log của lần chạy;
+  - Compute: các máy chạy đã cài.
+- **Khung chat** nằm ở thanh bên phải. Khung này hiện chat Notebook hoặc chat Research, tùy chat bạn chọn ở thanh Research.
+- **New Chat** (nút ＋): chọn kiểu chat (Research hoặc Notebook), rồi chọn điểm bắt đầu:
+  - thư mục trống;
+  - project có sẵn;
+  - **từ một paper**: tìm trên arXiv/alphaXiv. Nếu paper có repo GitHub công khai thì repo được clone về làm project.
+- **Settings** (nút ⚙):
+  - Agents: agent cho chat Research (của OpenResearch, thêm agent ACP bằng launch command) và agent cho chat Notebook;
+  - Compute: Colab/Kaggle chạy tương tác qua Chrome, máy chạy nền của OpenResearch và máy mặc định;
+  - Environment: biến môi trường cho các lần chạy;
+  - Kernel Environment: script chuẩn bị máy notebook, xem bên dưới.
+- **Kernel Environment**: Colab và Kaggle quên hết mọi thứ giữa các phiên. Script này (ví dụ `pip install -r requirements.txt`) chạy trong terminal của máy notebook, ở phiên terminal riêng tên `setup`.
+  - Có thể bấm chạy ngay.
+  - Có thể bật tự chạy khi một notebook Colab/Kaggle kết nối kernel. Script chạy một lần cho mỗi notebook.
+  - Script chạy quá 90 giây thì vẫn tiếp tục trên máy, và agent xem được bằng `shell_wait` với phiên `setup`.
+- Thanh trạng thái hiện số lần chạy đang chạy. Khi một lần chạy xong hoặc lỗi, VS Code báo kèm nút mở thử nghiệm đó.
+
+Cách hoạt động:
+- Bridge tự bật `orx up --headless` khi cần, rồi tắt nó cùng lúc với chính mình. Nếu OpenResearch đã chạy sẵn (cổng 4791) thì bridge dùng luôn bản đó.
+- Bridge tìm `orx` theo thứ tự: đường dẫn bạn chọn (lệnh **Agent in Notebook: Choose the OpenResearch Program (orx)**, hoặc nút trên thanh Research), biến `AINB_ORX`, PATH, rồi `~/.cargo/bin`, `~/.local/bin`, `~/.openresearch/bin`.
+- Các màn Research dùng lại nguyên phần logic giao diện của OpenResearch (gọi API, cập nhật trực tiếp, mô hình dữ liệu như cây thử nghiệm). Phần này được import thẳng từ mã nguồn OpenResearch lúc build. Cập nhật OpenResearch rồi build lại app là phần logic theo kịp. Màn hình mới của OpenResearch thì cần thêm màn tương ứng ở đây.
 
 ## Định dạng trong chat
 
@@ -82,7 +116,7 @@ pnpm ainb install      # = node packages/bridge/dist/cli.js install
 
 Bridge là chương trình nhỏ chạy agent trên máy bạn. Lệnh trên đăng ký nó để **VS Code tự bật bridge khi cần, và Chrome tự nối vào**: bạn không phải mở terminal hay dán token. Về kỹ thuật, nó đăng ký bridge làm *native messaging host* cho Chrome, Chromium, Edge và Brave (trên Windows: khóa registry trong `HKCU`, không cần quyền admin), và VS Code dùng chính launcher đó. Nếu bạn chuyển thư mục project hoặc đổi bản Node, hãy chạy lại `install`. Gỡ đăng ký bằng `pnpm ainb uninstall`.
 
-Bridge đi theo VS Code: nó bật khi bạn mở sidebar **Agent in Notebook**, và **tự tắt khoảng 30 giây sau khi VS Code đóng** (đủ lâu để Reload Window không làm nó tắt). Muốn tắt ngay thì bấm nút **⏻** (Stop the bridge) ở đầu sidebar, hoặc chạy `pnpm ainb stop`; bật lại bằng **Start the bridge**. Chrome không bao giờ tự bật bridge: nó chờ và tự nối vào khi VS Code bật. Bridge chạy nền ghi log vào `~/.agent-in-notebook/bridge.log`; xem trạng thái bằng `pnpm ainb status`.
+Bridge đi theo VS Code: nó bật khi bạn mở sidebar **Agent in Notebook**, và **tự tắt khoảng 30 giây sau khi VS Code đóng** (đủ lâu để Reload Window không làm nó tắt). Muốn tắt ngay thì chọn **Stop the Bridge and Its Agents** trong menu **···** trên thanh tiêu đề của khung chat, hoặc chạy `pnpm ainb stop`; bật lại bằng **Start the bridge**. Chrome không bao giờ tự bật bridge: nó chờ và tự nối vào khi VS Code bật. Bridge chạy nền ghi log vào `~/.agent-in-notebook/bridge.log`; xem trạng thái bằng `pnpm ainb status`.
 
 Vẫn có thể chạy bridge bằng tay, chẳng hạn để xem log ngay trên terminal: `pnpm bridge` (bridge chạy tay không tự tắt khi VS Code đóng). In lại pairing token: `pnpm ainb token` (đổi token: thêm `--reset`).
 
@@ -109,7 +143,7 @@ Extension Chrome không có giao diện chat: khi bạn mở một notebook Cola
 **4. Dùng**
 
 - Notebook trên web: mở notebook Colab hoặc Kaggle trong Chrome (ở chế độ chỉnh sửa), rồi chat ở sidebar VS Code. Nếu notebook đã mở từ trước khi cài extension, hãy reload tab một lần.
-- Xem và sửa notebook Chrome ngay trong VS Code: bấm nút **⧉** (Open in VS Code) cạnh chữ *kernel* ở đầu sidebar. VS Code mở một bản sao sống của notebook: sửa, thêm, xóa, kéo cell ở bên nào thì bên kia cập nhật theo (khoảng một giây), và bấm chạy cell trong VS Code thì cell chạy trên Colab/Kaggle, kết quả hiện ở cả hai bên. Notebook vẫn nằm ở tab Chrome, nên giữ tab đó mở; Colab và Kaggle tự lưu, Save trong VS Code không làm gì thêm. Chat tự đi theo notebook đang mở trong VS Code.
+- Xem và sửa notebook Chrome ngay trong VS Code: bấm nút **Open in VS Code** cạnh thẻ notebook trong ô nhập. VS Code mở một bản sao sống của notebook: sửa, thêm, xóa, kéo cell ở bên nào thì bên kia cập nhật theo (khoảng một giây), và bấm chạy cell trong VS Code thì cell chạy trên Colab/Kaggle, kết quả hiện ở cả hai bên. Notebook vẫn nằm ở tab Chrome, nên giữ tab đó mở; Colab và Kaggle tự lưu, Save trong VS Code không làm gì thêm. Chat tự đi theo notebook đang mở trong VS Code.
 - Notebook trong VS Code: mở file `.ipynb` bằng Notebook Editor. Để chạy cell, cài **Jupyter** trong VS Code và chọn kernel ở **Select Kernel**; muốn dùng GPU/TPU của Colab, cài thêm extension **Colab** của Google và chọn kernel Colab. Chạy một cell để khởi động kernel và cấp quyền kernel cho Agent in Notebook khi Jupyter hỏi. Lưu notebook bằng Save của VS Code. Các cell cũ chưa có ID trong `.ipynb` có ID tạm trong phiên mở tài liệu, nên hoàn tác theo lượt với các cell đó cần làm trước khi đóng notebook.
 
 Dù notebook mở ở đâu, agent vẫn làm việc trên máy của notebook (VM Colab/Kaggle, server Jupyter, hay máy bạn với kernel local), với terminal, file và file notebook ở đó.
@@ -125,7 +159,7 @@ Dù notebook mở ở đâu, agent vẫn làm việc trên máy của notebook (
 
 ### Thêm agent ACP
 
-Bạn có thể thêm, sửa, xóa và **Test connection** ngay trong sidebar qua **Manage agents**. Chỉ cần nhập launch command; tên có thể để trống. Ví dụ: `dsh --profile acp` (DeepSeek Harness) hoặc `claude-fp-acp` (launcher Claude FP đã cài trên máy). Lệnh chạy trên máy đang chạy bridge và dùng lại đăng nhập của agent. Đường dẫn hoặc tham số có khoảng trắng cần đặt trong dấu nháy.
+Thêm agent, xóa agent và **Test connection** nằm trong **Settings › Agents** (nút ⚙ ở đầu khung chat hoặc thanh Research). Agent thêm ở đó dùng được cho cả chat Research lẫn chat Notebook. Chỉ cần nhập launch command; tên có thể để trống. Ví dụ: `dsh --profile acp` (DeepSeek Harness) hoặc `claude-fp-acp` (launcher Claude FP đã cài trên máy). Lệnh chạy trên máy đang chạy bridge và dùng lại đăng nhập của agent. Đường dẫn hoặc tham số có khoảng trắng cần đặt trong dấu nháy.
 
 Khi chọn agent, extension mở session ACP để tải các lựa chọn model/effort **trước tin nhắn đầu tiên**, chưa gửi prompt đến model. Chọn model xong rồi gửi tin; nút Send sẽ chờ việc đổi model hoàn tất.
 
@@ -178,7 +212,13 @@ E2E_NATIVE=1 pnpm --filter @ainb/extension exec vitest run test/native-e2e.test.
 
 `AINB_DEBUG=1 pnpm bridge` in toàn bộ luồng ACP của agent (update, xin quyền, stderr).
 
-Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC, `OpRunner`), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, giao diện chat dùng chung), `packages/vscode` (sidebar và adapter Notebook Editor). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
+Các màn Research (`packages/studio`) được build từ mã nguồn OpenResearch:
+- Mặc định lấy thư mục `../openresearch_custom` đặt cạnh repo này. Đặt biến `OPENRESEARCH_DIR` để dùng chỗ khác.
+- Thư mục `ui/` của OpenResearch cần chạy `pnpm install` một lần, và cần đã compile paraglide.
+- Nếu không có OpenResearch, extension VS Code vẫn build được, nhưng các màn Research chỉ hiện dòng báo thiếu.
+- `pnpm --filter @ainb/studio typecheck` kiểm tra kiểu các màn này với chính cấu hình TypeScript của OpenResearch.
+
+Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC, `OpRunner`), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, giao diện chat dùng chung), `packages/vscode` (sidebar và adapter Notebook Editor), `packages/studio` (các màn Research trên logic của OpenResearch). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
 
 ## Giới hạn đã biết
 

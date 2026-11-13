@@ -44,6 +44,10 @@ export type PanelEvent =
   | { event: "activeTab"; params: number | null }
   | { event: "notebook"; params: { tabId: number; info: NotebookInfo | null } }
   | { event: "notebooks"; params: NotebookChoice[] }
+  /** The prefs changed outside the panel (New Chat picked an agent). */
+  | { event: "prefs"; params: Prefs }
+  /** A command from the view's title bar. */
+  | { event: "command"; params: "chat.clear" }
   | { event: "bridge"; params: { method: string; params: unknown } };
 
 export type { ChatSettings };

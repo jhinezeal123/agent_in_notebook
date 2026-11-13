@@ -1,6 +1,6 @@
 # Kiến trúc
 
-Năm package TypeScript trong một pnpm workspace:
+Sáu package TypeScript trong một pnpm workspace:
 
 | Package | Chạy ở đâu | Vai trò |
 |---|---|---|
@@ -8,6 +8,7 @@ Năm package TypeScript trong một pnpm workspace:
 | `bridge` | Node, trên máy user | Server WS/HTTP, quản lý chat, chạy agent qua ACP, tool notebook (MCP) |
 | `ui` | webview VS Code | Giao diện chat Preact: transcript, Markdown/LaTeX, review, chọn notebook, agent và mode |
 | `vscode` | VS Code Extension Host | Nơi duy nhất có chat. Adapter Notebook Editor, `PanelCore` (notebook nào đang được chat, notebook trong tab Chrome), chuyển request của sidebar tới bridge |
+| `studio` | webview VS Code | Các màn Research (React) trên logic giao diện của OpenResearch, import từ mã nguồn của nó lúc build |
 | `extension` | Chrome MV3, không giao diện | Adapter notebook trong trang Colab/Kaggle/Jupyter, content script, service worker nối với bridge |
 
 ## Giao diện ở VS Code, notebook ở đâu cũng được
@@ -27,6 +28,48 @@ VS Code ──/vscode──► bridge ◄──/ext── extension Chrome (khô
 - Bản sao notebook Chrome trong VS Code (`vscode/src/mirror.ts`): một FileSystemProvider scheme `ainb-chrome` (`/<tabId>/<tên> (Colab).ainb`) đọc cell qua `get_cells`, một serializer kiểu `ainb-chrome-notebook` giữ id cell của trình duyệt trong metadata, và một NotebookController chạy cell bằng `run_cells` (chờ ngắn, phần còn lại theo dõi bằng poll). Mỗi giây VS Code đọc lại cell: thứ tự khác thì dựng lại cả notebook, nguồn khác thì chỉ thay cell mà user không đang sửa (văn bản còn bằng bản đã biết). Chiều ngược lại, chữ user gõ được gửi bằng `update_cell` sau 400 ms, còn thêm, xóa, di chuyển được `planPush` (`mirror-sync.ts`) biến thành các bước gửi theo thứ tự. Mọi lần gửi đi qua một hàng đợi; xong thì gọi `save()` (ghi file là no-op) để tài liệu không còn dấu chưa lưu. Tab Chrome đóng thì bản sao ngừng theo.
 - **PanelCore** (`vscode/src/panel-core.ts`, không phụ thuộc API của VS Code) chọn notebook cho chat: notebook trong VS Code có id dương, notebook trong tab Chrome có id là id của tab, đổi dấu. Chat theo notebook vừa được đưa lên trước (editor notebook trong VS Code, hay tab Chrome); chuyển sang một editor không phải notebook thì giữ nguyên. Test trên trình duyệt (`extension/test/panel-harness.ts`) chạy đúng giao diện `ui` với `PanelCore` này trong một trang riêng.
 - VS Code ngắt kết nối thì mọi chat đóng (chúng là của VS Code). Extension Chrome kết nối lại (service worker khởi động lại) thì chat về tab Chrome vẫn còn, và tab được báo lại sau `hello`.
+
+## Research: OpenResearch trong VS Code
+
+Kiến trúc là một bridge với hai nhóm công cụ:
+- **nhóm Notebook**: MCP `notebook` của bridge, dùng cho chat về notebook;
+- **nhóm Research**: OpenResearch (`orx`), dùng cho chat Research, thử nghiệm và các lần chạy nền.
+
+Chat Research là chat của chính OpenResearch: `orx up` giữ phiên chat, agent ACP, công cụ và skill `orx-*` của nó. Phía mình chỉ vẽ lại giao diện.
+
+```
+VS Code                                     bridge                     orx up --headless (127.0.0.1:cổng tự chọn)
+ thanh Research, tab New Chat/Settings/      Orx (research/orx.ts):     API JSON + SSE /api/events
+ Experiment, chat Research ở khung chat      tìm orx, bật/tắt,          SQLite orx.db, run engine
+   fetch("/api/..."), EventSource  ──tunnel──► OrxTunnel (extension) ───────────────────► (HTTP cục bộ)
+   research.status / configure     ──WS──────► theo dõi /api/events ──► research.run → VS Code
+```
+
+- **`bridge/src/research/orx.ts`** quản lý `orx up`:
+  - Nếu đã có OpenResearch khỏe ở cổng 4791 thì dùng luôn, không tắt nó khi xong.
+  - Nếu chưa có, bridge chạy `orx up --headless --port 0` và đọc dòng `orx up: dashboard on http://…` để biết cổng.
+  - Bridge giữ một kết nối tới `/api/events`. Nhờ đó bản headless không tự tắt khi rảnh. Mỗi `run.updated` trên kết nối này được chuyển thành sự kiện `research.run` gửi VS Code.
+  - Khi `orx` báo cơ sở dữ liệu đang bị một bản khác giữ, lỗi được viết lại cho dễ hiểu.
+  - `research.status {start}` trả trạng thái, kèm bật nếu được yêu cầu. `research.configure {orxPath?}` lưu đường dẫn vào `research.json` rồi khởi động lại.
+- **Tunnel** (`studio/src/tunnel.ts`, `vscode/src/orx-tunnel.ts`): webview không gọi thẳng được `orx`, vì khác origin và `orx` chỉ nhận lệnh ghi từ trang của chính nó.
+  - Trong webview, `fetch` tới `/api/…` và `EventSource` được thay bằng bản gửi message cho extension.
+  - Extension gọi `orx` như một tiến trình cục bộ, bỏ các header `origin`, `referer`, `sec-*`, và stream SSE về webview.
+  - Phần logic của OpenResearch chạy nguyên vẹn, không biết mình đang ở trong VS Code.
+- **`packages/studio`** là các màn tự vẽ theo giao diện VS Code: React, màu lấy từ biến `--vscode-*`.
+  - Bên dưới là logic của OpenResearch, import từ `ui/src` của nó lúc build qua alias `@orx`: `createWorkspace`, các query của TanStack Query, `QueryEvents`, `api`, `useChatState`/`activePath` của transcript, `buildHistoryNodes`/`layoutLineage` của cây thử nghiệm, `runDisplay`, `HarnessLogo`, `renderMarkdown`.
+  - `build.mjs` alias `react`, `react-dom` và `@tanstack/react-query` vào `node_modules` của OpenResearch, để chỉ có một bản của mỗi thư viện.
+  - Typecheck sinh `tsconfig.gen.json` kế thừa cấu hình của OpenResearch.
+- **Host** (`vscode/src/studio-host.ts`) phục vụ các màn này:
+  - webview view `ainb.research` ở thanh bên trái;
+  - một tab editor cho mỗi màn (New Chat, Settings, Experiment; các thử nghiệm dùng chung một tab);
+  - chat Research trong khung chat.
+
+  Các việc chỉ VS Code hoặc bridge làm được thì đi qua `host.request`: mở tab, chọn thư mục, danh sách notebook, chọn chat, agent của chat Notebook, kernel setup, log của lần chạy (terminal giả đọc `/api/runs/{id}/logs`). Bridge chưa kết nối thì host tự kết nối, trừ khi user vừa bấm tắt bridge.
+- **Khung chat** (`ainb.chat`, ở thanh bên phải) nạp cả `webview.js` (chat Notebook, Preact) lẫn `studio.js`. Hai bên dùng chung API của VS Code qua `window.__ainbVsCode`, và phân biệt message bằng trường `type`. Chọn một chat Research thì chat Notebook bị ẩn, còn chat Research được gắn vào một shadow root có `studio.css` riêng, để style của hai chat không lẫn vào nhau.
+- **Kernel setup** (`bridge/src/notebook/setup.ts`, phương thức `notebook.setup`):
+  - Script chạy ở phiên terminal `setup` trên máy notebook, cùng daemon với tool `Bash` của agent, nhưng không thuộc chat nào.
+  - Bridge chờ tối đa khoảng 90 giây; script lâu hơn vẫn chạy tiếp trên máy.
+  - Extension tự chạy script khi một notebook Colab/Kaggle trong Chrome có kernel đang chạy, nếu user đã bật tùy chọn này. Mỗi tab và notebook chỉ chạy một lần.
 
 ## Luồng một tool call
 

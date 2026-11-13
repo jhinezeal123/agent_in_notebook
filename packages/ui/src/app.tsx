@@ -1,9 +1,10 @@
+import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { Message, PendingPrompt, type PartActions } from "./parts.js";
-import { AgentManager } from "./agent-manager.js";
+import { Icon } from "./icons.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -19,7 +20,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [prefsReady, setPrefsReady] = useState(false);
   const [loadedTab, setLoadedTab] = useState<number | null>(null);
-  const [managingAgents, setManagingAgents] = useState(false);
+  /** A suggestion put in the input box. */
+  const [draft, setDraft] = useState<{ text: string } | null>(null);
   const [changingOption, setChangingOption] = useState(false);
   const tabRef = useRef(tabId);
   tabRef.current = tabId;
@@ -35,6 +37,8 @@ export function App() {
     return client.on((e) => {
       if (e.event === "state") setBridge({ ...e.params });
       else if (e.event === "notebooks") setChoices(e.params);
+      else if (e.event === "prefs") setPrefsState({ ...DEFAULT_PREFS, ...e.params });
+      else if (e.event === "command" && e.params === "chat.clear") clearRef.current();
       else if (e.event === "notebook") {
         if (e.params.tabId === tabRef.current) setNotebook(e.params.info);
       } else if (e.event === "bridge") {
@@ -148,6 +152,16 @@ export function App() {
     return ok !== undefined;
   };
 
+  /** Clear Chat: close the chat, which forgets its saved conversation. */
+  const clearRef = useRef(() => {});
+  clearRef.current = () => {
+    if (!live) return;
+    const id = live.chatId;
+    void run(client.request("chat.close", { chatId: id })).then((closed) => {
+      if (closed) setChat((current) => current?.chatId === id ? null : current);
+    });
+  };
+
   const actions: PartActions = useMemo(
     () => ({
       answer: (promptId, optionId) => live && void run(client.request("chat.answer", { chatId: live.chatId, promptId, optionId })),
@@ -172,79 +186,32 @@ export function App() {
   const pendingPrompts = allParts.filter((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt" && p.answer === undefined);
   const history = (live?.messages ?? []).filter((m) => m.role === "user").map((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(""));
 
+  const agentReady = agents.some((a) => a.id === prefs.agentId && a.available);
+  const setOption = (id: string, v: string | boolean) => {
+    if (!live) return;
+    setChangingOption(true);
+    void run(client.request<ChatSnapshot>("chat.option", { chatId: live.chatId, optionId: id, value: v })).then((c) => {
+      if (c && tabRef.current === c.tabId && agentRef.current === c.agentId) setChat(c);
+    }).finally(() => setChangingOption(false));
+  };
+
   return (
     <div class="app">
-      <header class="top">
-        <span class={`dot ${notebook ? "ok" : "off"}`} aria-hidden="true" />
-        <div class="top-title">
-          {choices.length > 1 ? (
-            <select
-              class="notebook-pick"
-              aria-label="Notebook"
-              value={tabId ?? ""}
-              onChange={(e) => void run(client.request("notebooks.select", { tabId: Number((e.target as HTMLSelectElement).value) }))}
-            >
-              {tabId === null && <option value="">Choose a notebook</option>}
-              {choices.map((c) => <option key={c.tabId} value={c.tabId}>{choiceLabel(c)}</option>)}
-            </select>
-          ) : notebook ? (
-            <>
-              <strong>{PLATFORM[notebook.platform]}</strong> · <span title={notebook.title}>{notebook.title}</span>
-              {choices[0]?.place === "chrome" && <span class="muted"> · Chrome</span>}
-            </>
-          ) : (
-            <span class="muted">No notebook open</span>
-          )}
-        </div>
-        {notebook && <span class={`kernel k-${notebook.kernel}`} title="Notebook kernel">kernel: {notebook.kernel}</span>}
-        {notebook && tabId !== null && tabId < 0 && (
-          <button
-            class="icon"
-            title="Open this notebook in VS Code: edits and runs go to the Chrome tab"
-            aria-label="Open in VS Code"
-            onClick={() => void run(client.request("notebook.mirror", { tabId }))}
-          >
-            ⧉
-          </button>
-        )}
-        {live && (
-          <button
-            class="icon"
-            title="New chat (clears the saved conversation for this notebook)"
-            aria-label="New chat"
-            onClick={() => void run(client.request("chat.close", { chatId: live.chatId })).then((closed) => {
-              if (closed) setChat((current) => current?.chatId === live.chatId ? null : current);
-            })}
-          >
-            ＋
-          </button>
-        )}
-        <button
-          class="icon"
-          title="Stop the bridge and its agents (it also stops by itself when VS Code closes)"
-          aria-label="Stop the bridge"
-          onClick={() => void run(client.request("bridge.stop", {}))}
-        >
-          ⏻
-        </button>
-      </header>
-
       {!notebook ? (
-        <div class="center muted pad">
-          <p>Open a notebook on Colab or Kaggle in Chrome (with the Agent in Notebook extension), or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
+        <Welcome>
+          <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
           <p class="small">The agent works on the machine the notebook runs on.</p>
-          <button class="secondary" onClick={() => setManagingAgents(true)}>Manage agents</button>
-        </div>
+        </Welcome>
       ) : (
-        <Transcript chat={live} actions={actions} />
+        <Transcript chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} />
       )}
 
       {live?.error && <div class="banner error">{live.error}</div>}
       {error && (
         <div class="banner error" role="alert">
-          {error}
+          <span>{error}</span>
           <button class="icon" aria-label="Dismiss" onClick={() => setError(null)}>
-            ×
+            <Icon name="close" />
           </button>
         </div>
       )}
@@ -254,7 +221,7 @@ export function App() {
           {pendingPrompts[0] && <PendingPrompt part={pendingPrompts[0]} more={pendingPrompts.length - 1} actions={actions} />}
           {pendingReviews.length > 1 && (
             <div class="bulk">
-              {pendingReviews.length} changes await review
+              <span>{pendingReviews.length} changes await review</span>
               <button class="primary small" onClick={() => pendingReviews.forEach((p) => actions.review(p.review.reviewId, true))}>
                 Apply all
               </button>
@@ -263,40 +230,149 @@ export function App() {
               </button>
             </div>
           )}
-          <ModeBar settings={settings} notebook={notebook} onChange={updateSettings} />
-          <Composer history={history} running={running} disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agents.some((a) => a.id === prefs.agentId && a.available)} onSend={send} onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))} />
-          <div class="agent-row">
-            <select
-              aria-label="Agent"
-              value={prefs.agentId}
-              disabled={running || changingOption}
-              onChange={(e) => {
-                const id = (e.target as HTMLSelectElement).value;
-                setPrefs({ agentId: id });
-              }}
-            >
-              {agents.map((a) => (
-                <option key={a.id} value={a.id} disabled={!a.available} title={a.reason}>
-                  {a.name}
-                  {a.available ? "" : " (not installed)"}
-                </option>
-              ))}
-            </select>
-            {live && live.agentId === prefs.agentId && <AgentOptions chat={live} busy={changingOption} onSet={(id, v) => {
-              setChangingOption(true);
-              void run(client.request<ChatSnapshot>("chat.option", { chatId: live.chatId, optionId: id, value: v })).then((c) => {
-                if (c && tabRef.current === c.tabId && agentRef.current === c.agentId) setChat(c);
-              }).finally(() => setChangingOption(false));
-            }} />}
-            {live?.status === "starting" && <span class="muted small">starting…</span>}
+          <Composer
+            history={history}
+            running={running}
+            draft={draft}
+            disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agentReady}
+            onSend={send}
+            onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
+            context={
+              <NotebookContext
+                notebook={notebook}
+                tabId={tabId}
+                choices={choices}
+                settings={settings}
+                onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
+                onMirror={() => tabId !== null && void run(client.request("notebook.mirror", { tabId }))}
+                onSettings={updateSettings}
+              />
+            }
+            tools={
+              <>
+                <Picker
+                  label="Mode"
+                  value={settings.scope}
+                  title={SCOPE_HINT[settings.scope]}
+                  options={SCOPES.map((s) => ({ value: s, label: SCOPE_LABEL[s], title: SCOPE_HINT[s] }))}
+                  onChange={(s) => updateSettings({ ...settings, scope: s as Scope })}
+                />
+                <Picker
+                  label="Agent"
+                  value={prefs.agentId}
+                  disabled={running || changingOption}
+                  options={[
+                    ...agents.map((a) => ({ value: a.id, label: a.available ? a.name : `${a.name} (not installed)`, disabled: !a.available, title: a.reason })),
+                    { value: MANAGE, label: "Manage agents…", title: "Add or change agents in Settings" },
+                  ]}
+                  onChange={(id) => {
+                    if (id === MANAGE) void run(client.request("studio.open", { view: "settings", section: "agents" }));
+                    else setPrefs({ agentId: id });
+                  }}
+                />
+                {live && live.agentId === prefs.agentId && <AgentOptions chat={live} busy={changingOption} onSet={setOption} />}
+              </>
+            }
+          />
+          <div class="input-status">
+            <label class="toggle" title="Show each change as a diff to apply or reject">
+              <input type="checkbox" checked={settings.review} onChange={(e) => updateSettings({ ...settings, review: (e.target as HTMLInputElement).checked })} />
+              Review
+            </label>
+            <label class="toggle" title="Refuse the agent's requests to use its own tools on this computer (shell, file edits, web). Notebook content could try to talk the agent into them.">
+              <input type="checkbox" checked={settings.notebookOnly} onChange={(e) => updateSettings({ ...settings, notebookOnly: (e.target as HTMLInputElement).checked })} />
+              Notebook only
+            </label>
+            {live?.status === "starting" && <span class="muted">Starting {live.agentName}…</span>}
             {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
-            <button class="linkish" disabled={running || changingOption} onClick={() => setManagingAgents(true)}>Manage agents</button>
           </div>
         </footer>
       )}
-      {managingAgents && <AgentManager agents={agents} onSaved={(id) => { setPrefs({ agentId: id }); setManagingAgents(false); }} onRemoved={(id) => {
-        if (prefs.agentId === id) setPrefs({ agentId: agents.find((a) => a.builtin && a.available)?.id ?? "claude" });
-      }} onClose={() => setManagingAgents(false)} />}
+    </div>
+  );
+}
+
+const SCOPES: Scope[] = ["cell", "write", "auto"];
+/** The agent picker's last entry: opens Settings › Agents, where agents are managed. */
+const MANAGE = "\u0000manage";
+
+/** The empty panel, as VS Code's own chat greets: a mark, a name, a line on what it does. */
+function Welcome({ children }: { children: ComponentChildren }) {
+  return (
+    <div class="welcome">
+      <div class="welcome-mark"><Icon name="notebook" /></div>
+      <h2>Agent in Notebook</h2>
+      <div class="welcome-text">{children}</div>
+    </div>
+  );
+}
+
+/** A select drawn as a borderless toolbar button, like the model picker in VS Code's chat. */
+function Picker({ label, value, options, onChange, disabled, title }: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; disabled?: boolean; title?: string }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <span class="picker">
+      <select aria-label={label} title={title ?? label} value={value} disabled={disabled} onChange={(e) => onChange((e.target as HTMLSelectElement).value)}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value} disabled={o.disabled} title={o.title}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <Icon name="chev-d" />
+    </span>
+  );
+}
+
+/** What the chat is about, shown as context chips at the top of the input box. */
+function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror, onSettings }: {
+  notebook: NotebookInfo;
+  tabId: number | null;
+  choices: NotebookChoice[];
+  settings: ChatSettings;
+  onPick: (tabId: number) => void;
+  onMirror: () => void;
+  onSettings: (s: ChatSettings) => void;
+}) {
+  const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
+  const pinned = settings.targetCellIds.length > 0;
+  const chrome = tabId !== null && tabId < 0;
+  return (
+    <div class="ctx-row">
+      <span class="ctx-chip top-title" title={`${notebook.title} · ${PLATFORM[notebook.platform]}${chrome ? " in Chrome" : ""} · kernel ${notebook.kernel}`}>
+        <Icon name="notebook" />
+        {choices.length > 1 ? (
+          <select class="notebook-pick" aria-label="Notebook" value={tabId ?? ""} onChange={(e) => onPick(Number((e.target as HTMLSelectElement).value))}>
+            {tabId === null && <option value="">Choose a notebook</option>}
+            {choices.map((c) => <option key={c.tabId} value={c.tabId}>{choiceLabel(c)}</option>)}
+          </select>
+        ) : (
+          <span class="ctx-name">{notebook.title}<span class="muted"> · {PLATFORM[notebook.platform]}</span></span>
+        )}
+        <span class={`kdot k-${notebook.kernel}`} aria-label={`Kernel ${notebook.kernel}`} />
+      </span>
+      {chrome && (
+        <button class="ctx-btn" title="Open this notebook in VS Code: edits and runs go to the Chrome tab" aria-label="Open in VS Code" onClick={onMirror}>
+          <Icon name="open" />
+        </button>
+      )}
+      {settings.scope === "cell" && (
+        <span class="ctx-chip cells" title={pinned ? "The agent may change these pinned cells" : "The agent may change the selected cell"}>
+          <Icon name="cell" />
+          <span class="ctx-name">{targets.length ? targets.map((t) => t.slice(0, 8)).join(", ") : "select a cell"}</span>
+          {pinned ? (
+            <button class="ctx-btn" title="Follow the selection again" aria-label="Unpin" onClick={() => onSettings({ ...settings, targetCellIds: [] })}><Icon name="close" /></button>
+          ) : targets.length > 0 && (
+            <button class="ctx-btn" title="Pin these cells" aria-label="Pin" onClick={() => onSettings({ ...settings, targetCellIds: targets })}><Icon name="pin" /></button>
+          )}
+        </span>
+      )}
     </div>
   );
 }
@@ -317,7 +393,9 @@ function Elapsed({ since }: { since: number }) {
   return <span ref={ref} class="elapsed" />;
 }
 
-function Transcript({ chat, actions }: { chat: ChatSnapshot | null; actions: PartActions }) {
+const SUGGESTIONS = ["Explain what this notebook does", "Fix the error in the selected cell", "Add a section that plots the training loss"];
+
+function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const lastHeight = useRef(0);
@@ -331,16 +409,16 @@ function Transcript({ chat, actions }: { chat: ChatSnapshot | null; actions: Par
   });
   if (!chat || !chat.messages.length) {
     return (
-      <div class="transcript empty">
-        <div class="center muted pad">
-          <p>Ask the agent about this notebook.</p>
-          <ul class="hints">
-            <li>“Explain what cell 3 does”</li>
-            <li>“Fix the error in the selected cell”</li>
-            <li>“Add a section that plots the training loss”</li>
-          </ul>
+      <Welcome>
+        <p>Ask the agent about this notebook. It reads, edits and runs cells, and works in the terminal of the machine the notebook runs on.</p>
+        <div class="suggestions">
+          {SUGGESTIONS.map((s) => (
+            <button key={s} class="suggestion" onClick={() => onSuggest(s)}>
+              <Icon name="sparkle" /> {s}
+            </button>
+          ))}
         </div>
-      </div>
+      </Welcome>
     );
   }
   const running = chat.status === "running";
@@ -376,59 +454,34 @@ function Transcript({ chat, actions }: { chat: ChatSnapshot | null; actions: Par
             setBehind(false);
           }}
         >
-          ↓ New messages
+          <Icon name="chev-d" /> New messages
         </button>
       )}
     </div>
   );
 }
 
-function ModeBar({ settings, notebook, onChange }: { settings: ChatSettings; notebook: NotebookInfo; onChange: (s: ChatSettings) => void }) {
-  const scopes: Scope[] = ["cell", "write", "auto"];
-  const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
-  const pinned = settings.targetCellIds.length > 0;
-  return (
-    <div class="modebar">
-      <div class="seg" role="radiogroup" aria-label="Mode">
-        {scopes.map((s) => (
-          <button key={s} role="radio" aria-checked={settings.scope === s} class={settings.scope === s ? "on" : ""} title={SCOPE_HINT[s]} onClick={() => onChange({ ...settings, scope: s })}>
-            {SCOPE_LABEL[s]}
-          </button>
-        ))}
-      </div>
-      <label class="toggle" title="Show each change as a diff to apply or reject">
-        <input type="checkbox" checked={settings.review} onChange={(e) => onChange({ ...settings, review: (e.target as HTMLInputElement).checked })} />
-        Review
-      </label>
-      <label class="toggle" title="Refuse the agent's requests to use its own tools on this computer (shell, file edits, web). Notebook content could try to talk the agent into them.">
-        <input type="checkbox" checked={settings.notebookOnly} onChange={(e) => onChange({ ...settings, notebookOnly: (e.target as HTMLInputElement).checked })} />
-        Notebook only
-      </label>
-      {settings.scope === "cell" && (
-        <div class="targets">
-          <span class="muted">{pinned ? "Pinned:" : "Target (selected):"}</span> {targets.length ? targets.map((t) => t.slice(0, 10)).join(", ") : <em>select a cell</em>}
-          {pinned ? (
-            <button class="linkish" onClick={() => onChange({ ...settings, targetCellIds: [] })}>
-              follow selection
-            </button>
-          ) : (
-            targets.length > 0 && (
-              <button class="linkish" onClick={() => onChange({ ...settings, targetCellIds: targets })}>
-                pin
-              </button>
-            )
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Composer({ history, running, disabled, onSend, onStop }: { history: string[]; running: boolean; disabled: boolean; onSend: (t: string) => Promise<boolean>; onStop: () => void }) {
+/** The input box: context chips on top, the text, and a toolbar of pickers with the send button. */
+function Composer({ history, running, disabled, draft, onSend, onStop, context, tools }: {
+  history: string[];
+  running: boolean;
+  disabled: boolean;
+  /** Text put in the box from outside (a suggestion); a new object each time. */
+  draft: { text: string } | null;
+  onSend: (t: string) => Promise<boolean>;
+  onStop: () => void;
+  context: ComponentChildren;
+  tools: ComponentChildren;
+}) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
   /** Position in `history` while recalling earlier prompts with the arrow keys. */
   const recall = useRef<number | null>(null);
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    area.current?.focus();
+  }, [draft]);
   const submit = async () => {
     const t = text.trim();
     if (!t || disabled) return;
@@ -442,10 +495,11 @@ function Composer({ history, running, disabled, onSend, onStop }: { history: str
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [text]);
   return (
-    <div class="composer">
+    <div class="composer" onClick={(e) => { if (e.target === e.currentTarget) area.current?.focus(); }}>
+      {context}
       <textarea
         ref={area}
-        rows={2}
+        rows={1}
         placeholder={running ? "Queue a follow-up…" : "Ask about this notebook…"}
         value={text}
         onInput={(e) => {
@@ -475,15 +529,19 @@ function Composer({ history, running, disabled, onSend, onStop }: { history: str
           }
         }}
       />
-      {running ? (
-        <button class="stop" onClick={onStop} title="Stop the agent">
-          Stop
-        </button>
-      ) : (
-        <button class="primary send" onClick={() => void submit()} disabled={disabled || !text.trim()}>
-          Send
-        </button>
-      )}
+      <div class="toolbar">
+        {tools}
+        <span class="grow" />
+        {running && !text.trim() ? (
+          <button class="send stop" onClick={onStop} title="Stop the agent" aria-label="Stop">
+            <Icon name="stop" />
+          </button>
+        ) : (
+          <button class="send" onClick={() => void submit()} disabled={disabled || !text.trim()} title="Send (Enter)" aria-label="Send">
+            <Icon name="send" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -505,20 +563,22 @@ function ContextMeter({ usage }: { usage: ChatUsage }) {
 function AgentOptions({ chat, busy, onSet }: { chat: ChatSnapshot; busy: boolean; onSet: (id: string, v: string | boolean) => void }) {
   const order = (o: AgentOption) => ["model", "thought_level", "mode"].indexOf(o.category ?? "") >>> 0;
   const opts = [...chat.options].sort((a, b) => order(a) - order(b));
+  const locked = busy || chat.status !== "idle";
   return (
     <>
       {opts.map((o) =>
         o.kind === "select" ? (
-          <select key={o.id} aria-label={o.name} title={o.name} value={String(o.value)} disabled={busy || chat.status !== "idle"} onChange={(e) => onSet(o.id, (e.target as HTMLSelectElement).value)}>
-            {o.choices?.map((c) => (
-              <option key={c.value} value={c.value} title={c.description ?? undefined}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <Picker
+            key={o.id}
+            label={o.name}
+            value={String(o.value)}
+            disabled={locked}
+            options={(o.choices ?? []).map((c) => ({ value: c.value, label: c.name, title: c.description ?? undefined }))}
+            onChange={(v) => onSet(o.id, v)}
+          />
         ) : (
-          <label key={o.id} class="toggle small" title={o.name}>
-            <input type="checkbox" checked={!!o.value} disabled={busy || chat.status !== "idle"} onChange={(e) => onSet(o.id, (e.target as HTMLInputElement).checked)} />
+          <label key={o.id} class="toggle tool-toggle" title={o.name}>
+            <input type="checkbox" checked={!!o.value} disabled={locked} onChange={(e) => onSet(o.id, (e.target as HTMLInputElement).checked)} />
             {o.name}
           </label>
         ),

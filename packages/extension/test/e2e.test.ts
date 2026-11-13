@@ -160,7 +160,7 @@ describe.skipIf(!RUN)("Colab", () => {
     dumpOnFailure("write");
     const before = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
     const first = await nb.evaluate(() => (window as any).colab.global.notebook.cells[0].getId());
-    await panel.getByRole("radio", { name: "Write" }).click();
+    await panel.getByLabel("Mode", { exact: true }).selectOption("write");
     await panel.getByLabel("Review").uncheck();
     // No runtime is connected: the notebook is still worked on as its file.
     await send(
@@ -264,7 +264,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
     expect(await panel.locator(".msg.user").count()).toBe(0);
     await model.selectOption("smart");
-    await panel.getByRole("radio", { name: "Autonomous" }).click();
+    await panel.getByLabel("Mode", { exact: true }).selectOption("auto");
     await panel.getByLabel("Review").uncheck();
 
     await send(
@@ -396,31 +396,21 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     expect(during).not.toContain("kernel is busy");
   }, 300_000);
 
-  it("manages a custom ACP command and selects its model before chatting", async () => {
-    await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
-    const dialog = panel.getByRole("dialog");
+  it("chats with a custom ACP agent (added in Settings) and selects its model", async () => {
+    // Agents are managed in Settings (the research views); the chat only picks one.
+    const request = (method: string, params: unknown) => panel.evaluate(([m, p]) => (window as any).ainbRequest(m, p), [method, params] as const);
     const launchCommand = formatLaunchCommand(process.execPath, [FAKE_AGENT]);
-    await dialog.getByLabel("Name (optional)").fill("Browser custom ACP");
-    await dialog.getByLabel("Launch command").fill(launchCommand);
-    await dialog.getByRole("button", { name: "Test connection" }).click();
-    await expect.poll(() => dialog.getByRole("status").textContent(), { timeout: 30_000 }).toContain("Connected");
-    await dialog.getByRole("button", { name: "Add agent", exact: true }).click();
-    await expect.poll(() => panel.getByLabel("Agent", { exact: true }).locator("option:checked").textContent(), { timeout: 30_000 }).toBe("Browser custom ACP");
+    const { agent } = await request("agents.save", { name: "Browser custom ACP", launchCommand }) as { agent: { id: string } };
+    const picker = panel.getByLabel("Agent", { exact: true });
+    await expect.poll(() => picker.locator("option").allTextContents(), { timeout: 30_000 }).toContain("Browser custom ACP");
+    expect(await picker.locator("option").allTextContents()).toContain("Manage agents…");
+    await picker.selectOption(agent.id);
     const model = panel.getByLabel("Model", { exact: true });
     await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
     await model.selectOption("smart");
     await send(panel, "ECHO_MODEL custom first prompt");
     await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 30_000 }).toContain("[model smart]");
-    await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
-    const row = dialog.locator(".manager-agent").filter({ hasText: "Browser custom ACP" });
-    await row.getByRole("button", { name: "Edit", exact: true }).click();
-    await dialog.getByLabel("Name (optional)").fill("Renamed browser ACP");
-    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
-    await expect.poll(() => panel.getByLabel("Agent", { exact: true }).locator("option:checked").textContent()).toBe("Renamed browser ACP");
-    await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
-    await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
-    await dialog.locator(".manager-agent").filter({ hasText: "Renamed browser ACP" }).getByRole("button", { name: "Remove", exact: true }).click();
-    await expect.poll(() => panel.getByLabel("Agent", { exact: true }).locator("option").allTextContents()).not.toContain("Renamed browser ACP");
-    await dialog.getByRole("button", { name: "Close agent manager" }).click();
+    await request("agents.remove", { id: agent.id });
+    await expect.poll(() => picker.locator("option").allTextContents()).not.toContain("Browser custom ACP");
   }, 120_000);
 });

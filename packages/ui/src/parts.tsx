@@ -7,6 +7,7 @@ import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js"
 import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
 import { usePanelHost, type PanelHost } from "./host.js";
+import { Icon } from "./icons.js";
 
 export interface PartActions {
   answer(promptId: string, optionId: string): void;
@@ -195,7 +196,7 @@ function PartView({ part, actions, liveThought }: { part: Part; actions: PartAct
         <ul class="plan">
           {part.entries.map((e, i) => (
             <li key={i} class={`plan-${e.status}`}>
-              <span class="plan-mark">{e.status === "completed" ? "✓" : e.status === "in_progress" ? "◐" : "○"}</span>
+              <span class="plan-mark">{e.status === "in_progress" ? <span class="spinner tool-spin" aria-hidden="true" /> : <Icon name={e.status === "completed" ? "check" : "circle"} />}</span>
               {e.content}
             </li>
           ))}
@@ -216,7 +217,7 @@ function Thought({ text, live }: { text: string; live: boolean }) {
   return (
     <div class="thought">
       <button class="linkish" onClick={() => setOpen(!open)} aria-expanded={open}>
-        {open ? "▾" : "▸"} {live ? "Thinking" : "Thought"}
+        <Icon name={open ? "chev-d" : "chev-r"} /> {live ? "Thinking" : "Thought"}
         {line && <span class="thought-line">: {line}</span>}
       </button>
       {open && <div class="thought-body">{text}</div>}
@@ -224,7 +225,10 @@ function Thought({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-const STATUS_ICON: Record<string, string> = { pending: "○", in_progress: "◐", completed: "✓", failed: "✕" };
+function StatusIcon({ status }: { status: string }) {
+  if (status === "in_progress" || status === "pending") return <span class="spinner tool-spin" aria-hidden="true" />;
+  return <Icon name={status === "failed" ? "close" : status === "completed" ? "check" : "circle"} />;
+}
 
 function ToolGroup({ tools }: { tools: ToolPart[] }) {
   const [open, setOpen] = useState(false);
@@ -237,11 +241,12 @@ function ToolGroup({ tools }: { tools: ToolPart[] }) {
     <div class={`tool group ${status} ${notebook ? "nb" : ""}`}>
       <button class="tool-head group-head" onClick={() => setOpen(!open)} aria-expanded={open}>
         <span class="tool-icon" aria-label={status}>
-          {STATUS_ICON[status]}
+          <StatusIcon status={status} />
         </span>
         <span class="tool-summary">{running.length ? `${toolLabel(running.at(-1)!)}…` : summarizeTools(tools)}</span>
         {failed > 0 && <span class="tool-failed">{failed} failed</span>}
         <span class="tool-count">{tools.length} calls</span>
+        <Icon name={open ? "chev-d" : "chev-r"} class="tool-chev" />
       </button>
       {open && (
         <div class="tool-group-body">
@@ -260,9 +265,10 @@ function Tool({ part }: { part: ToolPart }) {
     <div class={`tool ${part.status} ${part.notebook ? "nb" : ""}`}>
       <button class="tool-head" onClick={() => setOpen(!open)} aria-expanded={open} disabled={!part.detail}>
         <span class="tool-icon" aria-label={part.status}>
-          {STATUS_ICON[part.status] ?? "○"}
+          <StatusIcon status={part.status} />
         </span>
         <span class="tool-title">{toolLabel(part)}</span>
+        {part.detail && <Icon name={open ? "chev-d" : "chev-r"} class="tool-chev" />}
       </button>
       {open && part.detail && <pre class="tool-detail">{part.detail}</pre>}
     </div>
@@ -279,7 +285,7 @@ function Prompt({ part }: { part: PromptPart }) {
   return (
     <div class={`card prompt ${answered ? "done" : "asked"}`}>
       <div class="card-title">{part.title}</div>
-      <div class="card-status">{answered ? `→ ${chosenLabel(part)}` : "Waiting for your answer below ↓"}</div>
+      <div class="card-status">{answered ? chosenLabel(part) : "Waiting for your answer below"}</div>
     </div>
   );
 }
@@ -319,8 +325,8 @@ export function Review({ review, status, actions }: { review: ReviewInfo; status
   return (
     <div class={`card review ${status}`}>
       <div class="review-head">
-        <button class="linkish" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
-          {expanded ? "▾" : "▸"}
+        <button class="linkish" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? "Hide the diff" : "Show the diff"}>
+          <Icon name={expanded ? "chev-d" : "chev-r"} />
         </button>
         <span class="card-title">
           {REVIEW_TITLE[review.kind]} ·{" "}

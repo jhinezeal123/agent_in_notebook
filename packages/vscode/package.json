@@ -1,7 +1,7 @@
 {
   "name": "agent-in-notebook-vscode",
   "displayName": "Agent in Notebook",
-  "description": "Chat with your ACP coding agent about a notebook open in VS Code, or on Colab or Kaggle in Chrome.",
+  "description": "Chat with your ACP coding agent about a notebook (VS Code, Colab or Kaggle in Chrome), and run research experiments with OpenResearch.",
   "publisher": "jhinezeal123",
   "version": "0.1.0",
   "private": true,
@@ -35,23 +35,97 @@
           "title": "Agent in Notebook",
           "icon": "notebook.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "ainb-chat",
+          "title": "Agent Chat",
+          "icon": "notebook.svg"
+        }
       ]
     },
     "views": {
       "ainb": [
         {
           "type": "webview",
+          "id": "ainb.research",
+          "name": "Research"
+        }
+      ],
+      "ainb-chat": [
+        {
+          "type": "webview",
           "id": "ainb.chat",
-          "name": "Notebook Agent"
+          "name": "Agent Chat"
         }
       ]
     },
     "commands": [
       {
         "command": "ainb.open",
-        "title": "Agent in Notebook: Open Chat"
+        "title": "Open Agent Chat",
+        "category": "Agent in Notebook",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "ainb.newChat",
+        "title": "New Chat",
+        "category": "Agent in Notebook",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ainb.openSettings",
+        "title": "Settings",
+        "category": "Agent in Notebook",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "ainb.chooseOrx",
+        "title": "Choose the OpenResearch Program (orx)",
+        "category": "Agent in Notebook"
+      },
+      {
+        "command": "ainb.clearChat",
+        "title": "Clear Chat",
+        "category": "Agent in Notebook",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "ainb.stopBridge",
+        "title": "Stop the Bridge and Its Agents",
+        "category": "Agent in Notebook",
+        "icon": "$(debug-stop)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ainb.newChat",
+          "when": "view == ainb.research || view == ainb.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ainb.openSettings",
+          "when": "view == ainb.research || view == ainb.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ainb.open",
+          "when": "view == ainb.research",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ainb.clearChat",
+          "when": "view == ainb.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ainb.stopBridge",
+          "when": "view == ainb.chat || view == ainb.research",
+          "group": "bridge@1"
+        }
+      ]
+    },
     "notebooks": [
       {
         "type": "ainb-chrome-notebook",

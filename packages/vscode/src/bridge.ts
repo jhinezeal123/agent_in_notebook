@@ -23,6 +23,8 @@ export class BridgeLink {
     private readonly runOp: (params: ExtensionMethods["notebook.op"]["params"]) => Promise<unknown>,
     /** Notebooks in Chrome tabs: one appeared, changed or went (info null), or the user brought one to the front. */
     private readonly onBrowser: (event: { notebook: BridgeEvents["browser.notebook"] } | { focused: number }) => void,
+    /** OpenResearch (run by the bridge) changed state, or one of its runs changed. */
+    private readonly onResearch: (event: { status: BridgeEvents["research.status"] } | { run: BridgeEvents["research.run"] }) => void = () => {},
   ) {}
 
   snapshot(): BridgeState { return this.state; }
@@ -84,6 +86,12 @@ export class BridgeLink {
     });
     rpc.on("browser.focused", ({ tabId }: BridgeEvents["browser.focused"]) => {
       if (this.rpc === rpc) this.onBrowser({ focused: tabId });
+    });
+    rpc.on("research.status", (status: BridgeEvents["research.status"]) => {
+      if (this.rpc === rpc) this.onResearch({ status });
+    });
+    rpc.on("research.run", (run: BridgeEvents["research.run"]) => {
+      if (this.rpc === rpc) this.onResearch({ run });
     });
     for (const method of ["chat.snapshot", "chat.patch", "chat.status", "chat.usage"]) {
       rpc.on(method, (params: unknown) => {
