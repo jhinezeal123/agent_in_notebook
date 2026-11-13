@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { ancestorsOf, buildHistoryNodes, historyBackendLabel, type HistoryNode } from "@orx/components/experimentLineageModel";
-import { runActive, runResult } from "@orx/runDisplay";
+import { runActive, runNotice, runResult } from "@orx/runDisplay";
 import { renderMarkdown, splitMarkdownBlocks } from "../../ui/src/markdown.js";
 import { hostRequest } from "./tunnel.js";
 import { Banner, Button, Icon, RunBadge, StatusShape, ago, duration, errorText } from "./ui.js";
@@ -30,6 +30,8 @@ export function ExperimentView({ projectId, experimentId }: { projectId: string;
   const e = node.experiment;
   const run = node.latestRun;
   const result = run ? runResult(run) : null;
+  // OpenResearch's run strip: a run waiting in its provider's queue says why (e.g. "Queued on Kaggle…").
+  const notice = run ? runNotice(run) : null;
   const open = (id: string) => void hostRequest("open", { view: "experiment", projectId, experimentId: id });
   const step = (n: HistoryNode, current = false) => (
     <div key={n.id} className={`step${current ? " cur" : ""}`} onClick={current ? undefined : () => open(n.id)}>
@@ -65,6 +67,7 @@ export function ExperimentView({ projectId, experimentId }: { projectId: string;
               {run.commitSha && <span className="mono">{run.commitSha.slice(0, 7)}</span>}
               {run.exitCode !== null && run.exitCode !== undefined && <span className={run.exitCode ? "err-text" : ""}>exit {run.exitCode}</span>}
             </div>
+            {notice?.kind === "queued" && <p className="muted small" role="status">{notice.detail}</p>}
             {run.command && <pre className="cmd">$ {run.command}</pre>}
             {result && <Markdown text={result} className={run.status === "failed" ? "err-text" : ""} />}
           </>

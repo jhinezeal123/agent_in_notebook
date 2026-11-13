@@ -49,8 +49,10 @@ VS Code                                     bridge                     orx up --
   - Nếu đã có OpenResearch khỏe ở cổng 4791 thì dùng luôn, không tắt nó khi xong.
   - Nếu chưa có, bridge chạy `orx up --headless --port 0` và đọc dòng `orx up: dashboard on http://…` để biết cổng.
   - Bridge giữ một kết nối tới `/api/events`. Nhờ đó bản headless không tự tắt khi rảnh. Mỗi `run.updated` trên kết nối này được chuyển thành sự kiện `research.run` gửi VS Code.
+  - Sự kiện đó mang theo `queueDetail` khi run đang `starting` nhưng còn xếp hàng ở nhà cung cấp (ví dụ Kaggle). Thanh trạng thái của VS Code đếm riêng các run này (`1 running · 1 queued`).
   - Khi `orx` báo cơ sở dữ liệu đang bị một bản khác giữ, lỗi được viết lại cho dễ hiểu.
   - `research.status {start}` trả trạng thái, kèm bật nếu được yêu cầu. `research.configure {orxPath?}` lưu đường dẫn vào `research.json` rồi khởi động lại.
+  - `research.json` có thể có thêm `env` (ví dụ `ORX_DATA_DIR`, `ORX_CACHE_DIR`). Các biến này được đưa vào `orx up` do bridge chạy, để nó mở đúng thư mục dữ liệu của bản OpenResearch bạn tự chạy. Thư mục chứa `orx` cũng được thêm vào đầu `PATH`.
 - **Tunnel** (`studio/src/tunnel.ts`, `vscode/src/orx-tunnel.ts`): webview không gọi thẳng được `orx`, vì khác origin và `orx` chỉ nhận lệnh ghi từ trang của chính nó.
   - Trong webview, `fetch` tới `/api/…` và `EventSource` được thay bằng bản gửi message cho extension.
   - Extension gọi `orx` như một tiến trình cục bộ, bỏ các header `origin`, `referer`, `sec-*`, và stream SSE về webview.

@@ -55,13 +55,25 @@ export function resetToken(): BridgeConfig {
 export interface ResearchConfig {
   /** The orx binary to run; unset: look on PATH and in the usual install places. */
   orxPath?: string;
+  /**
+   * Environment for the `orx up` the bridge starts, e.g. ORX_DATA_DIR and
+   * ORX_CACHE_DIR, so it opens the same storage as the OpenResearch you run
+   * yourself (its database, Kaggle runtime, account profiles).
+   */
+  env?: Record<string, string>;
 }
 
 export function loadResearchConfig(): ResearchConfig {
   const file = join(dataDir(), "research.json");
   try {
     const cfg = JSON.parse(readFileSync(file, "utf8"));
-    return typeof cfg?.orxPath === "string" && cfg.orxPath ? { orxPath: cfg.orxPath } : {};
+    const out: ResearchConfig = {};
+    if (typeof cfg?.orxPath === "string" && cfg.orxPath) out.orxPath = cfg.orxPath;
+    if (cfg?.env && typeof cfg.env === "object" && !Array.isArray(cfg.env)) {
+      const env = Object.fromEntries(Object.entries(cfg.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
+      if (Object.keys(env).length) out.env = env;
+    }
+    return out;
   } catch {
     return {};
   }

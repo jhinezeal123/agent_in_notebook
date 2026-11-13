@@ -268,6 +268,8 @@ export interface ResearchRun {
   startedAt?: number | null;
   endedAt?: number | null;
   exitCode?: number | null;
+  /** Set while a starting run waits in its provider's queue (e.g. "Queued on Kaggle…"). */
+  queueDetail?: string | null;
 }
 
 export interface BrowserNotebook {

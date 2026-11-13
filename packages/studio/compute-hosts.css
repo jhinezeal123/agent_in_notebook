@@ -1,0 +1,31 @@
+/* compute-hosts.tsx: SSH, Slurm, OpenResearch and Kaggle detail pages */
+.ch-toolbar { margin-bottom: 4px; }
+.ch-host { border-bottom: 1px solid var(--border); padding: 4px 12px; }
+.ch-host:last-child { border-bottom: 0; }
+.ch-host-row { display: flex; align-items: center; gap: 16px; padding: 8px 0; }
+.ch-host-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ch-host-name b, .ch-host-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-host-state { display: flex; align-items: center; gap: 6px; min-width: 150px; }
+.ch-status { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.ch-advanced { padding-bottom: 8px; }
+.ch-advanced summary { cursor: pointer; width: fit-content; }
+.ch-advanced-body { margin-top: 8px; max-width: 520px; }
+.ch-terminal { border-top: 1px solid var(--border); padding: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.ch-config { min-height: 340px; max-height: 60vh; white-space: pre; overflow: auto; }
+.ch-section { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
+.ch-actions { margin-top: 8px; }
+.ch-full { flex-basis: 100%; }
+.ch-grow { flex: 1; }
+.ch-break { overflow-wrap: anywhere; }
+.ch-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.ch-fieldset { border: 1px solid var(--input-border); border-radius: 6px; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; margin: 0; min-width: 0; }
+.ch-fieldset legend { padding: 0 4px; font-weight: 600; }
+.ch-fieldset p { margin: 0; }
+.ch-account { border-top: 1px solid var(--border); padding-top: 10px; }
+.ch-meter { flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: 3px; }
+.ch-meter-bar { height: 6px; border-radius: 3px; overflow: hidden; background: var(--border); }
+.ch-meter-fill { height: 100%; }
+.ch-meter-fill.ok { background: var(--st-done); }
+.ch-meter-fill.low { background: var(--st-queued); }
+.ch-meter-fill.bad { background: var(--st-failed); }
+@media (max-width: 560px) { .ch-host-row { flex-wrap: wrap; } }

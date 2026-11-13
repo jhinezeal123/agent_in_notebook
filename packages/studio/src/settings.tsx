@@ -7,10 +7,10 @@ import { HarnessLogo } from "@orx/components/HarnessLogo";
 import { useEffect, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
-import { TARGET_LABELS } from "@orx/computeTargets";
-import type { AcpPreset, ComputeTargetId, ComputeTargetSummary, Harness } from "@orx/api";
+import type { AcpPreset, Harness } from "@orx/api";
 import type { AgentInfo } from "@ainb/protocol";
 import type { KernelSetup, SettingsSection } from "./messages.js";
+import { ComputeTab } from "./compute.js";
 import { ResearchGate } from "./root.js";
 import { useNotebooks } from "./sidebar.js";
 import { hostRequest } from "./tunnel.js";
@@ -28,7 +28,7 @@ export function Settings({ section: initial }: { section?: SettingsSection }) {
       </nav>
       <div className="settings-body">
         {section === "agents" && <Agents />}
-        {section === "compute" && <Compute />}
+        {section === "compute" && <Compute onOpenEnvironment={() => setSection("environment")} />}
         {section === "environment" && <ResearchGate><Environment /></ResearchGate>}
         {section === "kernel" && <Kernel />}
       </div>
@@ -184,9 +184,7 @@ function NotebookAgents() {
 
 // ------------------------------------------------------------------ compute
 
-const STATUS_WORD = (t: ComputeTargetSummary, isDefault: boolean) => (isDefault ? "Default" : !t.enabled ? "Unavailable" : t.configured ? "Configured" : t.id === "openresearch" && !t.signedIn ? "Sign in" : "Set up");
-
-function Compute() {
+function Compute({ onOpenEnvironment }: { onOpenEnvironment: () => void }) {
   const notebooks = useNotebooks();
   return (
     <>
@@ -208,66 +206,8 @@ function Compute() {
           })}
         </div>
       </section>
-      <ResearchGate compact><BackgroundCompute /></ResearchGate>
-    </>
-  );
-}
-
-function BackgroundCompute() {
-  const { queries, api } = useWorkspace();
-  const client = useQueryClient();
-  const compute = useQuery(queries.getComputeSettingsQuery());
-  const [open, setOpen] = useState<ComputeTargetId | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const setDefault = async (backend: ComputeTargetId | null) => {
-    setError(null);
-    try {
-      const next = await api.setComputeDefault({ backend });
-      client.setQueryData(queries.getComputeSettingsQuery().queryKey, next);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  };
-  const targets = compute.data?.targets ?? [];
-  const configured = targets.filter((t) => t.configured);
-  const more = targets.filter((t) => !t.configured);
-  const card = (t: ComputeTargetSummary) => {
-    const isDefault = compute.data?.defaultBackend === t.id;
-    return (
-      <button type="button" key={t.id} className={`ccard${t.enabled ? "" : " off"}${open === t.id ? " on" : ""}`} onClick={() => setOpen(open === t.id ? null : t.id)} title={t.disabledReason ?? undefined}>
-        <span className="lg">{(TARGET_LABELS[t.id]?.() ?? t.id).slice(0, 2)}</span>
-        <b>{TARGET_LABELS[t.id]?.() ?? t.id}</b>
-        <span className="muted small">{t.summary}</span>
-        <span className={`cf${isDefault ? " def" : ""}`}><span>{STATUS_WORD(t, isDefault)}</span><span>→</span></span>
-      </button>
-    );
-  };
-  const target = targets.find((t) => t.id === open);
-  return (
-    <>
-      <section className="sec">
-        <h3>Background runs · OpenResearch</h3>
-        <Item label="Default destination" hint="New runs go here unless the chat asks for another machine.">
-          <select className="inp narrow" value={compute.data?.defaultBackend ?? ""} onChange={(e) => void setDefault((e.currentTarget.value || null) as ComputeTargetId | null)}>
-            <option value="">None</option>
-            {targets.filter((t) => t.configured && t.enabled).map((t) => <option key={t.id} value={t.id}>{TARGET_LABELS[t.id]?.() ?? t.id}</option>)}
-          </select>
-        </Item>
-        {error && <Banner tone="error">{error}</Banner>}
-        {!!configured.length && <><span className="lab">Configured</span><div className="cards">{configured.map(card)}</div></>}
-        {target && (
-          <div className="cfg">
-            <div className="row between"><b>{TARGET_LABELS[target.id]?.() ?? target.id}</b><IconButton icon="close" title="Close" onClick={() => setOpen(null)} /></div>
-            <p>{target.summary}</p>
-            {target.disabledReason && <Banner tone="warn">{target.disabledReason}</Banner>}
-            <div className="row">
-              {target.configured && target.enabled && compute.data?.defaultBackend !== target.id && <Button primary onClick={() => void setDefault(target.id)}>Make default</Button>}
-            </div>
-            <p className="muted small">Detailed setup for each machine (keys, hosts, accounts) uses OpenResearch's own steps: run <code>orx compute configure {target.id}</code> in a terminal, then check here again.</p>
-          </div>
-        )}
-        {!!more.length && <><span className="lab">More compute options</span><div className="cards">{more.map(card)}</div></>}
-      </section>
+      <h3>Background runs · OpenResearch</h3>
+      <ResearchGate compact><ComputeTab onOpenEnvironment={onOpenEnvironment} /></ResearchGate>
     </>
   );
 }

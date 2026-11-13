@@ -6,7 +6,7 @@
 // The checkout: OPENRESEARCH_DIR, else ../openresearch_custom next to this
 // repository. Its ui/ must have been installed (pnpm install) once.
 import { build } from "esbuild";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -46,7 +46,9 @@ function aliases(ui) {
  */
 export async function buildStudio(outfile, { optional = false } = {}) {
   mkdirSync(dirname(outfile), { recursive: true });
-  copyFileSync(join(here, "studio.css"), join(dirname(outfile), "studio.css"));
+  // studio.css, then the compute screens' own rules (compute-*.css), as one file.
+  const extra = readdirSync(here).filter((f) => /^compute-.*\.css$/.test(f)).sort();
+  writeFileSync(join(dirname(outfile), "studio.css"), [readFileSync(join(here, "studio.css"), "utf8"), ...extra.map((f) => readFileSync(join(here, f), "utf8"))].join("\n"));
   let ui;
   try {
     ui = join(openResearchDir(), "ui");

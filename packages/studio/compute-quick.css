@@ -1,0 +1,5 @@
+/* compute-quick.tsx */
+.cq-cmd { display: inline-flex; align-items: center; gap: 4px; vertical-align: baseline; }
+.cq-cmd code { background: var(--code-bg); padding: 0 4px; border-radius: 3px; }
+.cq-cmd .ib { width: 18px; height: 18px; }
+.cq-cmd .ib svg.i { width: 12px; height: 12px; }

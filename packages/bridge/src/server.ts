@@ -28,7 +28,7 @@ import {
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost } from "./chat.js";
-import { BRIDGE_VERSION, dataDir, removeCustomAgent, saveResearchConfig } from "./config.js";
+import { BRIDGE_VERSION, dataDir, loadResearchConfig, removeCustomAgent, saveResearchConfig } from "./config.js";
 import { Orx, type OrxOptions } from "./research/orx.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
@@ -372,7 +372,9 @@ export class Bridge {
     rpc.handle("research.configure", guard<"research.configure">((p) => {
       if (p?.orxPath !== undefined) {
         const orxPath = typeof p.orxPath === "string" && p.orxPath.trim() ? p.orxPath.trim() : undefined;
-        saveResearchConfig(orxPath ? { orxPath } : {});
+        // Choosing another orx keeps the rest of research.json (its env).
+        const { orxPath: _old, ...rest } = loadResearchConfig();
+        saveResearchConfig(orxPath ? { ...rest, orxPath } : rest);
       }
       return this.orx.restart();
     }));

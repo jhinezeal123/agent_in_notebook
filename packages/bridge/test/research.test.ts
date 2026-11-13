@@ -83,4 +83,9 @@ describe("OpenResearch sidecar", () => {
     expect(toRun({ id: "r", experimentId: "e", projectId: "p", status: "exploded" })).toBeNull();
     expect(toRun(null)).toBeNull();
   });
+
+  it("keeps a provider's queue detail, so VS Code can count queued runs", () => {
+    expect(toRun({ id: "r", experimentId: "e", projectId: "p", status: "starting", queueDetail: "Queued on Kaggle" })).toMatchObject({ status: "starting", queueDetail: "Queued on Kaggle" });
+    expect(toRun({ id: "r", experimentId: "e", projectId: "p", status: "starting", queueDetail: null })).not.toHaveProperty("queueDetail");
+  });
 });

@@ -12,7 +12,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { get, type ClientRequest } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { FINAL_RUN_STATUSES, type ResearchRun, type ResearchStatus, type RunStatus } from "@ainb/protocol";
 import { which } from "../agents/registry.js";
 import { loadResearchConfig } from "../config.js";
@@ -22,6 +22,8 @@ export interface OrxLaunch {
   path: string;
   command: string;
   args: string[];
+  /** Added to the environment of `orx up` (research.json `env`). */
+  env?: Record<string, string>;
 }
 
 export interface OrxOptions {
@@ -108,6 +110,7 @@ export class Orx {
     this.setStatus({ state: "starting", orxPath });
     let stderr = "";
     const child = spawn(launch.command, [...launch.args, "up", "--headless", "--port", "0"], {
+      env: orxEnv(launch),
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
     });
@@ -220,6 +223,7 @@ export function toRun(raw: unknown): ResearchRun | null {
     startedAt: num(r.startedAt),
     endedAt: num(r.endedAt),
     exitCode: num(r.exitCode),
+    ...(typeof r.queueDetail === "string" && r.queueDetail ? { queueDetail: r.queueDetail } : {}),
   };
 }
 
@@ -231,18 +235,31 @@ function exitMessage(code: number | null, stderr: string): string {
   return `OpenResearch exited (code ${code}).${tail ? `\n${tail}` : ""}`;
 }
 
+/**
+ * The environment of `orx up`: the bridge's, then research.json `env`, with
+ * orx's own folder first on PATH (so what it starts finds the same orx).
+ */
+export function orxEnv(launch: OrxLaunch): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...launch.env };
+  // Windows names it Path; keep whichever key is there.
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  if (isAbsolute(launch.path)) env[key] = [dirname(launch.path), env[key]].filter(Boolean).join(delimiter);
+  return env;
+}
+
 /** Find orx: research.json, AINB_ORX, PATH, then where its installers put it. */
 export function locateOrx(): OrxLaunch | { missing: string } {
-  const configured = loadResearchConfig().orxPath ?? process.env.AINB_ORX;
+  const cfg = loadResearchConfig();
+  const configured = cfg.orxPath ?? process.env.AINB_ORX;
   if (configured) {
     return existsSync(configured)
-      ? { path: configured, command: configured, args: [] }
+      ? { path: configured, command: configured, args: [], env: cfg.env }
       : { missing: `The orx program set for Agent in Notebook is not at ${configured}. Choose it again.` };
   }
   const exe = process.platform === "win32" ? "orx.exe" : "orx";
   const found = which("orx") ?? [join(homedir(), ".cargo", "bin", exe), join(homedir(), ".local", "bin", exe), join(homedir(), ".openresearch", "bin", exe)].find((p) => existsSync(p));
   return found
-    ? { path: found, command: found, args: [] }
+    ? { path: found, command: found, args: [], env: cfg.env }
     : { missing: "OpenResearch (orx) is not installed, or not on PATH. Install it, or choose the orx program you built." };
 }
 

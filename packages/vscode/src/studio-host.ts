@@ -35,7 +35,8 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly webviews = new Set<{ webview: vscode.Webview; view: () => StudioView | null }>();
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly statusItem: vscode.StatusBarItem;
-  private running = new Map<string, string>();
+  /** Live runs: their project, and whether they still wait in their provider's queue. */
+  private running = new Map<string, { projectId: string; queued: boolean }>();
 
   constructor(private readonly deps: StudioDeps) {
     this.statusItem = vscode.window.createStatusBarItem("ainb.research", vscode.StatusBarAlignment.Right, 100);
@@ -55,10 +56,11 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   /** A run changed: count the live ones, and say when one ends. */
-  runChanged(run: { id: string; status: string; experimentId: string; projectId: string }): void {
+  runChanged(run: { id: string; status: string; experimentId: string; projectId: string; queueDetail?: string | null }): void {
     const live = run.status === "starting" || run.status === "running";
     const was = this.running.has(run.id);
-    if (live) this.running.set(run.id, run.projectId);
+    // OpenResearch's runDisplay: a starting run with a queue detail is "Queued".
+    if (live) this.running.set(run.id, { projectId: run.projectId, queued: run.status === "starting" && !!run.queueDetail });
     else this.running.delete(run.id);
     this.renderStatus();
     if (was && !live && (run.status === "done" || run.status === "failed")) {
@@ -73,9 +75,11 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private renderStatus(): void {
     const s = this.status;
     if (s.state === "off") { this.statusItem.hide(); return; }
-    const runs = this.running.size;
+    const queued = [...this.running.values()].filter((r) => r.queued).length;
+    const runs = this.running.size - queued;
+    const counts = [runs && `${runs} running`, queued && `${queued} queued`].filter(Boolean).join(" · ");
     this.statusItem.text = s.state === "ready"
-      ? `$(beaker) ${runs ? `${runs} running` : "OpenResearch"}`
+      ? `$(beaker) ${counts || "OpenResearch"}`
       : s.state === "starting" ? "$(loading~spin) OpenResearch" : "$(warning) OpenResearch";
     this.statusItem.tooltip = s.state === "ready" ? `OpenResearch ${s.version ?? ""} at ${s.url}${s.owned ? "" : " (already running)"}` : s.error ?? "OpenResearch is starting";
     this.statusItem.show();
@@ -202,6 +206,7 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
         return next;
       }
       case "kernel.run": return this.deps.runKernelSetup(Number(p.tabId));
+      case "terminal.run": return this.runInTerminal(p);
       case "logs.show": return showRunLogs(String(p.runId), String(p.title ?? "Run"), () => this.baseUrl());
       case "message": {
         const text = String(p.text ?? "");
@@ -222,6 +227,31 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     const status = await this.deps.bridge("research.configure", { orxPath: picked[0].fsPath }, true) as ResearchStatus;
     this.setResearchStatus(status);
     return status;
+  }
+
+  /**
+   * Open a VS Code terminal for a step that needs the user's input (a host's
+   * password or passphrase, signing in to OpenResearch). The page names the
+   * step; the command is built here, from the orx program the bridge uses and
+   * a validated host alias, and passed as program and arguments (no shell).
+   */
+  private runInTerminal(p: Record<string, unknown>): void {
+    const orx = this.status.orxPath;
+    if (!orx) throw new Error("OpenResearch's orx program is not known yet. Wait until OpenResearch has started, then try again.");
+    let args: string[];
+    if (p.command === "compute.connect") {
+      const host = typeof p.host === "string" ? p.host.trim() : "";
+      if (!/^[A-Za-z0-9][A-Za-z0-9._@:-]{0,254}$/.test(host)) throw new Error("Not a valid SSH host name.");
+      if (p.backend !== "ssh" && p.backend !== "slurm") throw new Error("Unknown backend.");
+      args = ["compute", "connect", p.backend, "--host", host];
+    } else if (p.command === "login") {
+      args = ["login"];
+    } else {
+      throw new Error("Unknown terminal command.");
+    }
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim().slice(0, 60) : "OpenResearch";
+    const terminal = vscode.window.createTerminal({ name: title, shellPath: orx, shellArgs: args });
+    terminal.show();
   }
 
   kernelSetup(): KernelSetup {
