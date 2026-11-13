@@ -62,6 +62,19 @@ async function loadConfig() {
   }
 }
 
+// A pairing config written outside this worker (devtools, tests): use it.
+// The worker's own writes match what it holds already and change nothing.
+chrome.storage.onChanged.addListener((changes, area) => {
+  const next = changes.config?.newValue as { port?: unknown; token?: unknown; source?: unknown } | undefined;
+  if (area !== "local" || !next || typeof next.port !== "number") return;
+  const source = next.source === "manual" ? "manual" : next.source === "native" ? "native" : undefined;
+  const token = String(next.token ?? "");
+  const c = state.config;
+  if (c.port === next.port && c.token === token && c.source === source) return;
+  state.config = { port: next.port, token, source };
+  reconnect();
+});
+
 function setConn(conn: BridgeState["conn"], error?: string) {
   state.conn = conn;
   state.error = error;
@@ -141,7 +154,7 @@ function openSocket(fresh: boolean): void {
     state.agents = params.agents;
     broadcast({ event: "state", params: state });
   });
-  for (const method of ["chat.snapshot", "chat.message", "chat.status"]) {
+  for (const method of ["chat.snapshot", "chat.patch", "chat.usage", "chat.status"]) {
     peer.on(method, (params) => broadcast({ event: "bridge", params: { method, params } }));
   }
 

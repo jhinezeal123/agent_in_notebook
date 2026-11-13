@@ -4,6 +4,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppliedChange, ChatMessage } from "@ainb/protocol";
 
@@ -27,6 +28,10 @@ export function keyHash(key: string): string {
 }
 
 export class ChatStore {
+  /** Bumped by every save of a key; a background write that finds a newer one discards itself. */
+  private generation = new Map<string, number>();
+  private writing = new Map<string, Promise<void>>();
+
   constructor(readonly dir: string) {}
 
   private file(key: string): string {
@@ -45,23 +50,64 @@ export class ChatStore {
     }
   }
 
-  save(chat: Omit<StoredChat, "version" | "updatedAt">): void {
-    mkdirSync(this.dir, { recursive: true });
+  private serialize(chat: Omit<StoredChat, "version" | "updatedAt">): string {
     const messages = chat.messages.slice(-MAX_MESSAGES);
     const kept = new Set(messages.map((m) => m.id));
     const journal = Object.fromEntries(Object.entries(chat.journal ?? {}).filter(([id]) => kept.has(id)));
     const data: StoredChat = { version: 1, ...chat, updatedAt: Date.now(), messages, journal };
+    return JSON.stringify(data);
+  }
+
+  private bump(key: string): number {
+    const n = (this.generation.get(key) ?? 0) + 1;
+    this.generation.set(key, n);
+    return n;
+  }
+
+  save(chat: Omit<StoredChat, "version" | "updatedAt">): void {
+    mkdirSync(this.dir, { recursive: true });
+    this.bump(chat.key);
     const file = this.file(chat.key);
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
+      writeFileSync(temporary, this.serialize(chat), { mode: 0o600 });
       renameSync(temporary, file);
     } finally {
       if (existsSync(temporary)) unlinkSync(temporary);
     }
   }
 
+  /**
+   * Save without blocking the event loop on the disk (the bridge keeps
+   * streaming meanwhile). Writes of one key run one at a time, and a write
+   * overtaken by a newer save of the key is dropped.
+   */
+  saveAsync(chat: Omit<StoredChat, "version" | "updatedAt">): Promise<void> {
+    const generation = this.bump(chat.key);
+    const text = this.serialize(chat);
+    const file = this.file(chat.key);
+    const previous = this.writing.get(chat.key) ?? Promise.resolve();
+    const write = previous.then(async () => {
+      if (this.generation.get(chat.key) !== generation) return;
+      mkdirSync(this.dir, { recursive: true });
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, text, { mode: 0o600 });
+        if (this.generation.get(chat.key) === generation) await rename(temporary, file);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    });
+    const settled = write.catch(() => {});
+    this.writing.set(chat.key, settled);
+    void settled.then(() => {
+      if (this.writing.get(chat.key) === settled) this.writing.delete(chat.key);
+    });
+    return write;
+  }
+
   remove(key: string): void {
+    this.bump(key);
     rmSync(this.file(key), { force: true });
   }
 

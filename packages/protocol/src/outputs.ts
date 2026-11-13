@@ -1,7 +1,7 @@
 // Normalize ipynb (nbformat 4) outputs into the flat CellOutput shape.
 
 import type { CellOutput, OutputImage } from "./notebook.js";
-import { joinSource, stripAnsi } from "./text.js";
+import { capLines, collapseCarriageReturns, joinSource, squeezeRepeats, stripAnsi } from "./text.js";
 
 const TEXT_MIMES = ["text/plain", "text/markdown", "application/json", "text/latex"];
 const IMAGE_MIMES = ["image/png", "image/jpeg"] as const;
@@ -22,7 +22,7 @@ export function normalizeIpynbOutput(raw: any): CellOutput | null {
   if (!raw || typeof raw !== "object") return null;
   switch (raw.output_type) {
     case "stream":
-      return { kind: "stream", name: raw.name ?? "stdout", text: stripAnsi(joinSource(raw.text)) };
+      return { kind: "stream", name: raw.name ?? "stdout", text: collapseCarriageReturns(stripAnsi(joinSource(raw.text))) };
     case "error":
       return {
         kind: "error",
@@ -64,12 +64,33 @@ export function normalizeIpynbOutputs(list: unknown): CellOutput[] {
  * Render outputs as plain text for an agent. `attachImage` decides what to do
  * with an image: it returns the label to put in the text (the image travels
  * alongside), or null when the image cannot be shown.
+ *
+ * Within `max`, an error keeps its own share: a long log printed before a
+ * failure must not push out the error line or the frame in the user's code.
+ * Text is cut between lines, keeping the start and (more of) the end.
  */
 export function outputsToText(outputs: CellOutput[], max = 8000, attachImage?: (image: OutputImage) => string | null): string {
   const parts: string[] = [];
+  const errors: string[] = [];
+  let stream: { name: string; text: string } | null = null;
+  const endStream = () => {
+    if (stream) parts.push(stream.name === "stderr" ? `[stderr]\n${stream.text}` : stream.text);
+    stream = null;
+  };
   for (const o of outputs) {
-    if (o.kind === "stream") parts.push(o.name === "stderr" ? `[stderr]\n${o.text ?? ""}` : (o.text ?? ""));
-    else if (o.kind === "error") parts.push(`[error] ${o.ename}: ${o.evalue}\n${o.traceback ?? ""}`);
+    if (o.kind === "stream") {
+      // Consecutive chunks of one stream are one text (a progress bar can span chunks).
+      const name = o.name ?? "stdout";
+      if (stream && stream.name === name) stream.text += o.text ?? "";
+      else {
+        endStream();
+        stream = { name, text: o.text ?? "" };
+      }
+      continue;
+    }
+    endStream();
+    if (o.kind === "error") errors.push(`[error] ${o.ename}: ${o.evalue}
+${o.traceback ?? ""}`.trim());
     else {
       // A plot's text/plain is only its repr ("<Figure size ...>"); keep it, it is short.
       if (o.text) parts.push(o.text);
@@ -82,8 +103,15 @@ export function outputsToText(outputs: CellOutput[], max = 8000, attachImage?: (
       if (hidden.length) parts.push(`[${hidden.join(", ")} output not shown]`);
     }
   }
-  const text = parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  if (text.length <= max) return text;
-  const head = Math.floor(max * 0.4);
-  return `${text.slice(0, head)}\n… [${text.length - max} characters omitted] …\n${text.slice(text.length - (max - head))}`;
+  endStream();
+  const tidy = (t: string) => squeezeRepeats(collapseCarriageReturns(t)).replace(/\n{3,}/g, "\n\n").trim();
+  let body = tidy(parts.join("\n"));
+  let error = tidy(errors.join("\n\n"));
+  if (body.length + error.length + 1 > max) {
+    // The error gets up to half the room (more if the rest is short); the log gets what is left.
+    const errorRoom = Math.min(error.length, Math.max(Math.floor(max * 0.5), max - body.length - 1));
+    if (error.length > errorRoom) error = capLines(error, errorRoom, 0.35);
+    body = capLines(body, Math.max(0, max - error.length - 1), 0.3);
+  }
+  return [body, error].filter(Boolean).join("\n");
 }

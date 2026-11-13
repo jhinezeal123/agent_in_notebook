@@ -6,7 +6,7 @@ import type { ChatSettings } from "./modes.js";
 import type { NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
-export const WIRE_VERSION = 1;
+export const WIRE_VERSION = 2;
 
 // ---------------------------------------------------------------- native messaging
 
@@ -117,6 +117,66 @@ export interface ChatSnapshot {
   options: AgentOption[];
   messages: ChatMessage[];
   notebook: NotebookInfo | null;
+  /** How full the agent's context is, when the agent reports it. */
+  usage?: ChatUsage;
+}
+
+/** Context use the agent reported over ACP (usage_update). */
+export interface ChatUsage {
+  /** Tokens in the agent's context now. */
+  used: number;
+  /** The context window, in tokens. */
+  size: number;
+  cost?: { amount: number; currency: string };
+}
+
+/**
+ * What changed in one message since the bridge last sent it. Streaming sends
+ * these instead of the whole message every few dozen milliseconds: text grows
+ * by appending, other parts are replaced whole when they change.
+ */
+export type PartOp = { i: number; part: Part } | { i: number; at: number; append: string };
+
+export interface MessagePatch {
+  chatId: string;
+  tabId: number;
+  id: string;
+  role: ChatMessage["role"];
+  createdAt: number;
+  changes?: ChatMessage["changes"];
+  /** Number of parts the message has now. */
+  length: number;
+  ops: PartOp[];
+}
+
+/**
+ * Apply a patch to a list of messages, returning a new list (the old one is
+ * not modified). Null means the patch does not fit what the list holds (an
+ * event was missed): fetch the chat again.
+ */
+export function applyMessagePatch(list: ChatMessage[], p: MessagePatch): ChatMessage[] | null {
+  const index = list.findIndex((m) => m.id === p.id);
+  const old = index >= 0 ? list[index]! : undefined;
+  const parts: (Part | undefined)[] = (old?.parts ?? []).slice(0, p.length);
+  for (const op of p.ops) {
+    if ("part" in op) {
+      parts[op.i] = op.part;
+      continue;
+    }
+    const cur = parts[op.i];
+    // `at` anchors the append, so applying a patch to text that already has it changes nothing.
+    if (!cur || (cur.type !== "text" && cur.type !== "thought") || cur.text.length < op.at) return null;
+    parts[op.i] = { ...cur, text: cur.text.slice(0, op.at) + op.append };
+  }
+  if (parts.length !== p.length) return null;
+  // A plain loop: some() skips the holes a missed part leaves.
+  for (let k = 0; k < parts.length; k++) if (parts[k] === undefined) return null;
+  const message: ChatMessage = { id: p.id, role: p.role, createdAt: p.createdAt, parts: parts as Part[] };
+  if (p.changes) message.changes = p.changes;
+  if (index < 0) return [...list, message];
+  const next = list.slice();
+  next[index] = message;
+  return next;
 }
 
 // ---------------------------------------------------------------- methods
@@ -160,7 +220,8 @@ export interface ExtensionMethods {
 /** Events from the bridge to the extension. */
 export interface BridgeEvents {
   "chat.snapshot": ChatSnapshot;
-  "chat.message": { chatId: string; tabId: number; message: ChatMessage };
+  "chat.patch": MessagePatch;
+  "chat.usage": { chatId: string; tabId: number; usage: ChatUsage };
   "chat.status": { chatId: string; tabId: number; status: ChatStatus; error?: string };
   "agents.changed": { agents: AgentInfo[] };
   ping: { t: number };

@@ -3,6 +3,10 @@
 import WebSocket from "ws";
 import {
   RpcPeer,
+  applyMessagePatch,
+  summarizeCell,
+  type ChatUsage,
+  type MessagePatch,
   type AppliedChange,
   WIRE_VERSION,
   type CellInfo,
@@ -113,7 +117,8 @@ export class FakeNotebook {
         let list = this.cells;
         if (op.cellIds) list = op.cellIds.map((id) => this.cells.find((c) => c.id === id)).filter((c): c is Cell => !!c);
         else if (op.start !== undefined || op.end !== undefined) list = this.cells.slice(op.start ?? 0, (op.end ?? this.cells.length - 1) + 1);
-        return { cells: list.map((c) => this.cellInfo(c, !!op.includeOutputs)) };
+        const cells = list.map((c) => this.cellInfo(c, !!op.includeOutputs && !op.summary));
+        return { cells: op.summary ? cells.map(summarizeCell) : cells };
       }
       case "update_cell": {
         const c = this.find(op.cellId);
@@ -202,6 +207,8 @@ export class FakeExtension {
   rpc!: RpcPeer;
   messages = new Map<string, ChatMessage>();
   snapshots: ChatSnapshot[] = [];
+  patches: MessagePatch[] = [];
+  usage: ChatUsage | undefined;
   statuses: string[] = [];
   /** Accept (true) / reject (false) every review as it opens, or leave pending (undefined). */
   autoReview: boolean | undefined = undefined;
@@ -224,7 +231,14 @@ export class FakeExtension {
       if (tabId !== this.tabId) throw new Error("no notebook in that tab");
       return this.notebook.handle(op);
     });
-    this.rpc.on("chat.message", (p: { message: ChatMessage }) => this.messages.set(p.message.id, p.message));
+    this.rpc.on("chat.patch", (p: MessagePatch) => {
+      const old = this.messages.get(p.id);
+      const next = applyMessagePatch(old ? [old] : [], p);
+      if (!next) throw new Error(`patch for ${p.id} does not apply`);
+      this.messages.set(p.id, next.find((m) => m.id === p.id)!);
+      this.patches.push(p);
+    });
+    this.rpc.on("chat.usage", (p: { usage: ChatUsage }) => (this.usage = p.usage));
     this.rpc.on("chat.snapshot", (p: ChatSnapshot) => this.snapshots.push(p));
     this.rpc.on("chat.status", (p: { status: string }) => this.statuses.push(p.status));
     this.notebook.onEvent = (event) => {

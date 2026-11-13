@@ -36,6 +36,8 @@ export interface CellInfo {
   outputs?: CellOutput[];
   /** True while a review of this cell is pending. */
   pendingReview?: boolean;
+  /** Set by a `summary` read: `source` then holds only the first line. */
+  lineCount?: number;
 }
 
 export type KernelState = "idle" | "busy" | "disconnected" | "unknown";
@@ -100,7 +102,8 @@ export interface AppliedChange {
  */
 export type NotebookOp =
   | { op: "info" }
-  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean }
+  /** `summary`: each source is cut to its first line (with `lineCount`), for outlines of big notebooks. */
+  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean; summary?: boolean }
   | { op: "update_cell"; cellId: string; source: string; review: boolean; byUser?: boolean }
   | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean; byUser?: boolean }
   | { op: "delete_cell"; cellId: string; review: boolean; byUser?: boolean }
@@ -121,6 +124,14 @@ export interface NotebookOpResults {
   interrupt: { interrupted: boolean };
   focus_cell: { focused: boolean };
   resolve_review: { resolved: boolean };
+}
+
+/** The outline form of a cell (see the `summary` flag of get_cells). */
+export function summarizeCell(c: CellInfo): CellInfo {
+  const lines = c.source ? c.source.split("\n").length : 0;
+  const first = c.source.split("\n").find((l) => l.trim() !== "") ?? "";
+  // Long enough for an outline; a pasted image's data: URI would otherwise ride along.
+  return { ...c, source: first.length > 120 ? `${first.slice(0, 119)}…` : first, lineCount: lines };
 }
 
 export type NotebookOpName = NotebookOp["op"];

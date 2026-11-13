@@ -83,6 +83,9 @@ beforeAll(async () => {
   });
   const sw = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent("serviceworker"));
   extId = new URL(sw.url()).host;
+  // Pair by hand with this test's bridge, before any panel opens: a native host
+  // registered on this machine (`ainb install`) would start and pair with the user's own.
+  await sw.evaluate(([port, token]) => chrome.storage.local.set({ config: { port, token, source: "manual" } }), [PORT, TOKEN] as const);
 }, 120_000);
 
 afterAll(async () => {

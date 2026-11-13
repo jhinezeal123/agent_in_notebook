@@ -212,3 +212,9 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .manager-agent > div { flex: 1; min-width: 0; }
 .manager-agent code { display: block; overflow-wrap: anywhere; }
 .manager-connected { color: var(--ok); overflow-wrap: anywhere; }
+.context-meter { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.context-meter .bar { width: 36px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.context-meter .bar > span { display: block; height: 100%; background: var(--muted); }
+.context-meter.filling .bar > span { background: #d29922; }
+.context-meter.full { color: #cf222e; }
+.context-meter.full .bar > span { background: #cf222e; }

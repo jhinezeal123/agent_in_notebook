@@ -66,13 +66,32 @@ Khi tắt có chủ đích (Ctrl+C, `ainb stop` → `POST /shutdown`), bridge đ
 
 Mỗi notebook có một khóa ổn định (`protocol/identity.ts: notebookKey`), do service worker tính từ URL cấp cao nhất của tab (iframe Kaggle không biết mình là notebook nào) và, với Jupyter, đường dẫn tài liệu. Side panel gửi khóa này trong `chat.open`; bridge giữ chat sống theo tab nhưng lưu transcript theo khóa (`bridge/src/store.ts`, ghi gộp mỗi giây và khi đóng chat). `chat.open` khôi phục transcript đã lưu và agent nhận tóm tắt như sau khi crash; những gì còn đang chờ trong bản lưu (prompt, review, tool) được chốt thành cancelled/discarded/failed. `notebook.attached` mang khóa khác khóa của chat thì chat bị lưu và đóng, để agent cũ không sửa nhầm notebook mới. `notebook.detached` chốt các review đang chờ thành `discarded`, vì trang đã mất chúng.
 
-Kết quả đọc notebook (`read_cells`, `list_cells`, `wait_for_cells`) có ngân sách tổng khoảng 60k ký tự; phần còn lại được nêu tên kèm `start_index` để agent đọc tiếp.
+Kết quả đọc notebook (`read_cells`, `list_cells`, `wait_for_cells`) có ngân sách tổng khoảng 60k ký tự; phần còn lại được nêu tên kèm `start_index` để agent đọc tiếp (xem thêm mục Ngữ cảnh của agent).
 
 ## Hoàn tác
 
 Trang notebook là nơi duy nhất biết chính xác một thay đổi đã áp dụng ra sao, nên `OpRunner` (`extension/src/page/adapter.ts`) phát `change_applied` (`AppliedChange`: loại, cell, vị trí trước đó, nội dung trước/sau) cho mỗi thay đổi thật sự xảy ra: thao tác trực tiếp, hoặc review được chấp nhận (phát trước `review_closed`, kèm `reviewId`). Thao tác có `byUser` (hoàn tác, "Insert as cell") không được ghi.
 
 Bridge (`Chat`) gắn thay đổi vào tin nhắn agent của lượt đó; review chấp nhận muộn đi theo tin nhắn chứa review. Nội dung đầy đủ nằm trong `journal` của chat (lưu cùng transcript ở `store.ts`); tin nhắn chỉ mang `changes: { count, undone }` để không phát lại nội dung lớn mỗi lần stream. `chat.undo` chạy ngược từng thay đổi: chỉ đụng vào cell còn đúng nội dung `after`, chèn lại cell đã xóa ở vị trí cũ (cell mới có id mới, các thay đổi cũ hơn trên cell đó đi theo id mới), và ghi một `<undo-note>` vào prompt kế tiếp cho agent.
+
+## Ngữ cảnh của agent
+
+Mọi thứ tool trả về nằm lại trong context của agent cho tới hết session, nên bridge rút gọn trước khi gửi:
+
+- **Output** (`protocol/outputs.ts: outputsToText`): stream liền nhau của cùng một luồng được nối lại rồi áp ký tự carriage return như terminal (thanh tiến trình chỉ còn trạng thái cuối), dòng lặp liên tiếp gộp thành một dòng đếm (`squeezeRepeats`). Nếu vượt giới hạn (6.000 ký tự mỗi cell), lỗi được giữ tối đa một nửa chỗ, phần còn lại cho log; cả hai cắt theo dòng (`capLines`), giữ đầu và phần cuối dài hơn. Dòng tên lỗi và frame đầu (code của user) vì vậy không bị log đẩy mất.
+- **Ngân sách**: một lần đọc tối đa ~60k ký tự (`READ_BUDGET`); một lần chạy ~30k (`RUN_BUDGET`): cell lỗi giữ đủ 6.000, các cell khác chia phần còn lại (tối thiểu 1.200), quá ngân sách thì chỉ báo trạng thái.
+- **Phần bị cắt** được đánh dấu kèm gợi ý `read_output`: tool này lấy toàn bộ output của một cell trong trang và trả về theo trang (`start_line`, `line_count`) hoặc theo regex có ngữ cảnh.
+- **Data URI** trong source (ảnh dán vào markdown) thành nhãn `[[ainb:data-N …]]` (`hideDataUris`). `edit_cell` so khớp trên văn bản agent đã thấy, và `update_cell`/`edit_cell` đặt lại payload theo nhãn (`restoreDataUris`) trước khi ghi.
+- **Outline mỗi lượt** đọc `get_cells` với `summary: true`: trang chỉ gửi dòng đầu và số dòng của mỗi cell. Nếu outline giống lượt trước (cùng session), `<notebook-context>` chỉ ghi "unchanged".
+- **Usage**: `usage_update` của ACP được lưu trong chat (`ChatSnapshot.usage`) và phát qua `chat.usage`; side panel hiện mức đầy context.
+
+Tool call song song: agent có thể gọi nhiều tool cùng lúc. `ToolContext.exclusive` xếp hàng theo hai khóa của chat: `edit` (đọc cell, tính nội dung mới, ghi, không xen kẽ, nên hai `edit_cell` trên một cell không ghi đè nhau) và `run` (Jupyter chạy cell qua "active cell"). Chờ review nằm ngoài khóa.
+
+## Stream và lưu transcript
+
+Bridge không gửi lại nguyên tin nhắn mỗi 80ms mà gửi `chat.patch` (`MessagePatch`): text/thought tăng bằng `{i, at, append}`, part khác được thay cả khi JSON của nó đổi. `at` neo vị trí nối nên áp một patch hai lần không nhân đôi text (snapshot có thể đã chứa phần đó). `applyMessagePatch` trả `null` khi patch không khớp (mất sự kiện) và side panel tải lại chat bằng `chat.get`. Hết lượt, bộ nhớ "đã gửi" bị xóa, nên thay đổi muộn (review được duyệt) đi dưới dạng part đầy đủ. Ở side panel, `Message` được memo hóa, mỗi patch chỉ render lại tin nhắn đổi.
+
+Transcript được lưu sau 2 giây yên lặng, bất đồng bộ (`ChatStore.saveAsync`); lúc đóng chat thì lưu đồng bộ. Mỗi lần lưu tăng "thế hệ" của khóa; bản ghi nền thấy có thế hệ mới hơn (lần lưu sau, lưu đồng bộ, hay `remove`) thì bỏ, nên không ghi đè dữ liệu mới hay làm sống lại transcript đã xóa.
 
 ## Ảnh trong kết quả tool
 

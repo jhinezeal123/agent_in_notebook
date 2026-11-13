@@ -14,12 +14,15 @@ import {
   type ChatSettings,
   type ChatSnapshot,
   type ChatStatus,
+  type ChatUsage,
+  type MessagePatch,
   type NotebookEvent,
   type NotebookInfo,
   type NotebookOpName,
   type NotebookOpOf,
   type NotebookOpResults,
   type Part,
+  type PartOp,
   type ReviewInfo,
   type UndoResult,
 } from "@ainb/protocol";
@@ -36,8 +39,8 @@ export interface ChatHost {
   /** MCP server entry handed to the agent; it relays tool calls back to this chat. */
   mcpServer(chatToken: string): McpServer;
   workspaceRoot: string;
-  /** Save the transcript (called debounced as it changes, and on close). */
-  persist?(chat: Chat): void;
+  /** Save the transcript: debounced as it changes (in the background), and on close (`sync`). */
+  persist?(chat: Chat, sync: boolean): void;
 }
 
 export interface ChatOptions {
@@ -54,7 +57,8 @@ export interface ChatOptions {
 const TOOL_DETAIL_MAX = 4000;
 const FLUSH_MS = 80;
 const OP_TIMEOUT_MS = 30_000;
-const PERSIST_MS = 1_000;
+/** Saving rewrites the whole transcript, so it waits for a pause of this long. */
+const PERSIST_MS = 2_000;
 /** Decided reviews kept so a late await_review still gets the answer. */
 const REVIEWS_KEPT = 200;
 
@@ -94,6 +98,14 @@ export class Chat {
   private journal = new Map<string, AppliedChange[]>();
   /** Undos the agent has not been told about yet. */
   private undoNotes: string[] = [];
+  /** What the agent last reported about its context window. */
+  private usage: ChatUsage | undefined;
+  /** The outline sent with the last prompt, to skip resending it unchanged. */
+  private lastOutline = "";
+  /** Tail of each lock's queue (see ToolContext.exclusive). */
+  private locks = new Map<string, Promise<unknown>>();
+  /** Parts of each message as last sent to the extension, to send only what changed. */
+  private sent = new Map<string, SentPart[]>();
 
   constructor(
     readonly tabId: number,
@@ -129,6 +141,7 @@ export class Chat {
       options: this.options(),
       messages: this.messages,
       notebook: this.notebook,
+      usage: this.usage,
     };
   }
 
@@ -264,6 +277,9 @@ export class Chat {
       this.rawInputs.clear();
       this.orphanCalls = [];
       this.flush();
+      // Later changes to this turn's message (a review decided) are rare: send them whole.
+      this.sent.clear();
+      this.sentChanges.clear();
       const next = this.queue.shift();
       if (next !== undefined && !this.closed) void this.runTurn(next);
     }
@@ -273,7 +289,7 @@ export class Chat {
     let cells: CellInfo[] | null = null;
     try {
       this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
-      cells = (await this.call({ op: "get_cells" })).cells;
+      cells = (await this.call({ op: "get_cells", summary: true })).cells;
     } catch {
       this.notebook = null;
     }
@@ -291,7 +307,11 @@ export class Chat {
       blocks.push(`<undo-note>\n${this.undoNotes.join("\n")}\n</undo-note>`);
       this.undoNotes = [];
     }
-    blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets));
+    // The outline is resent only when it changed; the agent still has the last one.
+    const outline = cells ? JSON.stringify(cells.map((c) => [c.id, c.type, c.source])) : "";
+    const unchanged = !!cells && !this.sessionFresh && !this.pendingRecap && outline === this.lastOutline;
+    this.lastOutline = outline;
+    blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged));
     blocks.push(text);
     return blocks.join("\n\n");
   }
@@ -326,6 +346,14 @@ export class Chat {
     if (u.sessionUpdate === "config_option_update") {
       this.agent?.applyConfigUpdate((u as any).configOptions ?? []);
       this.host.emit("chat.snapshot", this.snapshot());
+      return;
+    }
+    if (u.sessionUpdate === "usage_update") {
+      const x = u as unknown as { used?: unknown; size?: unknown; cost?: { amount?: unknown; currency?: unknown } | null };
+      if (typeof x.used !== "number" || typeof x.size !== "number") return;
+      this.usage = { used: x.used, size: x.size };
+      if (typeof x.cost?.amount === "number" && typeof x.cost.currency === "string") this.usage.cost = { amount: x.cost.amount, currency: x.cost.currency };
+      this.host.emit("chat.usage", { chatId: this.id, tabId: this.tabId, usage: this.usage });
       return;
     }
     if (u.sessionUpdate === "current_mode_update") {
@@ -493,7 +521,17 @@ export class Chat {
         return Math.max(0, deadline - Date.now());
       },
       images: this.acceptsImages(),
+      exclusive: (lock, fn) => this.exclusive(lock, fn),
     };
+  }
+
+  private exclusive<T>(lock: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(lock) ?? Promise.resolve()).then(fn, fn);
+    this.locks.set(
+      lock,
+      run.catch(() => {}),
+    );
+    return run;
   }
 
   /** Whether plot images go to this agent: its spec decides, else what it declared over ACP. */
@@ -772,23 +810,55 @@ export class Chat {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
     if (!this.dirty.size) return;
-    for (const m of this.dirty) this.host.emit("chat.message", { chatId: this.id, tabId: this.tabId, message: m });
+    for (const m of this.dirty) {
+      const patch = this.patchFor(m);
+      if (patch) this.host.emit("chat.patch", patch);
+    }
     this.dirty.clear();
     this.schedulePersist();
   }
 
+  /** What changed in `m` since it was last sent: appended text, or whole parts. */
+  private patchFor(m: ChatMessage): MessagePatch | null {
+    const before = this.sent.get(m.id);
+    const now: SentPart[] = [];
+    const ops: PartOp[] = [];
+    m.parts.forEach((part, i) => {
+      const old = before?.[i];
+      if (part.type === "text" || part.type === "thought") {
+        now.push({ type: part.type, text: part.text });
+        if (old?.type === part.type && old.text === part.text) return;
+        if (old?.type === part.type && old.text !== undefined && part.text.startsWith(old.text)) {
+          ops.push({ i, at: old.text.length, append: part.text.slice(old.text.length) });
+        } else ops.push({ i, part });
+        return;
+      }
+      const json = JSON.stringify(part);
+      now.push({ type: part.type, json });
+      if (old?.json !== json) ops.push({ i, part });
+    });
+    const changes = JSON.stringify(m.changes ?? null);
+    const known = this.sentChanges.get(m.id);
+    if (before && !ops.length && before.length === m.parts.length && known === changes) return null;
+    this.sent.set(m.id, now);
+    this.sentChanges.set(m.id, changes);
+    return { chatId: this.id, tabId: this.tabId, id: m.id, role: m.role, createdAt: m.createdAt, changes: m.changes, length: m.parts.length, ops };
+  }
+
+  private sentChanges = new Map<string, string>();
+
   private schedulePersist(): void {
     if (!this.host.persist || this.persistTimer || this.forgotten) return;
-    this.persistTimer = setTimeout(() => this.persistNow(), PERSIST_MS);
+    this.persistTimer = setTimeout(() => this.persistNow(false), PERSIST_MS);
     this.persistTimer.unref?.();
   }
 
-  /** Save now (on close, or when the debounce fires). */
-  persistNow(): void {
+  /** Save now: synchronously on close, in the background when the debounce fires. */
+  persistNow(sync = true): void {
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = null;
     if (this.forgotten) return;
-    this.host.persist?.(this);
+    this.host.persist?.(this, sync);
   }
 
   private setStatus(status: ChatStatus, error?: string): void {
@@ -799,6 +869,13 @@ export class Chat {
   }
 }
 
+/** A part as last sent: text parts by their text (they grow by appending), others as JSON. */
+interface SentPart {
+  type: Part["type"];
+  text?: string;
+  json?: string;
+}
+
 function findTool(msg: ChatMessage, id: string) {
   return msg.parts.find((p): p is Extract<Part, { type: "tool" }> => p.type === "tool" && p.toolCallId === id);
 }
@@ -806,7 +883,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP server is registered as "notebook"; agents spell the tool name differently. */
 function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(list_cells|read_cells|update_cell|edit_cell|insert_cell|delete_cell|move_cell|run_cells|run_all|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
+  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(list_cells|read_cells|read_output|update_cell|edit_cell|insert_cell|delete_cell|move_cell|run_cells|run_all|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && toolName.includes("notebook");
 }

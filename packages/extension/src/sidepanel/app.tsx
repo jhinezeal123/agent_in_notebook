@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { EXTENSION_ID, SCOPE_HINT, SCOPE_LABEL, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { EXTENSION_ID, SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type Prefs } from "../shared/panel-messages.js";
 import { client } from "./client.js";
 import { copyText, Message, PendingPrompt, type PartActions } from "./parts.js";
@@ -60,8 +60,19 @@ export function App() {
         const { method, params } = e.params as { method: string; params: any };
         if (params?.tabId !== tabRef.current) return;
         if (method === "chat.snapshot" && params.agentId === agentRef.current) setChat(params as ChatSnapshot);
-        else if (method === "chat.message") {
-          setChat((c) => (c && c.chatId === params.chatId ? { ...c, messages: upsert(c.messages, params.message) } : c));
+        else if (method === "chat.patch") {
+          setChat((c) => {
+            if (!c || c.chatId !== params.chatId) return c;
+            const messages = applyMessagePatch(c.messages, params as MessagePatch);
+            if (messages) return { ...c, messages };
+            // An update was missed (the panel was busy reconnecting): fetch the whole chat.
+            queueMicrotask(() => void client.request<ChatSnapshot | null>("chat.get", { tabId: params.tabId }).then((snap) => {
+              if (snap && snap.tabId === tabRef.current) setChat(snap);
+            }, () => {}));
+            return c;
+          });
+        } else if (method === "chat.usage") {
+          setChat((c) => (c && c.chatId === params.chatId ? { ...c, usage: params.usage } : c));
         } else if (method === "chat.status") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, status: params.status, error: params.error } : c));
         }
@@ -267,6 +278,7 @@ export function App() {
               }).finally(() => setChangingOption(false));
             }} />}
             {live?.status === "starting" && <span class="muted small">starting…</span>}
+            {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
             <button class="linkish" disabled={running || changingOption} onClick={() => setManagingAgents(true)}>Manage agents</button>
           </div>
         </footer>
@@ -276,14 +288,6 @@ export function App() {
       }} onClose={() => setManagingAgents(false)} />}
     </div>
   );
-}
-
-function upsert(list: ChatMessage[], m: ChatMessage): ChatMessage[] {
-  const i = list.findIndex((x) => x.id === m.id);
-  if (i < 0) return [...list, m];
-  const next = list.slice();
-  next[i] = m;
-  return next;
 }
 
 /** Elapsed time, written straight into the node each second so the transcript does not re-render. */
@@ -470,6 +474,20 @@ function Composer({ history, running, disabled, onSend, onStop }: { history: str
         </button>
       )}
     </div>
+  );
+}
+
+/** How full the agent's context window is, as the agent reported it. */
+function ContextMeter({ usage }: { usage: ChatUsage }) {
+  const share = usage.size > 0 ? Math.min(1, usage.used / usage.size) : 0;
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+  const cost = usage.cost ? ` · ${usage.cost.amount.toFixed(2)} ${usage.cost.currency}` : "";
+  const level = share >= 0.85 ? " full" : share >= 0.6 ? " filling" : "";
+  return (
+    <span class={`context-meter${level}`} title={`Context: ${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens${cost}. Start a new chat when it is nearly full.`}>
+      <span class="bar"><span style={{ width: `${Math.round(share * 100)}%` }} /></span>
+      {k(usage.used)}/{k(usage.size)}
+    </span>
   );
 }
 

@@ -4,12 +4,15 @@
 
 import { z } from "zod";
 import {
-  capText,
+  capLines,
   decide,
   firstLine,
+  hideDataUris,
   outputsToText,
+  restoreDataUris,
   SCOPE_LABEL,
   type CellInfo,
+  type CellOutput,
   type ChatSettings,
   type NotebookInfo,
   type NotebookOp,
@@ -19,6 +22,7 @@ import {
   type OutputImage,
   type RunResult,
   type ToolAction,
+  wasShortened,
 } from "@ainb/protocol";
 
 export type ReviewOutcome = "accepted" | "rejected" | "pending" | "discarded";
@@ -36,6 +40,12 @@ export interface ToolContext {
   waitMs: number;
   /** The agent reads images in tool results, so plots are attached rather than described as hidden. */
   images: boolean;
+  /**
+   * Run `fn` alone among the chat's calls holding the same lock. Agents call
+   * tools in parallel: two edits of one cell would read the same source and the
+   * second would undo the first, and runs on Jupyter go through the active cell.
+   */
+  exclusive<T>(lock: "edit" | "run", fn: () => Promise<T>): Promise<T>;
 }
 
 export interface ToolResult {
@@ -107,17 +117,34 @@ const OUTPUT_MAX = 6000;
 const SOURCE_MAX = 20_000;
 /** Total text one read returns, so a big notebook cannot flood the agent's context. */
 export const READ_BUDGET = 60_000;
+/** Total text of one run_cells / run_all result; each cell's output shrinks to share it. */
+export const RUN_BUDGET = 30_000;
+/** Smallest share of RUN_BUDGET a cell's output is cut to. */
+const RUN_OUTPUT_MIN = 1200;
+/** One read_output page. */
+const PAGE_MAX = 12_000;
+
+const SHORTENED_HINT = "(output shortened: read_output with this cell id pages through or searches all of it)";
+
+function renderOutputs(c: { outputs?: CellOutput[] }, max: number, att?: Attachments): string {
+  const out = c.outputs?.length ? outputsToText(c.outputs, max, att?.attach) : "";
+  return wasShortened(out) ? `${out}\n${SHORTENED_HINT}` : out;
+}
 
 function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): string {
   const exec = c.type === "code" ? ` exec=${c.executionCount ?? "-"}${c.running ? " RUNNING" : ""}` : "";
   const pending = c.pendingReview ? " (change awaiting user review)" : "";
-  const long = c.source.length > SOURCE_MAX;
-  const source = long ? capText(c.source, SOURCE_MAX) : c.source;
-  const note = long ? ` (source is ${c.source.length} characters, shown shortened; edit_cell needs text from the shown parts)` : "";
-  let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}${note}\n${source}`;
+  // Images pasted into markdown are long base64 runs; the agent sees a mark it can keep in its edits.
+  const { text, payloads } = hideDataUris(c.source);
+  const long = text.length > SOURCE_MAX;
+  const source = long ? capLines(text, SOURCE_MAX, 0.6) : text;
+  const notes = [
+    long ? `source is ${text.length} characters, shown shortened; edit_cell needs text from the shown parts` : "",
+    payloads.length ? `${payloads.length} embedded data URI${payloads.length === 1 ? "" : "s"} shown as [[ainb:data-N]] marks; keep the marks to keep them` : "",
+  ].filter(Boolean);
+  let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}${notes.length ? ` (${notes.join("; ")})` : ""}\n${source}`;
   if (withOutputs && c.type === "code") {
-    const out = c.outputs?.length ? outputsToText(c.outputs, OUTPUT_MAX, att?.attach) : "";
-    s += `\n--- output ---\n${out || "(no output)"}`;
+    s += `\n--- output ---\n${renderOutputs(c, OUTPUT_MAX, att) || "(no output)"}`;
   }
   return s;
 }
@@ -149,10 +176,35 @@ function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, se
   return out.join(sep);
 }
 
-function renderRun(r: RunResult, att?: Attachments): string {
-  const head = `cell ${r.cellId}: ${r.status}${r.executionCount != null ? ` (exec ${r.executionCount})` : ""}${r.message ? ` — ${r.message}` : ""}`;
-  const out = outputsToText(r.outputs, OUTPUT_MAX, att?.attach);
-  return out ? `${head}\n${out}` : head;
+function runHead(r: RunResult): string {
+  return `cell ${r.cellId}: ${r.status}${r.executionCount != null ? ` (exec ${r.executionCount})` : ""}${r.message ? ` — ${r.message}` : ""}`;
+}
+
+/**
+ * The results of a run within RUN_BUDGET. A failed cell keeps the full output
+ * room (its error is what the agent needs); the others share what is left.
+ * Past the budget, cells are reported by status only.
+ */
+function renderRuns(results: RunResult[], att: Attachments): string {
+  const withOutput = results.filter((r) => r.outputs.length);
+  const failed = withOutput.filter((r) => r.status === "error").length;
+  const others = withOutput.length - failed;
+  const share = others ? Math.floor((RUN_BUDGET - failed * OUTPUT_MAX) / others) : OUTPUT_MAX;
+  const perCell = Math.max(RUN_OUTPUT_MIN, Math.min(OUTPUT_MAX, share));
+  const out: string[] = [];
+  let used = 0;
+  for (const r of results) {
+    const head = runHead(r);
+    if (used >= RUN_BUDGET && r.outputs.length && r.status !== "error") {
+      out.push(`${head} (output not shown to keep this short; read_output shows it)`);
+      continue;
+    }
+    const body = renderOutputs(r, r.status === "error" ? OUTPUT_MAX : perCell, att);
+    const text = body ? `${head}\n${body}` : head;
+    out.push(text);
+    used += text.length + 2;
+  }
+  return out.join("\n\n");
 }
 
 async function findCell(ctx: ToolContext, cellId: string): Promise<CellInfo> {
@@ -195,14 +247,34 @@ export const TOOLS = [
     description: "Outline of every cell: index, id, type, first line, execution count. Use read_cells for full source and outputs.",
     schema: z.object({}),
     async run(ctx) {
-      const { cells } = await ctx.call({ op: "get_cells" });
+      const { cells } = await ctx.call({ op: "get_cells", summary: true });
       if (!cells.length) return { text: "The notebook has no cells." };
       const line = (c: CellInfo) => {
         const exec = c.type === "code" ? ` [${c.running ? "*" : (c.executionCount ?? " ")}]` : "";
-        const lines = c.source ? c.source.split("\n").length : 0;
+        const lines = c.lineCount ?? (c.source ? c.source.split("\n").length : 0);
         return `[${c.index}] ${c.id} ${c.type}${exec} (${lines} lines)${c.pendingReview ? " (pending review)" : ""}: ${firstLine(c.source) || "(empty)"}`;
       };
       return { text: joinWithinBudget(cells, line, "\n") };
+    },
+  }),
+  tool({
+    name: "read_output",
+    description:
+      "The full text output of one code cell, for when a result was shortened. Search it with pattern (a regular expression, case-insensitive) or page through it with start_line / line_count.",
+    schema: z.object({
+      cell_id: cellId,
+      pattern: z.string().min(1).optional().describe("Show only the lines matching this, with context."),
+      context_lines: z.number().int().min(0).max(20).optional().describe("Lines shown around each match. Default 2."),
+      start_line: z.number().int().min(1).optional().describe("First line to show (1-based). Default 1."),
+      line_count: z.number().int().min(1).max(1000).optional().describe("Lines to show. Default 200."),
+    }),
+    async run(ctx, a) {
+      check(ctx, "read", null);
+      const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true })).cells[0];
+      if (!cell) throw new Denied(`No cell with id "${a.cell_id}". Call list_cells to see the current ids.`);
+      const text = outputsToText(cell.outputs ?? [], Infinity);
+      if (!text) return { text: `Cell ${a.cell_id} has no text output.` };
+      return { text: a.pattern ? searchLines(text, a.pattern, a.context_lines ?? 2) : pageLines(text, a.start_line ?? 1, a.line_count ?? 200) };
     },
   }),
   tool({
@@ -230,7 +302,7 @@ export const TOOLS = [
     schema: z.object({ cell_id: cellId, source: z.string().describe("The complete new source.") }),
     async run(ctx, a) {
       const d = check(ctx, "update", a.cell_id);
-      return applyUpdate(ctx, a.cell_id, a.source, d.allow && d.review);
+      return applyUpdate(ctx, a.cell_id, d.allow && d.review, () => a.source);
     },
   }),
   tool({
@@ -244,14 +316,15 @@ export const TOOLS = [
     }),
     async run(ctx, a) {
       const d = check(ctx, "update", a.cell_id);
-      const cell = await findCell(ctx, a.cell_id);
-      const count = cell.source.split(a.old_text).length - 1;
-      if (count === 0) return { text: `old_text was not found in cell ${a.cell_id}. Read the cell again; it may have changed.`, isError: true };
-      if (count > 1 && !a.replace_all) {
-        return { text: `old_text matches ${count} places in cell ${a.cell_id}. Add surrounding context to make it unique, or pass replace_all.`, isError: true };
-      }
-      const next = a.replace_all ? cell.source.split(a.old_text).join(a.new_text) : cell.source.replace(a.old_text, () => a.new_text);
-      return applyUpdate(ctx, a.cell_id, next, d.allow && d.review);
+      return applyUpdate(ctx, a.cell_id, d.allow && d.review, (shown) => {
+        // Matched against the source as the agent saw it (data URIs as marks).
+        const count = shown.split(a.old_text).length - 1;
+        if (count === 0) return { text: `old_text was not found in cell ${a.cell_id}. Read the cell again; it may have changed.`, isError: true };
+        if (count > 1 && !a.replace_all) {
+          return { text: `old_text matches ${count} places in cell ${a.cell_id}. Add surrounding context to make it unique, or pass replace_all.`, isError: true };
+        }
+        return a.replace_all ? shown.split(a.old_text).join(a.new_text) : shown.replace(a.old_text, () => a.new_text);
+      });
     },
   }),
   tool({
@@ -265,12 +338,14 @@ export const TOOLS = [
     }),
     async run(ctx, a) {
       const d = check(ctx, "insert", null);
-      let index: number;
-      if (a.after_cell_id) index = (await findCell(ctx, a.after_cell_id)).index + 1;
-      else if (a.index !== undefined) index = a.index;
-      else index = (await ctx.call({ op: "info" })).cellCount;
       const review = d.allow && d.review;
-      const res = await ctx.call({ op: "insert_cell", index, cellType: a.cell_type, source: a.source, review });
+      const { index, res } = await ctx.exclusive("edit", async () => {
+        let index: number;
+        if (a.after_cell_id) index = (await findCell(ctx, a.after_cell_id)).index + 1;
+        else if (a.index !== undefined) index = a.index;
+        else index = (await ctx.call({ op: "info" })).cellCount;
+        return { index, res: await ctx.call({ op: "insert_cell", index, cellType: a.cell_type, source: a.source, review }) };
+      });
       if (!res.reviewId) return { text: `Inserted ${a.cell_type} cell ${res.cellId} at index ${index}.` };
       const outcome = await ctx.awaitReview(res.reviewId, ctx.waitMs);
       return reviewText(outcome, `New ${a.cell_type} cell ${res.cellId} at index ${index}`, res.reviewId);
@@ -282,7 +357,7 @@ export const TOOLS = [
     schema: z.object({ cell_id: cellId }),
     async run(ctx, a) {
       const d = check(ctx, "delete", a.cell_id);
-      const res = await ctx.call({ op: "delete_cell", cellId: a.cell_id, review: d.allow && d.review });
+      const res = await ctx.exclusive("edit", () => ctx.call({ op: "delete_cell", cellId: a.cell_id, review: d.allow && d.review }));
       if (!res.reviewId) return { text: `Deleted cell ${a.cell_id}.` };
       return reviewText(await ctx.awaitReview(res.reviewId, ctx.waitMs), `Deleting cell ${a.cell_id}`, res.reviewId);
     },
@@ -293,7 +368,7 @@ export const TOOLS = [
     schema: z.object({ cell_id: cellId, index: z.number().int().min(0) }),
     async run(ctx, a) {
       check(ctx, "move", a.cell_id);
-      const res = await ctx.call({ op: "move_cell", cellId: a.cell_id, index: a.index });
+      const res = await ctx.exclusive("edit", () => ctx.call({ op: "move_cell", cellId: a.cell_id, index: a.index }));
       return { text: `Moved cell ${a.cell_id} to index ${res.index}.` };
     },
   }),
@@ -320,7 +395,7 @@ export const TOOLS = [
     schema: z.object({ timeout_seconds: z.number().int().min(1).optional() }),
     async run(ctx, a) {
       const d = check(ctx, "run", null);
-      const { cells } = await ctx.call({ op: "get_cells" });
+      const { cells } = await ctx.call({ op: "get_cells", summary: true });
       const ids = cells.filter((c) => c.type === "code").map((c) => c.id);
       if (!ids.length) return { text: "There are no code cells to run." };
       if (d.allow && d.askBeforeRun) {
@@ -368,17 +443,71 @@ export const TOOLS = [
   }),
 ];
 
-async function applyUpdate(ctx: ToolContext, id: string, source: string, review: boolean): Promise<ToolResult> {
-  const res = await ctx.call({ op: "update_cell", cellId: id, source, review });
+/**
+ * Read the cell, compute its new source from what the agent was shown, and
+ * write it, with no other edit in between. The review (if any) is awaited
+ * outside the lock, so other edits can be proposed meanwhile.
+ */
+async function applyUpdate(ctx: ToolContext, id: string, review: boolean, edit: (shown: string) => string | ToolResult): Promise<ToolResult> {
+  const res = await ctx.exclusive("edit", async () => {
+    const cell = await findCell(ctx, id);
+    const { text, payloads } = hideDataUris(cell.source);
+    const next = edit(text);
+    if (typeof next !== "string") return next;
+    return ctx.call({ op: "update_cell", cellId: id, source: restoreDataUris(next, payloads), review });
+  });
+  if ("text" in res) return res;
   if (!res.reviewId) return { text: res.applied ? `Updated cell ${id}.` : `Cell ${id} already had that content.` };
   return reviewText(await ctx.awaitReview(res.reviewId, ctx.waitMs), `Change to cell ${id}`, res.reviewId);
 }
 
+function numbered(lines: string[], from: number): string {
+  return lines.map((l, k) => `${from + k}: ${l.length > 2000 ? `${l.slice(0, 1999)}…` : l}`).join("\n");
+}
+
+function pageLines(text: string, start: number, count: number): string {
+  const lines = text.split("\n");
+  if (start > lines.length) return `The output has only ${lines.length} lines.`;
+  const shown = lines.slice(start - 1, start - 1 + count);
+  const end = start + shown.length - 1;
+  let body = numbered(shown, start);
+  if (body.length > PAGE_MAX) body = capLines(body, PAGE_MAX, 0.5);
+  const more = end < lines.length ? ` Continue with start_line=${end + 1}.` : "";
+  return `Lines ${start}-${end} of ${lines.length}.${more}\n${body}`;
+}
+
+function searchLines(text: string, pattern: string, context: number): string {
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, "i");
+  } catch {
+    re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  }
+  const lines = text.split("\n");
+  const hits = lines.flatMap((l, k) => (re.test(l) ? [k] : []));
+  if (!hits.length) return `No line of the output (${lines.length} lines) matches ${JSON.stringify(pattern)}.`;
+  const MAX_HITS = 60;
+  // Merge overlapping context windows into blocks.
+  const blocks: [number, number][] = [];
+  for (const k of hits.slice(0, MAX_HITS)) {
+    const from = Math.max(0, k - context);
+    const to = Math.min(lines.length - 1, k + context);
+    const last = blocks.at(-1);
+    if (last && from <= last[1] + 1) last[1] = to;
+    else blocks.push([from, to]);
+  }
+  let body = blocks.map(([from, to]) => numbered(lines.slice(from, to + 1), from + 1)).join("\n--\n");
+  if (body.length > PAGE_MAX) body = capLines(body, PAGE_MAX, 0.6);
+  const extra = hits.length > MAX_HITS ? ` Showing the first ${MAX_HITS}; narrow the pattern or page with start_line.` : "";
+  return `${hits.length} matching line${hits.length === 1 ? "" : "s"} of ${lines.length}.${extra}\n${body}`;
+}
+
 async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: number): Promise<ToolResult> {
   const timeoutMs = Math.min((timeoutSeconds ?? Infinity) * 1000, ctx.waitMs);
-  const { results } = await ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true }, timeoutMs + 15_000);
+  // One run at a time: the kernel runs cells one after another anyway, and Jupyter runs "the active cell".
+  const { results } = await ctx.exclusive("run", () => ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true }, timeoutMs + 15_000));
   const att = new Attachments(ctx.images);
-  const text = results.map((r) => renderRun(r, att)).join("\n\n");
+  const text = renderRuns(results, att);
   const stillRunning = results.some((r) => r.status === "timeout");
   return att.result(
     stillRunning ? `${text}\n\nSome cells are still running. Call wait_for_cells to keep waiting.` : text,

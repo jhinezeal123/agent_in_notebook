@@ -1,3 +1,4 @@
+import { memo } from "preact/compat";
 import { useMemo, useState } from "preact/hooks";
 import { diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
@@ -68,7 +69,13 @@ function messageText(msg: ChatMessage): string {
     .trim();
 }
 
-export function Message({ msg, actions, live = false }: { msg: ChatMessage; actions: PartActions; live?: boolean }) {
+/**
+ * One message. Memoized: streaming replaces only the message that changed, so
+ * the rest of a long transcript is not rendered again on every update.
+ */
+export const Message = memo(MessageView);
+
+function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions: PartActions; live?: boolean }) {
   if (msg.role === "user") {
     const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     return <div class="msg user">{text}</div>;

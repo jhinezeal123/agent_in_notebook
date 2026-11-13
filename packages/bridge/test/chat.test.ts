@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Part } from "@ainb/protocol";
+import { applyMessagePatch, type ChatMessage, type MessagePatch, type Part } from "@ainb/protocol";
 import { Chat, type ChatHost } from "../src/chat.js";
 
 const agent = vi.hoisted(() => ({
@@ -130,5 +130,66 @@ describe("Run approval deadlines", () => {
     expect(notebookOp).toHaveBeenCalledWith(1, expect.objectContaining({ op: "run_cells", timeoutMs: 10 }), 15_010);
     await vi.advanceTimersByTimeAsync(100);
     expect(prompts(chat)[0]!.answer).toBe("run");
+  });
+});
+
+describe("Streaming and context", () => {
+  async function handlers() {
+    const { AcpAgent } = await import("../src/agents/acp-agent.js");
+    return vi.mocked(AcpAgent).mock.calls.at(-1)![1] as { onUpdate(n: unknown): void };
+  }
+  const chunk = (text: string) => ({ sessionId: "test-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
+
+  it("streams patches that rebuild the transcript, sends text as appends, and reports context use", async () => {
+    const { chat } = setup();
+    const emit = (chat as unknown as { host: ChatHost }).host.emit as ReturnType<typeof vi.fn>;
+    agent.prompt.mockImplementation(async () => {
+      const h = await handlers();
+      for (const piece of ["Hel", "lo ", "world"]) {
+        h.onUpdate(chunk(piece));
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      h.onUpdate({ sessionId: "test-session", update: { sessionUpdate: "usage_update", used: 53_000, size: 200_000, cost: { amount: 0.12, currency: "USD" } } });
+      return { stopReason: "end_turn" };
+    });
+    chat.send("hi");
+    await vi.waitFor(() => expect(chat.status).toBe("idle"));
+    await vi.waitFor(() => expect(chat.snapshot().messages.at(-1)!.parts).toEqual([{ type: "text", text: "Hello world" }]));
+
+    const patches = emit.mock.calls.filter(([e]) => e === "chat.patch").map(([, p]) => p as MessagePatch);
+    let rebuilt: ChatMessage[] = [];
+    for (const p of patches) rebuilt = applyMessagePatch(rebuilt, p)!;
+    expect(rebuilt).toEqual(chat.snapshot().messages);
+    // After the first piece, text travels as appends only.
+    const ops = patches.filter((p) => p.role === "agent").flatMap((p) => p.ops);
+    expect(ops.filter((o) => "append" in o).map((o) => (o as { append: string }).append)).toEqual(["lo ", "world"]);
+    expect(emit).toHaveBeenCalledWith("chat.usage", { chatId: chat.id, tabId: 1, usage: { used: 53_000, size: 200_000, cost: { amount: 0.12, currency: "USD" } } });
+    expect(chat.snapshot().usage).toEqual({ used: 53_000, size: 200_000, cost: { amount: 0.12, currency: "USD" } });
+  });
+
+  it("sends the outline again only when it changed", async () => {
+    const { chat, notebookOp, info } = setup();
+    let source = "x = 1";
+    notebookOp.mockImplementation(async (_tab, raw) => {
+      const op = raw as { op: string; summary?: boolean };
+      if (op.op === "info") return info;
+      if (op.op === "get_cells") return { cells: [{ id: "a", index: 0, type: "code", source, lineCount: 1 }] };
+      return {};
+    });
+    const turn = async (text: string) => {
+      const n = agent.prompt.mock.calls.length;
+      chat.send(text);
+      await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(n + 1));
+      await vi.waitFor(() => expect(chat.status).toBe("idle"));
+      return agent.prompt.mock.calls[n]![0] as string;
+    };
+    expect(await turn("one")).toContain("[0] a code: x = 1");
+    const second = await turn("two");
+    expect(second).toContain("Outline: 1 cells, unchanged since your previous message.");
+    expect(second).not.toContain("[0] a code");
+    source = "y = 2";
+    expect(await turn("three")).toContain("[0] a code: y = 2");
+    // The outline is read as summaries, never as full sources.
+    expect(notebookOp.mock.calls.filter(([, op]) => (op as { op: string }).op === "get_cells").every(([, op]) => (op as { summary?: boolean }).summary)).toBe(true);
   });
 });

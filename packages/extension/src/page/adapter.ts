@@ -1,7 +1,7 @@
 // The contract every platform adapter implements. Adapters run in the page's
 // main world, next to the notebook app they drive.
 
-import type { AppliedChange, CellInfo, CellType, NotebookEvent, NotebookInfo, NotebookOp, ReviewInfo, RunResult } from "@ainb/protocol";
+import { summarizeCell, type AppliedChange, type CellInfo, type CellType, type NotebookEvent, type NotebookInfo, type NotebookOp, type ReviewInfo, type RunResult } from "@ainb/protocol";
 
 export interface NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
@@ -59,9 +59,9 @@ export class OpRunner {
         return a.info();
       case "get_cells": {
         const pending = this.pendingCellIds();
-        return {
-          cells: a.getCells(op).map((c) => (pending.has(c.id) ? { ...c, pendingReview: true } : c)),
-        };
+        const cells = a.getCells(op.summary ? { ...op, includeOutputs: false } : op).map((c) => (pending.has(c.id) ? { ...c, pendingReview: true } : c));
+        // Summaries are cut here, in the page, so a big notebook's sources never cross the wire for an outline.
+        return { cells: op.summary ? cells.map(summarizeCell) : cells };
       }
       case "update_cell": {
         this.assertNoReview(op.cellId);

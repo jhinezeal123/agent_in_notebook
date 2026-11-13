@@ -37,6 +37,27 @@ describe("ChatStore", () => {
     expect(parts.map((p) => (p.type === "prompt" ? p.answer : "status" in p ? p.status : null))).toEqual(["cancelled", "discarded", "failed", "accepted"]);
   });
 
+  it("saves in the background, and a newer save always wins", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ainb-store-"));
+    const store = new ChatStore(dir);
+    const text = (t: string) => [msg([{ type: "text", text: t }])];
+    const first = store.saveAsync({ key: "k", agentId: "a", messages: text("first") });
+    const second = store.saveAsync({ key: "k", agentId: "a", messages: text("second") });
+    await Promise.all([first, second]);
+    expect(store.load("k")!.messages[0]!.parts).toEqual([{ type: "text", text: "second" }]);
+    // A write still in flight never replaces a later synchronous save (closing a chat).
+    const late = store.saveAsync({ key: "k", agentId: "a", messages: text("stale") });
+    store.save({ key: "k", agentId: "a", messages: text("final") });
+    await late;
+    expect(store.load("k")!.messages[0]!.parts).toEqual([{ type: "text", text: "final" }]);
+    // Nor brings back a removed transcript.
+    const ghost = store.saveAsync({ key: "k", agentId: "a", messages: text("ghost") });
+    store.remove("k");
+    await ghost;
+    expect(store.load("k")).toBeNull();
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
   it("keeps only the most recent messages", () => {
     const store = new ChatStore(mkdtempSync(join(tmpdir(), "ainb-store-")));
     const messages = Array.from({ length: 250 }, (_, i) => msg([{ type: "text", text: `m${i}` }]));

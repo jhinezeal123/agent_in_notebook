@@ -326,12 +326,15 @@ export class Bridge {
         return this.ext.rpc.request("notebook.op", { tabId, op }, timeoutMs);
       },
       emit: (event, params) => this.ext?.rpc.emit(event, params),
-      persist: (chat) => {
+      persist: (chat, sync) => {
         if (!chat.notebookKey || !chat.messages.length) return;
+        const data = { key: chat.notebookKey, agentId: chat.spec.id, title: chat.notebook?.title, messages: chat.messages, journal: chat.journalEntries() };
+        const failed = (e: unknown) => this.log(`Could not save the chat transcript: ${(e as Error).message}`);
         try {
-          this.store.save({ key: chat.notebookKey, agentId: chat.spec.id, title: chat.notebook?.title, messages: chat.messages, journal: chat.journalEntries() });
+          if (sync) this.store.save(data);
+          else this.store.saveAsync(data).catch(failed);
         } catch (e) {
-          this.log(`Could not save the chat transcript: ${(e as Error).message}`);
+          failed(e);
         }
       },
       mcpServer: (chatToken): McpServer => ({
