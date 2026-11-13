@@ -41,6 +41,8 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 
 Tin nhắn hỗ trợ Markdown, bảng, checklist, code block và URL có thể bấm. Đặt công thức trong `$...$` hoặc `\(...\)` để hiện cùng dòng. Dùng `$$...$$`, `\[...\]` hoặc code block có nhãn `math` để hiện riêng một khối.
 
+Dùng `![Mô tả](https://example.com/plot.png)` để hiện ảnh ngay trong tin nhắn. Chat cũng hiển thị ảnh raster nhúng, ảnh do agent gửi qua ACP và biểu đồ do lệnh chạy notebook của agent tạo ra. Trong VS Code, `![Biểu đồ](./plots/loss.png)` có thể đọc ảnh từ workspace hoặc thư mục notebook khi cửa sổ không mở workspace.
+
 Trong VS Code, link Markdown như `[Xem dòng 12](./src/main.py:12)` mở file ở dòng tương ứng trong workspace. Nếu cửa sổ không mở workspace, đường dẫn được giới hạn trong thư mục của notebook. Link web mở bằng trình duyệt.
 
 ## Dùng trong VS Code

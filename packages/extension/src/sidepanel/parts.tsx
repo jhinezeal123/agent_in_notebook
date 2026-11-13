@@ -1,7 +1,8 @@
 import { memo } from "preact/compat";
-import { useMemo, useState } from "preact/hooks";
-import { diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { chatImageDataUrl, diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 import { externalChatUrl } from "../shared/chat-links.js";
+import { chatImageSource } from "./images.js";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
 import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
@@ -35,6 +36,26 @@ export async function copyText(host: PanelHost, text: string, button?: HTMLEleme
 export function Markdown({ text, actions }: { text: string; actions?: PartActions }) {
   const host = usePanelHost();
   const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
+  const content = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = content.current;
+    if (!root) return;
+    for (const image of root.querySelectorAll<HTMLImageElement>("img[data-local-image]")) {
+      const target = image.dataset.localImage;
+      if (!target) continue;
+      delete image.dataset.localImage;
+      void host.request<string | null>("image.resolve", { target }).then((data) => {
+        if (!root.contains(image)) return;
+        const src = data && chatImageSource(data);
+        if (src?.startsWith("data:")) image.src = src;
+        else showImageFallback(image);
+      }, () => showImageFallback(image));
+    }
+    // Cached broken images can complete before the first effect runs.
+    for (const image of root.querySelectorAll<HTMLImageElement>("img[src]")) {
+      if (image.complete && image.naturalWidth === 0) showImageFallback(image);
+    }
+  }, [blocks, host]);
   const openLink = (event: MouseEvent) => {
     const anchor = (event.target as Element).closest("a[href]");
     if (!(anchor instanceof HTMLAnchorElement)) return;
@@ -44,7 +65,9 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
   };
   return (
     <div
+      ref={content}
       class={`md${actions ? " can-insert" : ""}`}
+      onErrorCapture={(event) => { if (event.target instanceof HTMLImageElement) showImageFallback(event.target); }}
       onAuxClick={(event) => { if (event.button === 1) openLink(event); }}
       onClick={(e) => {
         const act = (e.target as Element).closest<HTMLElement>("[data-code-act]");
@@ -59,6 +82,20 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
         // An unchanged block keeps the same HTML string, so Preact leaves its DOM alone.
         <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b, host.kind === "vscode") }} />
       ))}
+    </div>
+  );
+}
+
+function showImageFallback(image: HTMLImageElement): void {
+  image.closest(".chat-image")?.classList.add("image-unavailable");
+}
+
+function ChatImage({ mime, data, alt = "Image from agent" }: Extract<Part, { type: "image" }>) {
+  const src = chatImageDataUrl(mime, data);
+  return (
+    <div class={`chat-image${src ? "" : " image-unavailable"}`}>
+      {src && <img src={src} alt={alt} loading="lazy" decoding="async" onError={(event) => showImageFallback(event.currentTarget)} />}
+      <span class="image-fallback">Image unavailable</span>
     </div>
   );
 }
@@ -147,6 +184,8 @@ function PartView({ part, actions, liveThought }: { part: Part; actions: PartAct
   switch (part.type) {
     case "text":
       return <Markdown text={part.text} actions={actions} />;
+    case "image":
+      return <ChatImage {...part} />;
     case "thought":
       return <Thought text={part.text} live={liveThought} />;
     case "tool":

@@ -43,6 +43,8 @@ export interface ToolContext {
   waitMs: number;
   /** The agent reads images in tool results, so plots are attached rather than described as hidden. */
   images: boolean;
+  /** Preview raster outputs from executing notebook code in the chat. */
+  showOutputImage?(image: OutputImage): void;
   /**
    * Run `fn` alone among the chat's calls holding the same lock. Agents call
    * tools in parallel: two edits of one cell would read the same source and the
@@ -442,6 +444,7 @@ export const TOOLS = [
         await new Promise((r) => setTimeout(r, 1000));
       }
       const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
+      showOutputImages(ctx, cells.flatMap((cell) => cell.outputs ?? []));
       const att = new Attachments(ctx.images);
       return att.result(joinWithinBudget(cells, (c) => renderCell(c, true, att), "\n\n", att));
     },
@@ -736,7 +739,15 @@ function shellResult(ctx: ToolContext, sh: ShellSession, r: Report): ToolResult 
   return { text: parts.join("\n"), isError: failed || undefined };
 }
 
+function showOutputImages(ctx: ToolContext, outputs: CellOutput[]): void {
+  if (!ctx.showOutputImage) return;
+  const preview = new Attachments(true);
+  for (const { image } of outputs) if (image) preview.attach(image);
+  for (const image of preview.images) ctx.showOutputImage(image);
+}
+
 function codeResult(ctx: ToolContext, res: ExecResult, ms: number): ToolResult {
+  showOutputImages(ctx, res.outputs);
   const att = new Attachments(ctx.images);
   let head: string;
   if (res.status === "running") {
@@ -756,6 +767,7 @@ async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: nu
   const { results } = await ctx.exclusive("run", () => ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true }, timeoutMs + 15_000));
   const att = new Attachments(ctx.images);
   const text = renderRuns(results, att);
+  showOutputImages(ctx, results.flatMap((result) => result.outputs));
   const stillRunning = results.some((r) => r.status === "timeout");
   return att.result(
     stillRunning ? `${text}\n\nSome cells are still running. Call wait_for_cells to keep waiting.` : text,

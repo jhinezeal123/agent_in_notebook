@@ -5,6 +5,7 @@
 import DOMPurify from "dompurify";
 import { Marked, Renderer } from "marked";
 import { chatFileLink, externalChatUrl } from "../shared/chat-links.js";
+import { decorateMarkdownImages } from "./images.js";
 import { escapeHtml, mathExtensions, typesetMath } from "./math.js";
 
 /** Syntax that ties blocks together (reference links, footnotes, raw HTML): render as one. */
@@ -56,6 +57,9 @@ const markdown = new Marked({
   gfm: true,
   breaks: true,
   renderer: {
+    image({ href, text, title }) {
+      return `<img data-image-source="${escapeHtml(href)}" alt="${escapeHtml(text)}"${title ? ` title="${escapeHtml(title)}"` : ""}>`;
+    },
     link(token) {
       if (chatFileLink(token.href)) {
         return `<a data-file-link="${escapeHtml(token.href)}">${this.parser.parseInline(token.tokens)}</a>`;
@@ -111,6 +115,7 @@ export function renderMarkdown(block: string, localLinks = false): string {
       anchor.removeAttribute("href");
     }
   }
+  decorateMarkdownImages(fragment, localLinks);
   typesetMath(fragment);
   const template = document.createElement("template");
   template.content.append(fragment);

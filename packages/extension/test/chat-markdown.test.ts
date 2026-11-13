@@ -78,6 +78,27 @@ describe.skipIf(!process.env.E2E_MARKDOWN)("chat renderer in Chromium", () => {
     expect(await page.locator("code").allTextContents()).toEqual(["$x^2$"]);
   });
 
+  it("preserves image alt text and resolves only supported image sources", async () => {
+    const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1sAAAAASUVORK5CYII=";
+    const source = [
+      "![Remote chart](https://example.org/chart.png)", `![Embedded chart](${png})`,
+      "![Workspace chart][chart]", "![Blocked chart](data:image/svg+xml;base64,AAAA)",
+      '<img alt="Raw chart" src="https://example.org/alt.png" srcset="https://example.org/other.png" onerror="bad()">',
+      "", "[chart]: ./plots/loss.png",
+    ].join("\n\n");
+    await render(source, true);
+    const remote = page.locator('img[alt="Remote chart"]');
+    expect(await remote.getAttribute("src")).toBe("https://example.org/chart.png");
+    expect(await remote.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(await page.locator('img[alt="Embedded chart"]').getAttribute("src")).toBe(png);
+    expect(await page.locator('img[alt="Workspace chart"]').getAttribute("data-local-image")).toBe("./plots/loss.png");
+    expect(await page.locator('.image-unavailable img[alt="Blocked chart"]').getAttribute("src")).toBeNull();
+    expect(await page.locator('img[alt="Raw chart"]').getAttribute("srcset")).toBeNull();
+    expect(await page.locator('img[alt="Raw chart"]').getAttribute("onerror")).toBeNull();
+    await render(source);
+    expect(await page.locator('.image-unavailable img[alt="Workspace chart"]').count()).toBe(1);
+  });
+
   it("renders GFM and filters unsafe destinations and styles", async () => {
     const text = [
       "## Table", "", "| Key | Value |", "| --- | --- |", "| $x$ | **2** |", "", "- [x] Done", "",

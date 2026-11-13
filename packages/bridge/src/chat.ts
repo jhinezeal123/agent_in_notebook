@@ -7,6 +7,8 @@ import { join } from "node:path";
 import type { McpServer, RequestPermissionRequest, RequestPermissionResponse, SessionNotification, ToolCallContent } from "@agentclientprotocol/sdk";
 import {
   capText,
+  chatImageDataUrl,
+  isChatImageMime,
   type AgentOption,
   type AppliedChange,
   type CellInfo,
@@ -21,6 +23,7 @@ import {
   type NotebookOpName,
   type NotebookOpOf,
   type NotebookOpResults,
+  type OutputImage,
   type Part,
   type PartOp,
   type ReviewInfo,
@@ -57,6 +60,8 @@ export interface ChatOptions {
 }
 
 const TOOL_DETAIL_MAX = 4000;
+/** Bound the image data included in full chat snapshots and persisted transcripts. */
+const CHAT_IMAGES_MAX = 8 * 1024 * 1024;
 /** usage_update falling below this share of the last count (from at least the minimum) means a compaction. */
 const COMPACTION_SHRINK = 0.6;
 const COMPACTION_MIN_TOKENS = 20_000;
@@ -81,6 +86,8 @@ export class Chat {
   messages: ChatMessage[] = [];
   notebook: NotebookInfo | null = null;
   readonly notebookKey: string | undefined;
+
+  private imageBytes = 0;
 
   private agent: AcpAgent | null = null;
   private starting: Promise<void> | null = null;
@@ -135,6 +142,9 @@ export class Chat {
     for (const m of carried) if (m.changes && !this.journal.has(m.id)) delete m.changes;
     if (carried.length) {
       this.messages = carried;
+      for (const message of carried) {
+        for (const part of message.parts) if (part.type === "image") this.imageBytes += part.data.length;
+      }
       this.pendingRecap = recap(carried);
       this.system(opts.note ?? `Switched to ${spec.name}. It gets a summary of the conversation so far.`);
     }
@@ -400,6 +410,11 @@ export class Chat {
     switch (u.sessionUpdate) {
       case "agent_message_chunk":
       case "agent_thought_chunk": {
+        if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "image") {
+          const { mimeType, data } = u.content;
+          this.addImage(msg, mimeType, data, "Image from agent");
+          return;
+        }
         if (u.content.type !== "text") return;
         const type = u.sessionUpdate === "agent_message_chunk" ? "text" : "thought";
         const last = msg.parts.at(-1);
@@ -530,7 +545,20 @@ export class Chat {
     return this.host.notebookOp(this.tabId, op, timeoutMs) as Promise<NotebookOpResults[N]>;
   }
 
+  private addImage(message: ChatMessage, mime: string, data: string, alt: string): void {
+    if (this.closed || !isChatImageMime(mime) || !chatImageDataUrl(mime, data)) return;
+    if (message.parts.some((part) => part.type === "image" && part.mime === mime && part.data === data)) return;
+    if (this.imageBytes + data.length > CHAT_IMAGES_MAX) {
+      const text = "Image omitted because this chat reached its image size limit.";
+      if (!message.parts.some((part) => part.type === "notice" && part.text === text)) this.addPart(message, { type: "notice", level: "info", text });
+      return;
+    }
+    this.imageBytes += data.length;
+    this.addPart(message, { type: "image", mime, data, alt });
+  }
+
   toolContext(): ToolContext {
+    const message = this.current;
     const deadline = Date.now() + this.spec.toolWaitMs;
     return {
       settings: () => this.settings,
@@ -555,6 +583,9 @@ export class Chat {
         return Math.max(0, deadline - Date.now());
       },
       images: this.acceptsImages(),
+      showOutputImage: (image: OutputImage) => {
+        if (message === this.current && message) this.addImage(message, image.mime, image.data, "Notebook output image");
+      },
       exclusive: (lock, fn) => this.exclusive(lock, fn),
       runs: this.runs,
       shells: this.shells,
@@ -869,6 +900,11 @@ export class Chat {
         } else ops.push({ i, part });
         return;
       }
+      if (part.type === "image") {
+        now.push({ type: part.type, image: part });
+        if (old?.image !== part) ops.push({ i, part });
+        return;
+      }
       const json = JSON.stringify(part);
       now.push({ type: part.type, json });
       if (old?.json !== json) ops.push({ i, part });
@@ -910,6 +946,7 @@ interface SentPart {
   type: Part["type"];
   text?: string;
   json?: string;
+  image?: Extract<Part, { type: "image" }>;
 }
 
 function findTool(msg: ChatMessage, id: string) {

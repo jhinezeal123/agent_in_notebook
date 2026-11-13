@@ -2,6 +2,7 @@
 // carried as JSON over one WebSocket. Both sides send requests, responses and
 // events with the same envelope.
 
+import type { ChatImageMime } from "./chat-image.js";
 import type { ChatSettings } from "./modes.js";
 import type { NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
@@ -64,6 +65,7 @@ export type ReviewStatus = "pending" | "accepted" | "rejected" | "discarded";
 export type Part =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
+  | { type: "image"; mime: ChatImageMime; data: string; alt?: string }
   | {
       type: "tool";
       toolCallId: string;

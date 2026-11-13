@@ -119,6 +119,25 @@ describe("pairing", () => {
 });
 
 describe("chat with a notebook", () => {
+  it("streams an ACP image between text chunks and keeps it in the chat snapshot", async () => {
+    const { ext, chatId } = await setup([]);
+    try {
+      await turn(ext, chatId, script([
+        { say: "Chart incoming." },
+        { image: { mimeType: "image/png", data: TINY_PNG } },
+        { image: { mimeType: "image/svg+xml", data: "AAAA" } },
+        { say: "End of reply." },
+      ]));
+      const image = { type: "image", mime: "image/png", data: TINY_PNG, alt: "Image from agent" };
+      const snap = await ext.request<ChatSnapshot>("chat.get", { tabId: ext.tabId });
+      expect(snap.messages.at(-1)?.parts.slice(-2)).toEqual([image, { type: "text", text: "End of reply." }]);
+      await ext.waitFor(() => ext.parts().some((part) => part.type === "image"), 5_000, "image patch");
+      expect(ext.parts().filter((part) => part.type === "image")).toEqual([image]);
+    } finally {
+      ext.close();
+    }
+  });
+
   it("sets the model before the first prompt", async () => {
     const { ext, chatId } = await setup([]);
     try {
@@ -558,6 +577,8 @@ describe("plots and notebook-only mode", () => {
     const text2 = await turn(ext2, snap.chatId, script([{ tool: "run_cells", args: { cell_ids: ["c1"] } }]));
     expect(text2).toContain("[image/png output not shown]");
     expect(text2).not.toContain("IMAGES");
+    await ext2.waitFor(() => ext2.parts().some((part) => part.type === "image"), 5_000, "notebook plot preview");
+    expect(ext2.parts()).toContainEqual({ type: "image", mime: "image/png", data: TINY_PNG, alt: "Notebook output image" });
     ext2.close();
   });
 
