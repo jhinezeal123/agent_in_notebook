@@ -9,6 +9,7 @@ import type { StudioView } from "./messages.js";
 import { installTunnel, onHostEvent } from "./tunnel.js";
 import { WorkspaceRoot } from "./root.js";
 import { Sidebar } from "./sidebar.js";
+import { ProjectPanel } from "./project.js";
 import { NewChat } from "./newchat.js";
 import { Settings } from "./settings.js";
 import { ExperimentView } from "./experiment.js";
@@ -21,10 +22,13 @@ const getWorkspace = () => (workspace ??= createWorkspace("vscode"));
 function Screen({ initial }: { initial: StudioView }) {
   const [view, setView] = useState(initial);
   useEffect(() => onHostEvent("view", setView), []);
+  // OpenResearch's way: Compute picks the request up and opens the connect form for that host.
+  useEffect(() => { if (view.view === "settings" && view.connectHost) getWorkspace().events.requestHostConnect(view.connectHost); }, [view]);
   switch (view.view) {
     case "sidebar": return <Sidebar />;
+    case "project": return <ProjectPanel />;
     case "newchat": return <NewChat />;
-    case "settings": return <Settings section={view.section} />;
+    case "settings": return <Settings section={view.section} request={view} />;
     case "experiment": return <ExperimentView key={view.experimentId} projectId={view.projectId} experimentId={view.experimentId} />;
     case "chat": return <ResearchChat projectId={view.projectId} sessionId={view.sessionId} />;
   }

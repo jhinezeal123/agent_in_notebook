@@ -18,9 +18,10 @@ import { Banner, Button, Icon, IconButton, errorText } from "./ui.js";
 
 const SECTIONS: [SettingsSection, string][] = [["agents", "Agents"], ["compute", "Compute"], ["environment", "Environment"], ["kernel", "Kernel Environment"]];
 
-export function Settings({ section: initial }: { section?: SettingsSection }) {
+/** `request`: changes each time the host opens this tab, so asking for the section shown before still moves there. */
+export function Settings({ section: initial, request }: { section?: SettingsSection; request?: object }) {
   const [section, setSection] = useState<SettingsSection>(initial ?? "agents");
-  useEffect(() => { if (initial) setSection(initial); }, [initial]);
+  useEffect(() => { if (initial) setSection(initial); }, [initial, request]);
   return (
     <div className="settings">
       <nav className="toc" aria-label="Settings sections">

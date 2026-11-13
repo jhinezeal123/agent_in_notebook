@@ -29,12 +29,24 @@ export type FromHost =
 /** Which screen a webview shows. */
 export type StudioView =
   | { view: "sidebar" }
+  /** The right side bar: the current project's bar and its experiment tree. */
+  | { view: "project" }
   | { view: "newchat" }
-  | { view: "settings"; section?: SettingsSection }
+  /** `connectHost`: open Compute's SSH connect for that host (a run waiting on its sign-in). */
+  | { view: "settings"; section?: SettingsSection; connectHost?: string }
   | { view: "experiment"; projectId: string; experimentId: string }
   | { view: "chat"; projectId: string; sessionId: string };
 
-export type SettingsSection = "agents" | "compute" | "environment" | "kernel";
+/**
+ * The project the right side bar shows: the one opened last, else (none
+ * opened yet, or it was deleted) the one changed last. The webviews and the
+ * extension's Artifacts tree both decide with this.
+ */
+export function pickProject<P extends { id: string; updatedAt: number }>(projects: readonly P[], opened: string | null | undefined): P | null {
+  return projects.find((p) => p.id === opened) ?? projects.reduce<P | null>((a, p) => (!a || p.updatedAt > a.updatedAt ? p : a), null);
+}
+
+export type SettingsSection ="agents" | "compute" | "environment" | "kernel";
 
 /** Host events the views listen to. */
 export interface HostEvents {
@@ -44,6 +56,8 @@ export interface HostEvents {
   notebooks: NotebookEntry[];
   /** The chat shown in the chat panel. */
   "chat.selected": SelectedChat | null;
+  /** The project opened last (null: none yet; then the one changed last counts, see pickProject). */
+  "project.current": string | null;
   /** Switch this view to another screen (an editor tab reused for another experiment). */
   view: StudioView;
 }

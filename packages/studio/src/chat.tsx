@@ -3,14 +3,17 @@
 // and drawn in the chat panel's look.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { activePath } from "@orx/transcriptTree";
-import type { ChatMessage, ChatPart, ChatSession, Harness } from "@orx/api";
+import { fmtDuration, type ChatActiveRun, type ChatMessage, type ChatPart, type ChatSession, type Harness } from "@orx/api";
+import { runConnectHost, runDisplay } from "@orx/runDisplay";
+import { statusLabel } from "@orx/components/StatusBadge";
+import { m } from "@orx/paraglide/messages.js";
 import { Markdown } from "./experiment.js";
 import { ResearchGate } from "./root.js";
 import { hostRequest } from "./tunnel.js";
-import { Banner, Icon, errorText } from "./ui.js";
+import { Banner, Button, Icon, errorText } from "./ui.js";
 
 export function ResearchChat({ projectId, sessionId }: { projectId: string; sessionId: string }) {
   return <ResearchGate compact><ChatInner key={sessionId} projectId={projectId} sessionId={sessionId} /></ResearchGate>;
@@ -32,6 +35,13 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
   const queued = state.queuedBySession[sessionId] ?? [];
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ text: string } | null>(null);
+  // The experiments this chat started that are still going, as OpenResearch's chat lists them above its input.
+  const queryClient = useQueryClient();
+  const activeRuns = useQuery(queries.listChatActiveRunsQuery());
+  useEffect(() => workspace.events.onChatEvent((ev) => {
+    if (ev.type === "runsChanged" || ev.type === "reconnected") void queryClient.invalidateQueries({ queryKey: queries.listChatActiveRunsQuery().queryKey });
+  }), [workspace, queryClient]);
+  const runs = (activeRuns.data ?? []).filter((r) => r.sessionId === sessionId);
 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -71,6 +81,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
       )}
       {error && <Banner tone="error">{error}</Banner>}
       {harness && !harness.agentReady && <Banner tone="warn">{harness.name} is not ready: {harness.agentNote ?? "set it up in Settings › Agents."}</Banner>}
+      <RunBanner key={sessionId} runs={runs} />
       <Composer busy={busy} draft={draft} placeholder={`Message ${harness?.name ?? "the agent"}…`} onSend={send} onStop={() => void api.interruptChat(sessionId).catch((e) => setError(errorText(e)))}
         context={
           <div className="ctx-row">
@@ -194,6 +205,64 @@ function Prompt({ part, onRespond }: { part: ChatPart; onRespond: (promptId: str
         <button type="button" className="btn primary small" onClick={() => onRespond(part.id, { approve: true })}>{p.kind === "plan" ? "Approve" : "Allow"}</button>
         <button type="button" className="btn small" onClick={() => onRespond(part.id, { approve: false })}>{p.kind === "plan" ? "Keep planning" : "Deny"}</button>
       </div>
+    </div>
+  );
+}
+
+/** OpenResearch's ExperimentRunBanner: one row per run this chat started, folded when there are several. */
+function RunBanner({ runs }: { runs: ChatActiveRun[] }) {
+  if (!runs.length) return null;
+  if (runs.length === 1) return <div className="runbar"><RunRow item={runs[0]!} /></div>;
+  return (
+    <details className="runbar">
+      <summary><Icon name="flask" /><b>{m.chat_experiments_running({ count: runs.length })}</b><span className="chev"><Icon name="chev-r" /></span></summary>
+      <div className="runbar-list">{runs.map((item) => <RunRow key={item.run.id} item={item} />)}</div>
+    </details>
+  );
+}
+
+function RunRow({ item }: { item: ChatActiveRun }) {
+  const { api } = useWorkspace();
+  const { run, experimentName } = item;
+  const [now, setNow] = useState(Date.now);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const display = runDisplay(pending ? { ...run, cancelling: true } : run);
+  const cancelling = pending || run.cancelling;
+  const label = display.stale || cancelling || display.status === "queued"
+    ? statusLabel(display.status, display.stopping)
+    : run.status === "running" ? m.chat_experiment_running() : m.chat_experiment_starting();
+  const connectHost = runConnectHost(run);
+  const name = experimentName || run.experimentId;
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const stop = async () => {
+    setPending(true);
+    setError(null);
+    try {
+      await api.cancelRun(run.id);
+    } catch (e) {
+      setPending(false);
+      setError(errorText(e));
+    }
+  };
+  return (
+    <div className="runrow">
+      <Icon name="flask" />
+      <b role="status">{label}</b>
+      <span aria-hidden="true">·</span>
+      <button type="button" className="runrow-exp" title={name} onClick={() => void hostRequest("open", { view: "experiment", projectId: run.projectId, experimentId: run.experimentId })}>{name}</button>
+      <span className="runrow-end">
+        <span className="mono muted">{fmtDuration(now - run.createdAt)}</span>
+        <Button small onClick={() => void hostRequest("logs.show", { runId: run.id, title: name })}><Icon name="terminal" /> {m.experiment_overview_logs()}</Button>
+        {connectHost
+          ? <Button small onClick={() => void hostRequest("open", { view: "settings", section: "compute", connectHost })}><Icon name="plug" /> {m.settings_connect()}</Button>
+          : <Button small disabled={cancelling} onClick={() => void stop()}><Icon name="stop" /> {cancelling ? statusLabel(display.status, display.stopping) : m.common_stop()}</Button>}
+      </span>
+      {display.status === "queued" && run.queueDetail && <span className="runrow-note muted" role="status">{run.queueDetail}</span>}
+      {error && <span className="runrow-note err-text" role="alert">{error}</span>}
     </div>
   );
 }

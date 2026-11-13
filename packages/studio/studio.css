@@ -127,6 +127,14 @@ textarea.script { min-height: 110px; }
 .rail { color: var(--muted); opacity: .6; font-family: var(--mono); }
 .ask { color: var(--st-queued); font-weight: 700; }
 .empty { margin: 4px 20px; color: var(--muted); white-space: normal; }
+/* The right side bar's current project. */
+.projbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; cursor: pointer; border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--border)); }
+.projbar:hover { background: var(--hover); }
+.projbar:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.projbar > svg.i { flex-shrink: 0; width: 18px; height: 18px; color: var(--link); }
+.projbar-text { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.3; }
+.projbar-text b, .projbar-text .dsc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projbar-actions { display: flex; flex-shrink: 0; }
 
 /* pages in editor tabs */
 .page { max-width: 780px; margin: 0 auto; padding: 20px 28px 48px; display: flex; flex-direction: column; gap: 16px; }
@@ -330,6 +338,20 @@ h3 { font-size: 13px; margin: 0; font-weight: 600; }
 .opt.on, .opt:hover { border-color: var(--focus); }
 .working, .queued { color: var(--muted); display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .empty-chat { color: var(--muted); padding: 16px 12px; }
+.runbar { margin: 6px 12px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--card); padding: 6px 10px; font-size: 12px; }
+.runbar > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
+.runbar > summary::-webkit-details-marker { display: none; }
+.runbar > summary > svg.i, .runrow > svg.i { color: var(--st-done); flex-shrink: 0; }
+.runbar .chev { margin-left: auto; display: inline-flex; color: var(--muted); transition: transform .15s; }
+.runbar[open] .chev { transform: rotate(90deg); }
+.runbar-list { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; max-height: 12rem; overflow-y: auto; }
+.runrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.runrow > b { flex-shrink: 0; }
+.runrow-exp { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--link); cursor: pointer; }
+.runrow-exp:hover { text-decoration: underline; }
+.runrow-end { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.runrow-end .mono { margin-right: 6px; font-variant-numeric: tabular-nums; }
+.runrow-note { width: 100%; overflow-wrap: anywhere; }
 .composer-wrap { padding: 6px 12px 10px; }
 .composer { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--vscode-chat-requestBackground, var(--input-bg)); padding: 6px 6px 4px; cursor: text; }
 .composer:focus-within { border-color: var(--focus); }

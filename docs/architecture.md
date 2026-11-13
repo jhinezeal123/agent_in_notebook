@@ -62,9 +62,14 @@ VS Code                                     bridge                     orx up --
   - `build.mjs` alias `react`, `react-dom` và `@tanstack/react-query` vào `node_modules` của OpenResearch, để chỉ có một bản của mỗi thư viện.
   - Typecheck sinh `tsconfig.gen.json` kế thừa cấu hình của OpenResearch.
 - **Host** (`vscode/src/studio-host.ts`) phục vụ các màn này:
-  - webview view `ainb.research` ở thanh bên trái;
+  - webview view `ainb.research` ở thanh bên trái: notebook và máy tính toán;
+  - container "Research Project" ở thanh bên phải, về **project hiện tại**:
+    - webview view `ainb.project`: thanh tên project (bấm để đổi project hoặc tạo project mới), chat Research của project, cây thử nghiệm;
+    - tree view gốc `ainb.artifacts` (`vscode/src/artifacts.ts`): thư mục `artifactsDir` của project, đọc thẳng trên đĩa như Explorer (icon theo theme, mở bằng editor của VS Code, theo dõi thay đổi, menu chuột phải, kéo thả, F2/Delete);
   - một tab editor cho mỗi màn (New Chat, Settings, Experiment; các thử nghiệm dùng chung một tab);
   - chat Research trong khung chat.
+
+  Project hiện tại là project mở gần nhất (lưu trong `globalState`, phát qua sự kiện `project.current`). "Mở" là: hiện một chat Research của nó, hoặc chọn nó ở thanh tên. Chưa mở project nào, hoặc project đó đã bị xoá, thì lấy project thay đổi gần nhất (`pickProject` trong `studio/src/messages.ts`, dùng chung cho webview và tree Artifacts). Chat Notebook không đổi project hiện tại.
 
   Các việc chỉ VS Code hoặc bridge làm được thì đi qua `host.request`: mở tab, chọn thư mục, danh sách notebook, chọn chat, agent của chat Notebook, kernel setup, log của lần chạy (terminal giả đọc `/api/runs/{id}/logs`). Bridge chưa kết nối thì host tự kết nối, trừ khi user vừa bấm tắt bridge.
 - **Khung chat** (`ainb.chat`, ở thanh bên phải) nạp cả `webview.js` (chat Notebook, Preact) lẫn `studio.js`. Hai bên dùng chung API của VS Code qua `window.__ainbVsCode`, và phân biệt message bằng trường `type`. Chọn một chat Research thì chat Notebook bị ẩn, còn chat Research được gắn vào một shadow root có `studio.css` riêng, để style của hai chat không lẫn vào nhau.

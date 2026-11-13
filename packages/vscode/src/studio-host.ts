@@ -1,6 +1,7 @@
 // The research views: our own screens (packages/studio) on OpenResearch's own
 // client logic. This hosts them in VS Code: the "Research" side bar view
-// (projects and their chats, the experiment tree, compute), editor tabs (New
+// (notebooks, compute), the right side bar's Project view (the current
+// project, its chats and its experiment tree), editor tabs (New
 // Chat, Settings, an experiment), and research chats in the chat panel. Their
 // OpenResearch requests go through OrxTunnel; what only VS Code or the bridge
 // can do (open a tab, pick a folder, the notebooks, the notebook agents) they
@@ -9,7 +10,7 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { ResearchStatus } from "@ainb/protocol";
-import { DEFAULT_KERNEL_SETUP, type FromHost, type HostEvents, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
+import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
 import { OrxTunnel } from "./orx-tunnel.js";
 
 export interface StudioDeps {
@@ -29,9 +30,24 @@ export interface StudioDeps {
 }
 
 const KERNEL_KEY = "kernelSetup";
+const PROJECT_KEY = "researchProject";
+
+/** What the extension needs of an OpenResearch project. */
+export interface OrxProject {
+  id: string;
+  name: string;
+  repoPath: string;
+  artifactsDir: string;
+  updatedAt: number;
+}
 
 export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private status: ResearchStatus = { state: "off" };
+  private readonly statusChanged = new vscode.EventEmitter<ResearchStatus>();
+  readonly onDidChangeResearchStatus = this.statusChanged.event;
+  private readonly projectChanged = new vscode.EventEmitter<string>();
+  /** Another project was opened (the right side bar follows it). */
+  readonly onDidChangeProject = this.projectChanged.event;
   private readonly webviews = new Set<{ webview: vscode.Webview; view: () => StudioView | null }>();
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly statusItem: vscode.StatusBarItem;
@@ -53,6 +69,52 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     this.status = status;
     this.broadcast("research.status", status);
     this.renderStatus();
+    this.statusChanged.fire(status);
+  }
+
+  // ------------------------------------------------------------ the current project
+
+  /** The project opened last, as stored (it may since have been deleted: see pickProject). */
+  openedProject(): string | null {
+    return this.deps.context.globalState.get<string>(PROJECT_KEY) ?? null;
+  }
+
+  /** A project was opened (its row expanded, a chat of it shown, picked in the right side bar). */
+  async openProject(id: string): Promise<void> {
+    if (!id || id === this.openedProject()) return;
+    await this.deps.context.globalState.update(PROJECT_KEY, id);
+    this.broadcast("project.current", id);
+    this.projectChanged.fire(id);
+  }
+
+  /** OpenResearch's projects; none while it is not running (this does not start it). */
+  async projects(): Promise<OrxProject[]> {
+    if (this.status.state !== "ready" || !this.status.url) return [];
+    const res = await fetch(`${this.status.url}/api/projects`);
+    if (!res.ok) throw new Error(`OpenResearch answered HTTP ${res.status}.`);
+    const body = await res.json() as { projects?: OrxProject[] };
+    return body.projects ?? [];
+  }
+
+  /** The project the right side bar shows. */
+  async currentProject(): Promise<OrxProject | null> {
+    return pickProject(await this.projects(), this.openedProject());
+  }
+
+  /** Choose which project the right side bar shows. */
+  async pickProjectToShow(): Promise<void> {
+    await this.baseUrl();
+    const list = (await this.projects()).sort((a, b) => b.updatedAt - a.updatedAt);
+    const current = pickProject(list, this.openedProject());
+    const items: (vscode.QuickPickItem & { id?: string })[] = [
+      ...list.map((p) => ({ label: `${p.id === current?.id ? "$(check)" : "$(folder)"} ${p.name}`, detail: p.repoPath, id: p.id })),
+      { label: "", kind: vscode.QuickPickItemKind.Separator },
+      { label: "$(add) New Project...", detail: "An empty folder, an existing folder, or a paper with its code" },
+    ];
+    const picked = await vscode.window.showQuickPick(items, { title: "Show a project", placeHolder: "Its chats, experiments and artifacts show in the right side bar", matchOnDetail: true });
+    if (!picked) return;
+    if (picked.id) await this.openProject(picked.id);
+    else this.open({ view: "newchat" });
   }
 
   /** A run changed: count the live ones, and say when one ends. */
@@ -98,8 +160,15 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
 
   /** The Research side bar view. */
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.resolveView(view, { view: "sidebar" });
+  }
+
+  /** The right side bar's Project view (the current project's bar and experiment tree). */
+  readonly projectView: vscode.WebviewViewProvider = { resolveWebviewView: (view) => this.resolveView(view, { view: "project" }) };
+
+  private resolveView(view: vscode.WebviewView, screen: StudioView): void {
     view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.deps.context.extensionUri, "dist")] };
-    this.host(view.webview, () => ({ view: "sidebar" }), view);
+    this.host(view.webview, () => screen, view);
   }
 
   /**
@@ -146,7 +215,8 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     const title = view.view === "newchat" ? "New Chat" : view.view === "settings" ? "Agent in Notebook Settings" : view.view === "experiment" ? "Experiment" : "Research";
     if (existing) {
       existing.title = title;
-      (existing as unknown as { studioView: StudioView }).studioView = view;
+      // A connect request is for once; a reload of the tab should not repeat it.
+      (existing as unknown as { studioView: StudioView }).studioView = view.view === "settings" ? { view: "settings", section: view.section } : view;
       void existing.webview.postMessage({ type: "host.event", event: "view", params: view } satisfies FromHost);
       existing.reveal();
       return;
@@ -179,6 +249,9 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
       case "chat.select": return this.deps.selectChat(p as unknown as SelectedChat & { agentId?: string });
       case "close": return; // a side bar view or the chat panel stays
       case "chat.selected": return this.deps.selectedChat();
+      case "project.current": return this.openedProject();
+      case "project.open": return typeof p.projectId === "string" ? this.openProject(p.projectId) : undefined;
+      case "project.pick": return this.pickProjectToShow();
       case "notebooks.list": return this.deps.notebooks();
       case "folder.pick": {
         const picked = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, title: typeof p.title === "string" ? p.title : "Choose a folder" });
@@ -260,6 +333,8 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
 
   dispose(): void {
     this.statusItem.dispose();
+    this.statusChanged.dispose();
+    this.projectChanged.dispose();
     for (const panel of this.panels.values()) panel.dispose();
   }
 }
@@ -308,5 +383,5 @@ export function studioHtml(webview: vscode.Webview, assets: vscode.Uri, view: St
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} https: data: blob:; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${asset("studio.css")}">
 <title>Agent in Notebook</title>
-</head><body${view?.view === "sidebar" ? ' class="sidebar-host"' : ""}><div id="studio" data-view='${initial.replace(/'/g, "&#39;")}'></div><script type="module" nonce="${nonce}" src="${asset("studio.js")}"></script></body></html>`;
+</head><body${view?.view === "sidebar" || view?.view === "project" ? ' class="sidebar-host"' : ""}><div id="studio" data-view='${initial.replace(/'/g, "&#39;")}'></div><script type="module" nonce="${nonce}" src="${asset("studio.js")}"></script></body></html>`;
 }

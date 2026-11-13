@@ -41,6 +41,11 @@
           "id": "ainb-chat",
           "title": "Agent Chat",
           "icon": "notebook.svg"
+        },
+        {
+          "id": "ainb-project",
+          "title": "Research Project",
+          "icon": "beaker.svg"
         }
       ]
     },
@@ -58,8 +63,36 @@
           "id": "ainb.chat",
           "name": "Agent Chat"
         }
+      ],
+      "ainb-project": [
+        {
+          "type": "webview",
+          "id": "ainb.project",
+          "name": "Project"
+        },
+        {
+          "id": "ainb.artifacts",
+          "name": "Artifacts"
+        }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "ainb.artifacts",
+        "contents": "The current project's artifacts show here once OpenResearch is running.",
+        "when": "ainb.artifacts.state != none && ainb.artifacts.state != ready"
+      },
+      {
+        "view": "ainb.artifacts",
+        "contents": "No projects yet.\n[New Chat](command:ainb.newChat)",
+        "when": "ainb.artifacts.state == none"
+      },
+      {
+        "view": "ainb.artifacts",
+        "contents": "No artifacts yet. Files the research agent saves for this project show here.\n[New File](command:ainb.artifacts.newFile)",
+        "when": "ainb.artifacts.state == ready"
+      }
+    ],
     "commands": [
       {
         "command": "ainb.open",
@@ -95,6 +128,84 @@
         "title": "Stop the Bridge and Its Agents",
         "category": "Agent in Notebook",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "ainb.pickProject",
+        "title": "Show Another Project",
+        "category": "Agent in Notebook",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "ainb.artifacts.newFile",
+        "title": "New File...",
+        "category": "Artifacts",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "ainb.artifacts.newFolder",
+        "title": "New Folder...",
+        "category": "Artifacts",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "ainb.artifacts.refresh",
+        "title": "Refresh",
+        "category": "Artifacts",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ainb.artifacts.revealFolder",
+        "title": "Reveal Artifacts Folder in File Explorer",
+        "category": "Artifacts",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "ainb.artifacts.openToSide",
+        "title": "Open to the Side",
+        "category": "Artifacts"
+      },
+      {
+        "command": "ainb.artifacts.revealInOS",
+        "title": "Reveal in File Explorer",
+        "category": "Artifacts"
+      },
+      {
+        "command": "ainb.artifacts.openInTerminal",
+        "title": "Open in Integrated Terminal",
+        "category": "Artifacts"
+      },
+      {
+        "command": "ainb.artifacts.copyPath",
+        "title": "Copy Path",
+        "category": "Artifacts"
+      },
+      {
+        "command": "ainb.artifacts.copyRelativePath",
+        "title": "Copy Relative Path",
+        "category": "Artifacts"
+      },
+      {
+        "command": "ainb.artifacts.rename",
+        "title": "Rename...",
+        "category": "Artifacts"
+      },
+      {
+        "command": "ainb.artifacts.delete",
+        "title": "Delete",
+        "category": "Artifacts"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ainb.artifacts.rename",
+        "key": "f2",
+        "when": "focusedView == ainb.artifacts && !inputFocus"
+      },
+      {
+        "command": "ainb.artifacts.delete",
+        "key": "delete",
+        "mac": "cmd+backspace",
+        "when": "focusedView == ainb.artifacts && !inputFocus"
       }
     ],
     "menus": {
@@ -123,6 +234,108 @@
           "command": "ainb.stopBridge",
           "when": "view == ainb.chat || view == ainb.research",
           "group": "bridge@1"
+        },
+        {
+          "command": "ainb.pickProject",
+          "when": "view == ainb.project",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ainb.artifacts.newFile",
+          "when": "view == ainb.artifacts && ainb.artifacts.state == ready",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ainb.artifacts.newFolder",
+          "when": "view == ainb.artifacts && ainb.artifacts.state == ready",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ainb.artifacts.refresh",
+          "when": "view == ainb.artifacts",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ainb.artifacts.revealFolder",
+          "when": "view == ainb.artifacts && ainb.artifacts.state == ready",
+          "group": "more@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ainb.artifacts.openToSide",
+          "when": "view == ainb.artifacts && viewItem == artifactFile",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ainb.artifacts.newFile",
+          "when": "view == ainb.artifacts && viewItem == artifactFolder",
+          "group": "1_new@1"
+        },
+        {
+          "command": "ainb.artifacts.newFolder",
+          "when": "view == ainb.artifacts && viewItem == artifactFolder",
+          "group": "1_new@2"
+        },
+        {
+          "command": "ainb.artifacts.revealInOS",
+          "when": "view == ainb.artifacts",
+          "group": "2_reveal@1"
+        },
+        {
+          "command": "ainb.artifacts.openInTerminal",
+          "when": "view == ainb.artifacts",
+          "group": "2_reveal@2"
+        },
+        {
+          "command": "ainb.artifacts.copyPath",
+          "when": "view == ainb.artifacts",
+          "group": "6_copypath@1"
+        },
+        {
+          "command": "ainb.artifacts.copyRelativePath",
+          "when": "view == ainb.artifacts",
+          "group": "6_copypath@2"
+        },
+        {
+          "command": "ainb.artifacts.rename",
+          "when": "view == ainb.artifacts && !listMultiSelection",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "ainb.artifacts.delete",
+          "when": "view == ainb.artifacts",
+          "group": "7_modification@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ainb.artifacts.openToSide",
+          "when": "false"
+        },
+        {
+          "command": "ainb.artifacts.revealInOS",
+          "when": "false"
+        },
+        {
+          "command": "ainb.artifacts.openInTerminal",
+          "when": "false"
+        },
+        {
+          "command": "ainb.artifacts.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "ainb.artifacts.copyRelativePath",
+          "when": "false"
+        },
+        {
+          "command": "ainb.artifacts.rename",
+          "when": "false"
+        },
+        {
+          "command": "ainb.artifacts.delete",
+          "when": "false"
         }
       ]
     },
