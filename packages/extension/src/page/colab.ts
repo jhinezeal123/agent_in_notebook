@@ -5,7 +5,7 @@
 // tool names) are used, and each lookup fails with a clear message.
 
 import { normalizeIpynbOutputs, type CellInfo, type CellType, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
-import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "./adapter.js";
+import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "@ainb/protocol";
 
 type Any = any;
 

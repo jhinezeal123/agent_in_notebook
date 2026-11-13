@@ -89,6 +89,12 @@ const app = agent({ name: "fake-agent" })
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
       if (step.say) await say(step.say);
+      if (step.image) {
+        await client.notify("session/update", {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "image", ...step.image } },
+        });
+      }
       // Like Claude's adapter: report a compaction only to clients that support it.
       if (step.compact) {
         if (!clientCapabilities.session?.compaction) await say("[compaction not supported by client]");

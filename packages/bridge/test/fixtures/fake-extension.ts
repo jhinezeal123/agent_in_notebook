@@ -240,8 +240,8 @@ export class FakeExtension {
     readonly tabId = 7,
   ) {}
 
-  async connect(port: number, token: string, origin = "chrome-extension://abcdef"): Promise<unknown> {
-    this.ws = new WebSocket(`ws://127.0.0.1:${port}/ext`, { origin });
+  async connect(port: number, token: string, origin: string | null = "chrome-extension://abcdef", path = "ext"): Promise<unknown> {
+    this.ws = new WebSocket(`ws://127.0.0.1:${port}/${path}`, { origin: origin ?? undefined });
     await new Promise<void>((resolve, reject) => {
       this.ws.once("open", () => resolve());
       this.ws.once("error", reject);

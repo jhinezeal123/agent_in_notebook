@@ -72,6 +72,36 @@ describe("pairing", () => {
     await expect(ext.connect(port, TOKEN, "https://evil.example")).rejects.toThrow(/403/);
   });
 
+  it("requires a token on the VS Code endpoint and rejects browser origins there", async () => {
+    const ext = new FakeExtension(new FakeNotebook([]));
+    await expect(ext.connect(port, TOKEN, "https://example.com", "vscode")).rejects.toThrow(/403/);
+    await expect(ext.connect(port, TOKEN, null)).rejects.toThrow(/403/);
+    await expect(ext.connect(port, "wrong-token", null, "vscode")).rejects.toThrow(/Pairing token/);
+    ext.close();
+  });
+
+  it("routes VS Code and browser chats with the same tab ID to their own notebook", async () => {
+    const browser = await setup([{ type: "code", source: "browser_value = 1" }]);
+    const editor = new FakeExtension(new FakeNotebook([{ type: "code", source: "editor_value = 2" }]), browser.ext.tabId);
+    try {
+      await editor.connect(port, TOKEN, null, "vscode");
+      const snap = await editor.request<ChatSnapshot>("chat.open", {
+        tabId: editor.tabId, agentId: "fake", settings: { scope: "write", review: false, targetCellIds: [] },
+        platform: "vscode", notebookKey: "vscode:file:///sample.ipynb",
+      });
+      await editor.waitFor(() => editor.statuses.includes("idle"), 30_000, "editor agent start");
+      const prompt = script([{ tool: "read_cells", args: {} }]);
+      const [inBrowser, inEditor] = await Promise.all([turn(browser.ext, browser.chatId, prompt), turn(editor, snap.chatId, prompt)]);
+      expect(inBrowser).toContain("browser_value = 1");
+      expect(inBrowser).not.toContain("editor_value");
+      expect(inEditor).toContain("editor_value = 2");
+      await expect(editor.request("chat.send", { chatId: browser.chatId, text: "other client" })).rejects.toThrow(/no longer exists/);
+    } finally {
+      editor.close();
+      browser.ext.close();
+    }
+  }, 60_000);
+
   it("refuses MCP relay calls without a chat token, or from a browser", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/mcp/list`, { method: "POST", body: "{}" });
     expect(res.status).toBe(401);
@@ -89,6 +119,25 @@ describe("pairing", () => {
 });
 
 describe("chat with a notebook", () => {
+  it("streams an ACP image between text chunks and keeps it in the chat snapshot", async () => {
+    const { ext, chatId } = await setup([]);
+    try {
+      await turn(ext, chatId, script([
+        { say: "Chart incoming." },
+        { image: { mimeType: "image/png", data: TINY_PNG } },
+        { image: { mimeType: "image/svg+xml", data: "AAAA" } },
+        { say: "End of reply." },
+      ]));
+      const image = { type: "image", mime: "image/png", data: TINY_PNG, alt: "Image from agent" };
+      const snap = await ext.request<ChatSnapshot>("chat.get", { tabId: ext.tabId });
+      expect(snap.messages.at(-1)?.parts.slice(-2)).toEqual([image, { type: "text", text: "End of reply." }]);
+      await ext.waitFor(() => ext.parts().some((part) => part.type === "image"), 5_000, "image patch");
+      expect(ext.parts().filter((part) => part.type === "image")).toEqual([image]);
+    } finally {
+      ext.close();
+    }
+  });
+
   it("sets the model before the first prompt", async () => {
     const { ext, chatId } = await setup([]);
     try {
@@ -528,6 +577,8 @@ describe("plots and notebook-only mode", () => {
     const text2 = await turn(ext2, snap.chatId, script([{ tool: "run_cells", args: { cell_ids: ["c1"] } }]));
     expect(text2).toContain("[image/png output not shown]");
     expect(text2).not.toContain("IMAGES");
+    await ext2.waitFor(() => ext2.parts().some((part) => part.type === "image"), 5_000, "notebook plot preview");
+    expect(ext2.parts()).toContainEqual({ type: "image", mime: "image/png", data: TINY_PNG, alt: "Notebook output image" });
     ext2.close();
   });
 

@@ -24,6 +24,8 @@ export function notebookKey(platform: Platform, tabUrl: string, docPath?: string
     case "kaggle":
       // /code/<user>/<slug>/edit[/run/<n>] -> /code/<user>/<slug>
       return `kaggle:${url.pathname.replace(/\/edit(\/.*)?$/, "").replace(/\/$/, "")}`;
+    case "vscode":
+      return `vscode:${tabUrl}`;
     case "jupyter":
       return `jupyter:${url.host}:${docPath ?? url.pathname}`;
   }

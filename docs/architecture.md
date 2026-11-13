@@ -1,12 +1,13 @@
 # Kiến trúc
 
-Ba package TypeScript trong một pnpm workspace:
+Bốn package TypeScript trong một pnpm workspace:
 
 | Package | Chạy ở đâu | Vai trò |
 |---|---|---|
-| `protocol` | cả hai phía | Kiểu dữ liệu notebook, giao thức WS, `RpcPeer`, policy của mode (`decide`), diff theo dòng, chuẩn hóa output ipynb |
+| `protocol` | cả hai phía | Kiểu dữ liệu notebook, giao thức WS, `RpcPeer`, policy của mode (`decide`), diff theo dòng, chuẩn hóa output ipynb, `NotebookAdapter` và `OpRunner` |
 | `bridge` | Node, trên máy user | Server WS/HTTP, quản lý chat, chạy agent qua ACP, tool notebook (MCP) |
-| `extension` | Chrome MV3 | Adapter notebook trong trang, content script, service worker, side panel (Preact) |
+| `extension` | Chrome MV3 và webview VS Code | Adapter notebook trong trang, content script, service worker, giao diện chat Preact dùng chung |
+| `vscode` | VS Code Extension Host và webview | Adapter Notebook Editor, quản lý notebook đang mở và chuyển tiếp request của sidebar tới bridge |
 
 ## Luồng một tool call
 
@@ -46,7 +47,9 @@ Những gì giữ lại từ thiết kế orx:
 
 **Kaggle / Jupyter** (`jupyter.ts`). Editor của Kaggle là Jupyter Notebook 7 (JupyterLab 4) trong iframe, config có `exposeAppInBrowser: true`, nên có `window.jupyterapp`. Adapter sửa cell qua `sharedModel` (`setSource/insertCell/deleteCell/moveCell`) và chạy cell bằng lệnh `notebook:run-cell`, lệnh này resolve khi cell chạy xong. Trạng thái đang chạy đọc từ prompt `[*]` vì bản 4.0 chưa có `executionState`. Review dùng thẻ diff riêng (`review-widget.ts`, shadow DOM).
 
-Thêm platform mới chỉ cần implement `NotebookAdapter` (`page/adapter.ts`) và đăng ký trong `page/main.ts`.
+**VS Code** (`vscode/src/notebook.ts`). Dùng `WorkspaceEdit` cho nội dung cell, `NotebookEdit` cho thêm/xóa cell và lệnh Notebook Editor để di chuyển hoặc chạy cell. `OpRunner` ghi thay đổi theo cell ID. Sidebar duyệt diff, chỉ tạo cell đề xuất khi người dùng bấm Apply. Thực thi ngoài cell dùng `kernels.getKernel(uri)` và `executeCode` của extension Jupyter.
+
+VS Code webview chỉ trao đổi message với Extension Host. Host kết nối WebSocket `/vscode` trên loopback và giữ token bên ngoài webview. Bridge quản lý phiên Chrome và VS Code riêng để cùng chạy được trên một bridge. VS Code giữ một tab ID cho mỗi notebook đang mở và dùng URI của tài liệu làm khóa lưu chat.
 
 ## Chuẩn bị agent và quản lý launch command
 
@@ -70,7 +73,7 @@ Kết quả đọc notebook (`read_cells`, `list_cells`, `wait_for_cells`) có n
 
 ## Hoàn tác
 
-Trang notebook là nơi duy nhất biết chính xác một thay đổi đã áp dụng ra sao, nên `OpRunner` (`extension/src/page/adapter.ts`) phát `change_applied` (`AppliedChange`: loại, cell, vị trí trước đó, nội dung trước/sau) cho mỗi thay đổi thật sự xảy ra: thao tác trực tiếp, hoặc review được chấp nhận (phát trước `review_closed`, kèm `reviewId`). Thao tác có `byUser` (hoàn tác, "Insert as cell") không được ghi.
+Trang notebook là nơi duy nhất biết chính xác một thay đổi đã áp dụng ra sao, nên `OpRunner` (`protocol/src/adapter.ts`) phát `change_applied` (`AppliedChange`: loại, cell, vị trí trước đó, nội dung trước/sau) cho mỗi thay đổi thật sự xảy ra: thao tác trực tiếp, hoặc review được chấp nhận (phát trước `review_closed`, kèm `reviewId`). Thao tác có `byUser` (hoàn tác, "Insert as cell") không được ghi.
 
 Bridge (`Chat`) gắn thay đổi vào tin nhắn agent của lượt đó; review chấp nhận muộn đi theo tin nhắn chứa review. Nội dung đầy đủ nằm trong `journal` của chat (lưu cùng transcript ở `store.ts`); tin nhắn chỉ mang `changes: { count, undone }` để không phát lại nội dung lớn mỗi lần stream. `chat.undo` chạy ngược từng thay đổi: chỉ đụng vào cell còn đúng nội dung `after`, chèn lại cell đã xóa ở vị trí cũ (cell mới có id mới, các thay đổi cũ hơn trên cell đó đi theo id mới), và ghi một `<undo-note>` vào prompt kế tiếp cho agent.
 

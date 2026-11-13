@@ -3,7 +3,7 @@
 // Local Jupyter works the same when started with expose_app_in_browser.
 
 import { normalizeIpynbOutputs, type CellInfo, type CellType, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
-import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "./adapter.js";
+import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "@ainb/protocol";
 import { createReviewCard } from "./review-widget.js";
 
 type Any = any;

@@ -1,0 +1,39 @@
+{
+  "name": "agent-in-notebook-vscode",
+  "displayName": "Agent in Notebook",
+  "description": "Use your ACP coding agent with the active Jupyter notebook in VS Code.",
+  "publisher": "jhinezeal123",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "vscode": "^1.105.0" },
+  "main": "./dist/extension.cjs",
+  "extensionKind": ["workspace"],
+  "categories": ["Notebooks"],
+  "repository": { "type": "git", "url": "https://github.com/jhinezeal123/agent_in_notebook" },
+  "capabilities": { "untrustedWorkspaces": { "supported": false } },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{ "id": "ainb", "title": "Agent in Notebook", "icon": "notebook.svg" }]
+    },
+    "views": {
+      "ainb": [{ "type": "webview", "id": "ainb.chat", "name": "Notebook Agent" }]
+    },
+    "commands": [{ "command": "ainb.open", "title": "Agent in Notebook: Open Chat" }]
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ainb/protocol": "workspace:*",
+    "preact": "10.27.2",
+    "ws": "^8.22.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.105.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

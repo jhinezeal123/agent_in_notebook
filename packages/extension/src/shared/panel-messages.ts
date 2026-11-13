@@ -58,6 +58,7 @@ export type PanelRequest = { id: number; method: string; params: unknown };
 export type PanelResponse = { id: number; ok: true; result: unknown } | { id: number; ok: false; error: string };
 export type PanelEvent =
   | { event: "state"; params: BridgeState }
+  | { event: "activeTab"; params: number | null }
   | { event: "notebook"; params: { tabId: number; info: NotebookInfo | null } }
   | { event: "bridge"; params: { method: string; params: unknown } };
 

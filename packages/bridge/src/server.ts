@@ -1,5 +1,6 @@
 // The bridge's one listener, bound to loopback:
 // - WebSocket /ext   the browser extension (origin- and token-checked)
+// - WebSocket /vscode the VS Code extension host (no browser Origin, token-checked)
 // - POST /mcp/*      tool relays from agents' MCP servers (per-chat bearer token)
 // - GET  /health     liveness
 
@@ -44,11 +45,16 @@ export interface BridgeOptions {
   onShutdown?: () => void;
 }
 
+type ClientKind = "browser" | "vscode";
+interface Client {
+  connection?: { ws: WebSocket; rpc: RpcPeer };
+  chats: Map<number, Chat>;
+}
+
 export class Bridge {
   private server: Server;
   private wss: WebSocketServer;
-  private ext: { ws: WebSocket; rpc: RpcPeer } | null = null;
-  private chats = new Map<number, Chat>();
+  private readonly clients: Record<ClientKind, Client> = { browser: { chats: new Map() }, vscode: { chats: new Map() } };
   private byToken = new Map<string, Chat>();
   private pingTimer: ReturnType<typeof setInterval>;
   private readonly log: (msg: string) => void;
@@ -72,15 +78,20 @@ export class Bridge {
     this.server.headersTimeout = 60_000;
     this.wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
     this.server.on("upgrade", (req, socket, head) => {
-      if (!isLoopback(req) || new URL(req.url ?? "/", "http://x").pathname !== "/ext" || !this.originAllowed(req.headers.origin)) {
+      const path = new URL(req.url ?? "/", "http://x").pathname;
+      const kind = path === "/ext" && this.originAllowed(req.headers.origin) ? "browser"
+        : path === "/vscode" && req.headers.origin === undefined ? "vscode" : undefined;
+      if (!isLoopback(req) || !kind) {
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
       }
-      this.wss.handleUpgrade(req, socket, head, (ws) => this.onExtension(ws));
+      this.wss.handleUpgrade(req, socket, head, (ws) => this.onExtension(ws, kind));
     });
     // Keeps the extension's service worker alive and detects dead sockets.
-    this.pingTimer = setInterval(() => this.ext?.rpc.emit("ping", { t: Date.now() }), 20_000);
+    this.pingTimer = setInterval(() => {
+      for (const client of Object.values(this.clients)) client.connection?.rpc.emit("ping", { t: Date.now() });
+    }, 20_000);
     this.pingTimer.unref();
   }
 
@@ -97,10 +108,11 @@ export class Bridge {
 
   async close(): Promise<void> {
     clearInterval(this.pingTimer);
-    for (const c of this.chats.values()) c.close();
-    this.chats.clear();
-    // Tells the extension not to reconnect (or start a new bridge) by itself.
-    this.ext?.ws.close(4001, "stopped");
+    for (const client of Object.values(this.clients)) {
+      for (const chat of client.chats.values()) this.dropChat(client, chat);
+      // Tells the extensions not to reconnect (or start a new bridge) by themselves.
+      client.connection?.ws.close(4001, "stopped");
+    }
     this.wss.close();
     await new Promise<void>((r) => this.server.close(() => r()));
   }
@@ -113,13 +125,15 @@ export class Bridge {
 
   // ------------------------------------------------------------ extension link
 
-  private onExtension(ws: WebSocket): void {
+  private onExtension(ws: WebSocket, kind: ClientKind): void {
+    const client = this.clients[kind];
     let authed = false;
     const rpc = new RpcPeer({ send: (env: Envelope) => ws.send(JSON.stringify(env)), timeoutMs: 30_000 });
     const authTimer = setTimeout(() => !authed && ws.close(4401, "no hello"), 10_000);
 
     rpc.handle("hello", (p: ParamsOf<BridgeMethods, "hello">) => {
-      if (!safeEqual(p?.token ?? "", this.opts.token)) {
+      if (authed) throw new Error("Already paired.");
+      if (typeof p?.token !== "string" || !safeEqual(p.token, this.opts.token)) {
         setTimeout(() => ws.close(4401, "bad token"), 50);
         throw new Error("Pairing token does not match. Copy it from the bridge's console (or run `ainb token`).");
       }
@@ -129,15 +143,19 @@ export class Bridge {
       }
       authed = true;
       clearTimeout(authTimer);
-      if (this.ext && this.ext.ws !== ws) {
-        this.log("A newer extension connection replaced the previous one.");
-        this.ext.ws.close(4000, "replaced");
+      const previous = client.connection;
+      if (previous) {
+        this.log(`A newer ${kind} connection replaced the previous one.`);
+        if (kind === "vscode") {
+          for (const chat of client.chats.values()) this.dropChat(client, chat);
+        }
+        previous.ws.close(4000, "replaced");
       }
-      this.ext = { ws, rpc };
-      this.log("Extension connected.");
+      client.connection = { ws, rpc };
+      this.log(`${kind} extension connected.`);
       return { bridgeVersion: BRIDGE_VERSION, agents: describeAgents() };
     });
-    this.registerMethods(rpc, () => authed);
+    this.registerMethods(client, rpc, () => client.connection?.rpc === rpc);
 
     ws.on("message", (data) => {
       let env: Envelope;
@@ -152,15 +170,18 @@ export class Bridge {
     ws.on("close", () => {
       clearTimeout(authTimer);
       rpc.failAll("extension disconnected");
-      if (this.ext?.ws === ws) {
-        this.ext = null;
-        this.log("Extension disconnected.");
+      if (client.connection?.ws === ws) {
+        client.connection = undefined;
+        if (kind === "vscode") {
+          for (const chat of client.chats.values()) this.dropChat(client, chat);
+        }
+        this.log(`${kind} extension disconnected.`);
       }
     });
     ws.on("error", () => {});
   }
 
-  private registerMethods(rpc: RpcPeer, authed: () => boolean): void {
+  private registerMethods(client: Client, rpc: RpcPeer, authed: () => boolean): void {
     const guard =
       <K extends keyof BridgeMethods>(fn: (p: ParamsOf<BridgeMethods, K>) => unknown) =>
       (p: ParamsOf<BridgeMethods, K>) => {
@@ -168,18 +189,25 @@ export class Bridge {
         return fn(p);
       };
 
-    const changed = () => this.ext?.rpc.emit("agents.changed", { agents: describeAgents() });
+    const changed = () => {
+      const agents = describeAgents();
+      for (const entry of Object.values(this.clients)) entry.connection?.rpc.emit("agents.changed", { agents });
+    };
     const checkIdle = (id: string | undefined) => {
-      for (const chat of this.chats.values()) {
-        if (chat.spec.id === id && (chat.status === "running" || chat.status === "starting")) throw new Error("Wait for this agent to finish starting or stop its turn before editing it.");
+      for (const entry of Object.values(this.clients)) {
+        for (const chat of entry.chats.values()) {
+          if (chat.spec.id === id && (chat.status === "running" || chat.status === "starting")) throw new Error("Wait for this agent to finish starting or stop its turn before editing it.");
+        }
       }
     };
     const invalidate = (id: string) => {
-      for (const chat of this.chats.values()) {
-        if (chat.spec.id !== id) continue;
-        chat.close();
-        this.byToken.delete(chat.mcpToken);
-        this.ext?.rpc.emit("chat.snapshot", chat.snapshot());
+      for (const entry of Object.values(this.clients)) {
+        for (const chat of entry.chats.values()) {
+          if (chat.spec.id !== id) continue;
+          chat.close();
+          this.byToken.delete(chat.mcpToken);
+          entry.connection?.rpc.emit("chat.snapshot", chat.snapshot());
+        }
       }
     };
     rpc.handle("agents.list", guard<"agents.list">((p) => {
@@ -209,13 +237,13 @@ export class Bridge {
         const spec = findAgent(p.agentId);
         if (!spec) throw new Error(`Unknown agent ${p.agentId}`);
         const key = typeof p.notebookKey === "string" && p.notebookKey ? p.notebookKey.slice(0, 2000) : undefined;
-        const existing = this.chats.get(p.tabId);
+        const existing = client.chats.get(p.tabId);
         if (existing && existing.spec.id === p.agentId && existing.notebookKey === key && existing.status !== "closed") return existing.snapshot();
         let carried: ChatMessage[] = [];
         let journal: Record<string, AppliedChange[]> | undefined;
         let note: string | undefined;
         if (existing) {
-          this.dropChat(existing);
+          this.dropChat(client, existing);
           // Same notebook, other agent: hand the conversation over.
           if (existing.notebookKey === key) {
             carried = existing.messages;
@@ -230,30 +258,30 @@ export class Bridge {
             note = `Restored the earlier conversation about this notebook. ${spec.name} starts a new session and gets a summary of it.`;
           }
         }
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(), { notebookKey: key, carried, note, journal });
-        this.chats.set(p.tabId, chat);
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(client), { notebookKey: key, carried, note, journal });
+        client.chats.set(p.tabId, chat);
         this.byToken.set(chat.mcpToken, chat);
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
         return chat.snapshot();
       }),
     );
-    rpc.handle("chat.get", guard<"chat.get">((p) => this.chats.get(p.tabId)?.snapshot() ?? null));
+    rpc.handle("chat.get", guard<"chat.get">((p) => client.chats.get(p.tabId)?.snapshot() ?? null));
     rpc.handle(
       "chat.send",
       guard<"chat.send">((p) => {
-        const chat = this.chatById(p.chatId);
+        const chat = this.chatById(client, p.chatId);
         if (!p.text.trim()) throw new Error("empty message");
         chat.send(p.text);
         return { accepted: true };
       }),
     );
-    rpc.handle("chat.cancel", guard<"chat.cancel">(async (p) => ({ cancelled: await this.chatById(p.chatId).cancel() })));
+    rpc.handle("chat.cancel", guard<"chat.cancel">(async (p) => ({ cancelled: await this.chatById(client, p.chatId).cancel() })));
     rpc.handle(
       "chat.close",
       guard<"chat.close">((p) => {
         // "New chat": the user starts over, so the saved transcript goes too.
-        const chat = this.chatById(p.chatId);
-        this.dropChat(chat, { forget: true });
+        const chat = this.chatById(client, p.chatId);
+        this.dropChat(client, chat, { forget: true });
         if (chat.notebookKey) this.store.remove(chat.notebookKey);
         return { closed: true };
       }),
@@ -261,7 +289,7 @@ export class Bridge {
     rpc.handle(
       "chat.settings",
       guard<"chat.settings">((p) => {
-        const chat = this.chatById(p.chatId);
+        const chat = this.chatById(client, p.chatId);
         chat.updateSettings(sanitizeSettings(p.settings));
         return chat.snapshot();
       }),
@@ -269,63 +297,63 @@ export class Bridge {
     rpc.handle(
       "chat.option",
       guard<"chat.option">(async (p) => {
-        const chat = this.chatById(p.chatId);
+        const chat = this.chatById(client, p.chatId);
         await chat.setOption(p.optionId, p.value);
         return chat.snapshot();
       }),
     );
-    rpc.handle("chat.answer", guard<"chat.answer">((p) => ({ answered: this.chatById(p.chatId).answer(p.promptId, p.optionId) })));
-    rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(p.chatId).resolveReview(p.reviewId, p.accept) })));
-    rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(p.chatId).undo(String(p.messageId))));
+    rpc.handle("chat.answer", guard<"chat.answer">((p) => ({ answered: this.chatById(client, p.chatId).answer(p.promptId, p.optionId) })));
+    rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(client, p.chatId).resolveReview(p.reviewId, p.accept) })));
+    rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(client, p.chatId).undo(String(p.messageId))));
     rpc.handle(
       "tab.closed",
       guard<"tab.closed">((p) => {
-        const chat = this.chats.get(p.tabId);
-        if (chat) this.dropChat(chat);
+        const chat = client.chats.get(p.tabId);
+        if (chat) this.dropChat(client, chat);
         return { ok: true as const };
       }),
     );
 
     rpc.on("notebook.event", (p: ExtensionEvents["notebook.event"]) => {
-      if (authed()) this.chats.get(p.tabId)?.onNotebookEvent(p.event);
+      if (authed()) client.chats.get(p.tabId)?.onNotebookEvent(p.event);
     });
     rpc.on("notebook.attached", (p: ExtensionEvents["notebook.attached"]) => {
-      const chat = authed() ? this.chats.get(p.tabId) : undefined;
+      const chat = authed() ? client.chats.get(p.tabId) : undefined;
       if (!chat) return;
       if (chat.notebookKey && p.info?.key && chat.notebookKey !== p.info.key) {
         // Another notebook now fills this tab. The chat belongs to the old one:
         // save and close it so its agent cannot edit the new notebook.
-        this.dropChat(chat);
-        this.ext?.rpc.emit("chat.snapshot", chat.snapshot());
+        this.dropChat(client, chat);
+        client.connection?.rpc.emit("chat.snapshot", chat.snapshot());
         return;
       }
       chat.notebook = p.info;
     });
     rpc.on("notebook.detached", (p: ExtensionEvents["notebook.detached"]) => {
-      const chat = authed() ? this.chats.get(p.tabId) : undefined;
+      const chat = authed() ? client.chats.get(p.tabId) : undefined;
       chat?.onNotebookDetached();
     });
   }
 
-  private chatById(id: string): Chat {
-    for (const c of this.chats.values()) if (c.id === id) return c;
+  private chatById(client: Client, id: string): Chat {
+    for (const c of client.chats.values()) if (c.id === id) return c;
     throw new Error("This chat no longer exists. Start a new one.");
   }
 
-  private dropChat(chat: Chat, opts: { forget?: boolean } = {}): void {
+  private dropChat(client: Client, chat: Chat, opts: { forget?: boolean } = {}): void {
     chat.close(opts);
     this.byToken.delete(chat.mcpToken);
-    if (this.chats.get(chat.tabId) === chat) this.chats.delete(chat.tabId);
+    if (client.chats.get(chat.tabId) === chat) client.chats.delete(chat.tabId);
   }
 
-  private chatHost(): ChatHost {
+  private chatHost(client: Client): ChatHost {
     return {
       workspaceRoot: join(dataDir(), "workspaces"),
       notebookOp: (tabId, op, timeoutMs) => {
-        if (!this.ext) return Promise.reject(new Error("The browser extension is not connected to the bridge."));
-        return this.ext.rpc.request("notebook.op", { tabId, op }, timeoutMs);
+        if (!client.connection) return Promise.reject(new Error("The notebook editor is not connected to the bridge."));
+        return client.connection.rpc.request("notebook.op", { tabId, op }, timeoutMs);
       },
-      emit: (event, params) => this.ext?.rpc.emit(event, params),
+      emit: (event, params) => client.connection?.rpc.emit(event, params),
       persist: (chat, sync) => {
         if (!chat.notebookKey || !chat.messages.length) return;
         const data = { key: chat.notebookKey, agentId: chat.spec.id, title: chat.notebook?.title, messages: chat.messages, journal: chat.journalEntries() };
@@ -355,7 +383,7 @@ export class Bridge {
   private async onHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://x");
     if (req.method === "GET" && url.pathname === "/health") {
-      return json(res, 200, { ok: true, version: BRIDGE_VERSION, extension: !!this.ext });
+      return json(res, 200, { ok: true, version: BRIDGE_VERSION, extension: !!(this.clients.browser.connection || this.clients.vscode.connection) });
     }
     if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || url.pathname === "/shutdown")) return json(res, 404, { error: "not found" });
     // Browsers attach Origin to cross-site requests; the relay is for local processes only.
