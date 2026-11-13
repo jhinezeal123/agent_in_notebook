@@ -150,6 +150,19 @@ describe("the notebook as a file on its machine", () => {
     expect(fileCells(nb, "/content/test.agent.ipynb")[0].source).toEqual(["x = 1"]);
   });
 
+  it("in VS Code, leads the notebook's own path to the editor and never writes that file", async () => {
+    const nb = new FakeNotebook([{ type: "code", source: "x = 1" }]);
+    nb.platform = "vscode";
+    nb.vm.write(file, "saved by VS Code");
+    const ctx = context(nb, { overrides: long });
+    expect((await callTool(ctx, "notebook_info", {})).text).toContain(`Notebook file: ${file}`);
+    await callTool(ctx, "Glob", { pattern: "*" });
+    await callTool(ctx, "Edit", { file_path: file, old_string: "x = 1", new_string: "x = 2" });
+    expect(nb.cells[0]!.source).toBe("x = 2");
+    expect(nb.vm.read(file)).toBe("saved by VS Code");
+    expect(nb.vm.read("/content/test.agent.ipynb")).toBeUndefined();
+  });
+
   it("reads the notebook while a cell runs; the machine waits for the cell", async () => {
     const nb = new FakeNotebook([{ type: "code", source: "train()" }]);
     nb.busy = true;

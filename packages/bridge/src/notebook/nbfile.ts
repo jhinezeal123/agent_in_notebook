@@ -31,7 +31,7 @@ export class NotebookMirror {
 }
 
 /** Where a platform's kernel works, for when the kernel cannot be asked. */
-const DEFAULT_CWD: Record<NotebookInfo["platform"], string> = { colab: "/content", kaggle: "/kaggle/working", jupyter: "/" };
+const DEFAULT_CWD: Record<NotebookInfo["platform"], string> = { colab: "/content", kaggle: "/kaggle/working", jupyter: "/", vscode: "/" };
 
 /** Python through the kernel itself: it sees the kernel's working directory and environment. */
 export function kernelExec(ctx: ToolContext): KernelExec {
@@ -105,11 +105,14 @@ export async function notebookPath(ctx: ToolContext, info: NotebookInfo): Promis
     m.last = null;
     if (old && reachable(info)) await removeFile(machineExec(ctx), old).catch(() => {});
   }
-  if (m.path && (m.claimed || !reachable(info))) return m.path;
+  if (m.path && (m.claimed || !reachable(info) || (info.platform === "vscode" && m.places))) return m.path;
   const dir = (await places(ctx, info)).cwd;
   const stem = name.replace(/\.ipynb$/i, "");
   const candidates = [name, `${stem}.agent.ipynb`, ...[2, 3, 4, 5].map((n) => `${stem}.agent-${n}.ipynb`)].map((n) => posix.join(dir, n));
-  if (reachable(info) && ctx.mirror.places) {
+  // VS Code's kernel works in the notebook's own folder, and the file there is
+  // the user's, saved by VS Code: it is never claimed nor written, so the path
+  // only leads Read, Edit, NotebookEdit and Write to the editor.
+  if (reachable(info) && ctx.mirror.places && info.platform !== "vscode") {
     try {
       m.path = await claim(machineExec(ctx), candidates);
       m.claimed = true;

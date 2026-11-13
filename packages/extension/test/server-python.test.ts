@@ -5,7 +5,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CellInfo, NotebookInfo, RunResult } from "@ainb/protocol";
-import { NoServerPython, OpError, OpRunner, OutputCollector, type Execution, type NotebookAdapter } from "../src/page/adapter.js";
+import { NoServerPython, OpError, OpRunner, OutputCollector, type Execution, type NotebookAdapter } from "@ainb/protocol";
 import { bootLine, ServerPython, type TerminalLink } from "../src/page/server-python.js";
 
 const PYTHON = ["python3", "python"].find((p) => spawnSync(p, ["--version"]).status === 0);

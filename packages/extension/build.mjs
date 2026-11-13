@@ -1,10 +1,13 @@
 import { context, build } from "esbuild";
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 
+import { copyMathAssets } from "./math-assets.mjs";
+
 const watch = process.argv.includes("--watch");
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist", { recursive: true });
 cpSync("static", "dist", { recursive: true });
+copyMathAssets("dist");
 
 const common = {
   bundle: true,

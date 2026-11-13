@@ -1,6 +1,6 @@
 // Notebook model shared by the page adapters, the bridge and the side panel.
 
-export type Platform = "colab" | "kaggle" | "jupyter";
+export type Platform = "colab" | "kaggle" | "jupyter" | "vscode";
 
 export type CellType = "code" | "markdown";
 

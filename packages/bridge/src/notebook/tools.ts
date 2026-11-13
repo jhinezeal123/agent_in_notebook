@@ -53,6 +53,8 @@ export interface ToolContext {
   waitMs: number;
   /** The agent reads images in tool results, so plots are attached rather than described as hidden. */
   images: boolean;
+  /** Preview raster outputs from executing notebook code in the chat. */
+  showOutputImage?(image: OutputImage): void;
   /**
    * Run `fn` alone among the chat's calls holding the same lock. Agents call
    * tools in parallel: two edits of one cell would read the same source and the
@@ -246,7 +248,7 @@ export const TOOLS = [
   tool({
     name: "notebook_info",
     description:
-      "The notebook open in the user's browser: title, platform, kernel state, active cell, its file on the machine, and the current permission mode.",
+      "The notebook open in the user's editor: title, platform, kernel state, active cell, its file on the machine, and the current permission mode.",
     schema: z.object({}),
     async run(ctx) {
       const info = await ctx.call({ op: "info" });
@@ -426,7 +428,7 @@ export const TOOLS = [
   tool({
     name: "Bash",
     description:
-      "Run a command in a terminal on the machine the notebook runs on (the Colab or Kaggle VM), as you would in a terminal on your own computer. " +
+      "Run a command in a terminal on the machine the notebook runs on, as you would in a terminal on your own computer. " +
       "Each session is a persistent interactive bash: cd, exported variables and an activated environment carry over to the next command, and it outlives kernel restarts. " +
       "Commands run until they finish, however long. If one is still running when this call has waited long enough, you get its output so far and it keeps running: " +
       "then use shell_wait, shell_input (to answer a prompt) or shell_interrupt (Ctrl+C). " +
@@ -575,6 +577,7 @@ export const TOOLS = [
         await new Promise((r) => setTimeout(r, 1000));
       }
       const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
+      showOutputImages(ctx, cells.flatMap((cell) => cell.outputs ?? []));
       const att = new Attachments(ctx.images);
       return att.result(joinWithinBudget(cells, (c) => renderCell(c, true, att), "\n\n", att, READ_BUDGET, (rest) => `… ${rest.length} more cells not shown; wait for them separately.`));
     },
@@ -918,7 +921,15 @@ function shellResult(ctx: ToolContext, sh: ShellSession, r: Report): ToolResult 
   return { text: parts.join("\n"), isError: failed || undefined };
 }
 
+function showOutputImages(ctx: ToolContext, outputs: CellOutput[]): void {
+  if (!ctx.showOutputImage) return;
+  const preview = new Attachments(true);
+  for (const { image } of outputs) if (image) preview.attach(image);
+  for (const image of preview.images) ctx.showOutputImage(image);
+}
+
 function codeResult(ctx: ToolContext, res: ExecResult, ms: number): ToolResult {
+  showOutputImages(ctx, res.outputs);
   const att = new Attachments(ctx.images);
   let head: string;
   if (res.status === "running") {
@@ -938,6 +949,7 @@ async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: nu
   const { results } = await ctx.exclusive("run", () => ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true }, timeoutMs + 15_000));
   const att = new Attachments(ctx.images);
   const text = renderRuns(results, att);
+  showOutputImages(ctx, results.flatMap((result) => result.outputs));
   const stillRunning = results.some((r) => r.status === "timeout");
   return att.result(
     stillRunning ? `${text}\n\nSome cells are still running. Call wait_for_cells to keep waiting.` : text,

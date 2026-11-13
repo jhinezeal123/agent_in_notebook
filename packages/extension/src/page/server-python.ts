@@ -13,7 +13,7 @@
 // server drops a terminal whose process ended.
 
 import type { ExecResult } from "@ainb/protocol";
-import { NoServerPython, OpError, within } from "./adapter.js";
+import { NoServerPython, OpError, within } from "@ainb/protocol";
 
 /** A terminal of the notebook server, as the page's Jupyter app gives it. */
 export interface TerminalLink {

@@ -1,6 +1,6 @@
 # Agent in Notebook
 
-Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex, Gemini CLI, OpenCode, hoặc bất kỳ agent nào nói [ACP](https://agentclientprotocol.com)) và **notebook trong trình duyệt** (Google Colab, Kaggle, Jupyter). Giống tính năng Gemini trong Colab, nhưng bạn tự chọn agent và dùng được cả trên Kaggle.
+Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex, Gemini CLI, OpenCode, hoặc bất kỳ agent nào nói [ACP](https://agentclientprotocol.com)) và **notebook** trong VS Code hoặc trình duyệt (Google Colab, Kaggle, Jupyter).
 
 ```
 ┌─ Chrome extension ──────────────────┐        ┌─ Bridge (máy bạn, 127.0.0.1) ─────────┐
@@ -38,6 +38,7 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
   - Bạn sửa cell hay chạy ra output mới thì file được ghi lại trước lần kế tiếp agent đụng tới máy. Cell bạn đang sửa mà agent cũng sửa thì giữ bản của bạn.
   - Output và `execution_count` trong file chỉ để đọc: chúng đến từ việc chạy cell.
   - Nếu chỗ đó đã có file không do bridge ghi (ví dụ chính file notebook của một Jupyter server), file của agent đổi tên thành `<tên>.agent.ipynb` và file kia được để yên.
+  - Trong VS Code, file notebook là chính file của bạn và do VS Code lưu. Bridge không ghi bản sao nào: `Read`, `Edit`, `NotebookEdit`, `Write` trên đường dẫn của nó đi thẳng vào editor, còn lệnh trong terminal chỉ thấy bản đã Save và không được sửa file đó.
   - Các tool sửa cell kiểu cũ (`list_cells`, `read_cells`, `edit_cell`, `update_cell`, `insert_cell`, `delete_cell`, `move_cell`) đã bỏ.
 - Agent **nhìn thấy biểu đồ**: output dạng PNG/JPEG (matplotlib, seaborn…) được gửi kèm kết quả `run_cells`, `wait_for_cells` và `Read` file notebook dưới dạng ảnh, tối đa 4 ảnh mỗi lần gọi. `Read` một file PNG/JPEG trên VM cũng trả về ảnh. Agent nào không đọc được ảnh thì chỉ nhận dòng ghi chú như trước.
 - **Tiết kiệm ngữ cảnh**: output dài được rút gọn trước khi tới agent. Thanh tiến trình (tqdm, Keras) chỉ giữ trạng thái cuối, dòng lặp lại được gộp, log được cắt theo dòng (giữ đầu và nhiều phần cuối hơn) và lỗi luôn giữ dòng `ValueError: …` cùng frame trong code của bạn. Một lần `run_all` gói trong khoảng 30k ký tự dù chạy bao nhiêu cell. Khi cần xem phần bị cắt, agent dùng tool `read_output` để tìm (regex) hoặc đọc theo trang. Ảnh dán trong markdown (data URI) hiện thành nhãn ngắn và được giữ nguyên khi agent sửa cell. Outline notebook chỉ gửi lại khi nó thay đổi. Khi agent tự nén context (ví dụ Claude Code auto-compact hoặc `/compact`), luật làm việc với notebook được gửi lại ở tin nhắn kế tiếp. Side panel hiện mức đầy context (ví dụ `53k/200k`) nếu agent báo qua ACP.
@@ -47,7 +48,47 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 - Giới hạn trên Colab: Colab không cho mượn terminal của server theo cách trên, nên bridge vẫn đi qua kernel. Khi kernel đang chạy một cell thì tạm thời không đọc được terminal, không đọc/ghi được file trên VM và file notebook trên VM không được cập nhật. Lệnh trong terminal không bị ảnh hưởng, cell chạy xong là làm tiếp được. Notebook thì vẫn đọc và sửa được qua đường dẫn file của nó, vì phần đó đi thẳng vào trình duyệt; chưa kết nối runtime cũng vậy. Colab có một terminal riêng (websocket `/colab/tty`, không qua kernel) nhưng chưa được dùng: cần dò nó trên một runtime thật. Server không có terminal (hoặc chạy Windows) thì bridge cũng dùng kernel như vậy; terminal cần máy Linux/macOS.
 - **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên side panel để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
 
-## Cài đặt
+## Định dạng trong chat
+
+Tin nhắn hỗ trợ Markdown, bảng, checklist, code block và URL có thể bấm. Đặt công thức trong `$...$` hoặc `\(...\)` để hiện cùng dòng. Dùng `$$...$$`, `\[...\]` hoặc code block có nhãn `math` để hiện riêng một khối.
+
+Dùng `![Mô tả](https://example.com/plot.png)` để hiện ảnh ngay trong tin nhắn. Chat cũng hiển thị ảnh raster nhúng, ảnh do agent gửi qua ACP và biểu đồ do lệnh chạy notebook của agent tạo ra. Trong VS Code, `![Biểu đồ](./plots/loss.png)` có thể đọc ảnh từ workspace hoặc thư mục notebook khi cửa sổ không mở workspace.
+
+Trong VS Code, link Markdown như `[Xem dòng 12](./src/main.py:12)` mở file ở dòng tương ứng trong workspace. Nếu cửa sổ không mở workspace, đường dẫn được giới hạn trong thư mục của notebook. Link web mở bằng trình duyệt.
+
+## Dùng trong VS Code
+
+Extension **Agent in Notebook** mở giao diện chat ở sidebar cạnh Notebook Editor của VS Code. Agent đọc, sửa và chạy cell trên tài liệu `.ipynb` đang mở. Sidebar theo notebook đang chọn và hiển thị diff để **Apply / Reject**. Lịch sử chat được lưu theo đường dẫn notebook.
+
+**Chạy thử từ mã nguồn** với VS Code 1.105 trở lên. Từ thư mục repo:
+
+```sh
+pnpm install
+pnpm build
+pnpm bridge
+```
+
+Mở terminal khác trong cùng thư mục, sau đó chạy:
+
+```sh
+code --extensionDevelopmentPath="${PWD}/packages/vscode"
+```
+
+Trong cửa sổ **Extension Development Host**, mở một file `.ipynb` bằng Notebook Editor. Bấm **Agent in Notebook** trên Activity Bar hoặc chạy **Agent in Notebook: Open Chat** từ Command Palette. Chọn agent rồi gửi tin. Sidebar đọc port và pairing token từ cấu hình bridge trên cùng máy. Nếu bridge dùng port khác, chọn **Enter pairing token** để nhập port và token.
+
+Để chạy cell, cài **Jupyter** trong VS Code và chọn kernel ở **Select Kernel**. Muốn dùng GPU/TPU của Colab, cài thêm extension **Colab** của Google và chọn kernel Colab. `run_code` và các tool terminal của notebook dùng API kernel của Jupyter. Chạy một cell để khởi động kernel và cấp quyền kernel cho Agent in Notebook khi Jupyter hỏi. Với Kaggle, tải `.ipynb` về để mở trong VS Code và chọn kernel có sẵn ở đó. Runtime Kaggle đang chạy trong tab web chỉ được kết nối qua bản Chrome bên dưới.
+
+Nếu muốn cài vào VS Code đang dùng hằng ngày, đóng gói từ repo đã build:
+
+```sh
+cd packages/vscode
+pnpm dlx @vscode/vsce@4.1.1 package --no-dependencies --skip-license
+code --install-extension agent-in-notebook-vscode-0.1.0.vsix
+```
+
+Lưu notebook bằng thao tác Save của VS Code. Undo theo lượt trong sidebar chỉ hoàn tác cell còn khớp với bản agent sửa. Các cell cũ chưa có ID trong `.ipynb` có ID tạm trong phiên mở tài liệu, nên hoàn tác các cell đó cần thực hiện trước khi đóng notebook.
+
+## Cài đặt bản Chrome
 
 Cần Node ≥ 20, pnpm và Chrome ≥ 116.
 
@@ -119,7 +160,7 @@ jupyter notebook --JupyterNotebookApp.expose_app_in_browser=True
 
 ## Bảo mật
 
-- Bridge chỉ nghe trên `127.0.0.1`. WebSocket chỉ nhận origin `chrome-extension://` **và** đúng pairing token, nên trang web lạ không gọi vào được.
+- Bridge chỉ nghe trên `127.0.0.1`. WebSocket `/ext` kiểm tra origin của extension trình duyệt. `/vscode` dành cho VS Code Extension Host và từ chối request có header `Origin`. Cả hai cần đúng pairing token.
 - Native messaging: trình duyệt chỉ cho extension có ID nằm trong `allowed_origins` gọi native host, nên chỉ extension này nhận được token từ host. `POST /shutdown` (`ainb stop`) cần pairing token và bị từ chối nếu có header `Origin`.
 - Mỗi chat có một token riêng cho MCP relay. Relay từ chối mọi request có header `Origin` (tức là đến từ trình duyệt).
 - Agent chạy trong thư mục riêng `~/.agent-in-notebook/workspaces/<notebook>` (mỗi notebook một thư mục). Bridge không sửa config của agent.
@@ -146,7 +187,7 @@ E2E_NATIVE=1 pnpm --filter @ainb/extension exec vitest run test/native-e2e.test.
 
 `AINB_DEBUG=1 pnpm bridge` in toàn bộ luồng ACP của agent (update, xin quyền, stderr).
 
-Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, side panel). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
+Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC, `OpRunner`), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, giao diện chat dùng chung), `packages/vscode` (sidebar và adapter Notebook Editor). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
 
 ## Giới hạn đã biết
 

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { parseLaunchCommand, type AgentInfo, type AgentOption } from "@ainb/protocol";
-import { client } from "./client.js";
+import { usePanelHost } from "./host.js";
 
 export function AgentManager({ agents, onSaved, onRemoved, onClose }: {
   agents: AgentInfo[]; onSaved: (id: string) => void; onRemoved: (id: string) => void; onClose: () => void;
 }) {
+  const client = usePanelHost();
   const dialog = useRef<HTMLDialogElement>(null);
   const [id, setId] = useState<string | undefined>();
   const [name, setName] = useState("");

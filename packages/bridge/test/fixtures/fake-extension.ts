@@ -61,6 +61,7 @@ export class FakeNotebook {
   private nextId = 1;
   private exec = 0;
   onEvent: (e: unknown) => void = () => {};
+  platform: NotebookInfo["platform"] = "colab";
 
   constructor(cells: { type: "code" | "markdown"; source: string }[]) {
     for (const c of cells) this.cells.push({ id: `c${this.nextId++}`, type: c.type, source: c.source, outputs: [], executionCount: null });
@@ -69,7 +70,7 @@ export class FakeNotebook {
 
   info(): NotebookInfo {
     return {
-      platform: "colab",
+      platform: this.platform,
       title: "test.ipynb",
       url: "https://colab.research.google.com/drive/test",
       cellCount: this.cells.length,
@@ -249,8 +250,8 @@ export class FakeExtension {
     readonly tabId = 7,
   ) {}
 
-  async connect(port: number, token: string, origin = "chrome-extension://abcdef"): Promise<unknown> {
-    this.ws = new WebSocket(`ws://127.0.0.1:${port}/ext`, { origin });
+  async connect(port: number, token: string, origin: string | null = "chrome-extension://abcdef", path = "ext"): Promise<unknown> {
+    this.ws = new WebSocket(`ws://127.0.0.1:${port}/${path}`, { origin: origin ?? undefined });
     await new Promise<void>((resolve, reject) => {
       this.ws.once("open", () => resolve());
       this.ws.once("error", reject);
