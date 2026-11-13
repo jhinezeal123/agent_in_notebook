@@ -1,8 +1,10 @@
 // Smoke test against the real agents installed on this machine. Uses the
 // user's own accounts, so it only runs when asked:
 //   REAL_AGENTS=claude,codex,gemini,opencode pnpm --filter @ainb/bridge exec vitest run test/real-agents.test.ts
+// Custom ACP agents: point REAL_AGENTS_FILE at an agents.json (it is copied, not changed)
+// and list their ids in REAL_AGENTS.
 
-import { mkdtempSync } from "node:fs";
+import { copyFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -20,6 +22,7 @@ let port: number;
 beforeAll(async () => {
   if (!AGENTS.length) return;
   process.env.AINB_HOME = mkdtempSync(join(tmpdir(), "ainb-real-"));
+  if (process.env.REAL_AGENTS_FILE) copyFileSync(process.env.REAL_AGENTS_FILE, join(process.env.AINB_HOME, "agents.json"));
   bridge = new Bridge({
     port: 0,
     token: TOKEN,
