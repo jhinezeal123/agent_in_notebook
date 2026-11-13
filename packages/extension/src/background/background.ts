@@ -257,10 +257,28 @@ async function handlePanel(method: string, params: any): Promise<unknown> {
     }
     case "notebook.focus":
       return runOp(params.tabId, { op: "focus_cell", cellId: params.cellId });
+    case "notebook.insert":
+      return insertFromPanel(params.tabId, String(params.source ?? ""), params.cellType === "markdown" ? "markdown" : "code");
     default:
       if (!rpc) throw new Error("Not connected to the bridge.");
       return rpc.request(method, params, 120_000);
   }
+}
+
+/**
+ * The user's own "Insert as cell" from the transcript: a new cell right below
+ * the selected one (or at the end), then focus it. No review: the user chose it.
+ */
+async function insertFromPanel(tabId: number, source: string, cellType: "code" | "markdown"): Promise<{ cellId: string | null }> {
+  const info = (await runOp(tabId, { op: "info" })) as NotebookInfo;
+  let index = info.cellCount;
+  if (info.activeCellId) {
+    const { cells } = (await runOp(tabId, { op: "get_cells", cellIds: [info.activeCellId] })) as { cells: { index: number }[] };
+    if (cells[0]) index = cells[0].index + 1;
+  }
+  const res = (await runOp(tabId, { op: "insert_cell", index, cellType, source, review: false })) as { cellId: string | null };
+  if (res.cellId) await runOp(tabId, { op: "focus_cell", cellId: res.cellId }).catch(() => {});
+  return { cellId: res.cellId };
 }
 
 chrome.runtime.onConnect.addListener((port) => {

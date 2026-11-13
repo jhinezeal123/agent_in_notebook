@@ -28,6 +28,7 @@ export interface LocalMethods {
   "config.set": { params: { port: number; token: string }; result: BridgeState };
   "tab.notebook": { params: { tabId: number }; result: NotebookInfo | null };
   "notebook.focus": { params: { tabId: number; cellId: string }; result: { focused: boolean } };
+  "notebook.insert": { params: { tabId: number; source: string; cellType: "code" | "markdown" }; result: { cellId: string | null } };
 }
 
 export type PanelRequest = { id: number; method: string; params: unknown };

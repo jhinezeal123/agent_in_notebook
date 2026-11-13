@@ -113,7 +113,8 @@ const app = agent({ name: "fake-agent" })
           sessionId: params.sessionId,
           update: { sessionUpdate: "tool_call_update", toolCallId: id, status: r.isError ? "failed" : "completed" },
         });
-        await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${out}\n`);
+        // `quiet` calls say nothing, so several calls in a row sit next to each other like a real agent's.
+        if (!step.quiet) await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${out}\n`);
       }
     }
     return { stopReason: "end_turn" };

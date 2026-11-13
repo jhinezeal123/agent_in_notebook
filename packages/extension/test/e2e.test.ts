@@ -162,7 +162,21 @@ describe.skipIf(!RUN)("Colab", () => {
     expect(cells.length).toBe(before + 2);
     expect(cells[1]).toEqual(["text", "## Added by the agent"]);
     expect(cells[2]).toEqual(["code", "print('from agent')"]);
+    // The fake agent writes a line after each call, so no two calls are adjacent and none are grouped.
     await expect.poll(() => panel.locator(".tool-title").first().textContent()).toBe("notebook · list_cells");
+  }, 120_000);
+
+  it("inserts a code block from the transcript as a cell below the selected one", async () => {
+    dumpOnFailure("insert");
+    const before = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
+    await send(panel, script([{ say: "Try this:\n\n```python\nprint('from the panel')\n```\n" }]));
+    const block = panel.locator(".msg.agent").last().locator(".code");
+    await block.waitFor({ timeout: 30_000 });
+    expect(await block.locator(".code-lang").textContent()).toBe("python");
+    await block.getByRole("button", { name: "Insert as cell" }).click();
+    await expect.poll(() => nb.evaluate(() => (window as any).colab.global.notebook.cells.length), { timeout: 30_000 }).toBe(before + 1);
+    const texts = await nb.evaluate(() => (window as any).colab.global.notebook.cells.map((c: any) => c.getText()));
+    expect(texts).toContain("print('from the panel')");
   }, 120_000);
 
   it("shows a change in Colab's inline diff and applies it from the side panel", async () => {

@@ -1,58 +1,105 @@
-import DOMPurify from "dompurify";
-import { marked } from "marked";
 import { useMemo, useState } from "preact/hooks";
 import { diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
-
-marked.setOptions({ gfm: true, breaks: true });
+import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
+import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
 export interface PartActions {
   answer(promptId: string, optionId: string): void;
   review(reviewId: string, accept: boolean): void;
   focusCell(cellId: string): void;
+  /** Insert code from the transcript as a new cell below the selected one. */
+  insertCell(source: string, cellType: "code" | "markdown"): void;
 }
 
-export function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => {
-    const raw = marked.parse(text, { async: false }) as string;
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ["target"] });
-  }, [text]);
+type PromptPart = Extract<Part, { type: "prompt" }>;
+
+async function copyText(text: string, button?: HTMLElement): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (button) {
+      const old = button.textContent;
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = old), 1200);
+    }
+  } catch {
+    // clipboard unavailable
+  }
+}
+
+export function Markdown({ text, actions }: { text: string; actions?: PartActions }) {
+  const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
   return (
     <div
       class="md"
-      dangerouslySetInnerHTML={{ __html: html }}
       onClick={(e) => {
+        const target = e.target as HTMLElement;
+        const act = target.closest<HTMLElement>("[data-code-act]");
+        if (act) {
+          const box = act.closest<HTMLElement>(".code");
+          const code = box?.querySelector("code")?.textContent ?? "";
+          if (act.dataset.codeAct === "copy") void copyText(code, act);
+          else if (act.dataset.codeAct === "insert") actions?.insertCell(code.replace(/\n$/, ""), /^(md|markdown)$/i.test(box?.dataset.lang ?? "") ? "markdown" : "code");
+          return;
+        }
         // Links open in a new tab, never inside the panel.
-        const a = (e.target as HTMLElement).closest("a");
+        const a = target.closest("a");
         if (a?.href) {
           e.preventDefault();
           void chrome.tabs.create({ url: a.href });
         }
       }}
-    />
-  );
-}
-
-export function Message({ msg, actions }: { msg: ChatMessage; actions: PartActions }) {
-  if (msg.role === "user") {
-    const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
-    return <div class="msg user">{text}</div>;
-  }
-  if (!msg.parts.length) return null;
-  return (
-    <div class={`msg ${msg.role}`}>
-      {msg.parts.map((p, i) => (
-        <PartView key={i} part={p} actions={actions} />
+    >
+      {blocks.map((b, i) => (
+        // An unchanged block keeps the same HTML string, so Preact leaves its DOM alone.
+        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b) }} />
       ))}
     </div>
   );
 }
 
-function PartView({ part, actions }: { part: Part; actions: PartActions }) {
+/** Text parts of a message, for copying. */
+function messageText(msg: ChatMessage): string {
+  return msg.parts
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+export function Message({ msg, actions, live = false }: { msg: ChatMessage; actions: PartActions; live?: boolean }) {
+  if (msg.role === "user") {
+    const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+    return <div class="msg user">{text}</div>;
+  }
+  if (!msg.parts.length) return null;
+  const items = groupParts(msg.parts);
+  const text = msg.role === "agent" && !live ? messageText(msg) : "";
+  return (
+    <div class={`msg ${msg.role}`}>
+      {items.map((item, i) =>
+        item.kind === "tools" ? (
+          <ToolGroup key={i} tools={item.tools} />
+        ) : (
+          <PartView key={i} part={item.part} actions={actions} liveThought={live && i === items.length - 1} />
+        ),
+      )}
+      {text && (
+        <div class="msg-actions">
+          <button class="linkish" title="Copy this reply" onClick={(e) => void copyText(text, e.currentTarget)}>
+            Copy
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PartView({ part, actions, liveThought }: { part: Part; actions: PartActions; liveThought: boolean }) {
   switch (part.type) {
     case "text":
-      return <Markdown text={part.text} />;
+      return <Markdown text={part.text} actions={actions} />;
     case "thought":
-      return <Thought text={part.text} />;
+      return <Thought text={part.text} live={liveThought} />;
     case "tool":
       return <Tool part={part} />;
     case "plan":
@@ -67,7 +114,7 @@ function PartView({ part, actions }: { part: Part; actions: PartActions }) {
         </ul>
       );
     case "prompt":
-      return <Prompt part={part} actions={actions} />;
+      return <Prompt part={part} />;
     case "review":
       return <Review review={part.review} status={part.status} actions={actions} />;
     case "notice":
@@ -75,12 +122,14 @@ function PartView({ part, actions }: { part: Part; actions: PartActions }) {
   }
 }
 
-function Thought({ text }: { text: string }) {
+function Thought({ text, live }: { text: string; live: boolean }) {
   const [open, setOpen] = useState(false);
+  const line = live && !open ? thoughtLine(text) : "";
   return (
     <div class="thought">
       <button class="linkish" onClick={() => setOpen(!open)} aria-expanded={open}>
-        {open ? "▾" : "▸"} Thinking
+        {open ? "▾" : "▸"} {live ? "Thinking" : "Thought"}
+        {line && <span class="thought-line">: {line}</span>}
       </button>
       {open && <div class="thought-body">{text}</div>}
     </div>
@@ -89,14 +138,35 @@ function Thought({ text }: { text: string }) {
 
 const STATUS_ICON: Record<string, string> = { pending: "○", in_progress: "◐", completed: "✓", failed: "✕" };
 
-function toolLabel(part: Extract<Part, { type: "tool" }>): string {
-  if (part.notebookCalls?.length) return `notebook · ${part.notebookCalls.join(", ")}`;
-  const m = part.title.match(/(?:mcp__notebook__|mcp\.notebook\.|notebook[./:_]{1,2})(\w+)/);
-  if (m) return `notebook · ${m[1]}`;
-  return part.title;
+function ToolGroup({ tools }: { tools: ToolPart[] }) {
+  const [open, setOpen] = useState(false);
+  if (tools.length === 1) return <Tool part={tools[0]!} />;
+  const running = tools.filter((t) => t.status === "pending" || t.status === "in_progress");
+  const failed = tools.filter((t) => t.status === "failed").length;
+  const status = running.length ? "in_progress" : failed ? "failed" : "completed";
+  const notebook = tools.some((t) => t.notebook);
+  return (
+    <div class={`tool group ${status} ${notebook ? "nb" : ""}`}>
+      <button class="tool-head group-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span class="tool-icon" aria-label={status}>
+          {STATUS_ICON[status]}
+        </span>
+        <span class="tool-summary">{running.length ? `${toolLabel(running.at(-1)!)}…` : summarizeTools(tools)}</span>
+        {failed > 0 && <span class="tool-failed">{failed} failed</span>}
+        <span class="tool-count">{tools.length} calls</span>
+      </button>
+      {open && (
+        <div class="tool-group-body">
+          {tools.map((t) => (
+            <Tool key={t.toolCallId} part={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
-function Tool({ part }: { part: Extract<Part, { type: "tool" }> }) {
+function Tool({ part }: { part: ToolPart }) {
   const [open, setOpen] = useState(false);
   return (
     <div class={`tool ${part.status} ${part.notebook ? "nb" : ""}`}>
@@ -111,24 +181,37 @@ function Tool({ part }: { part: Extract<Part, { type: "tool" }> }) {
   );
 }
 
-function Prompt({ part, actions }: { part: Extract<Part, { type: "prompt" }>; actions: PartActions }) {
+function chosenLabel(part: PromptPart): string | undefined {
+  return part.options.find((o) => o.id === part.answer)?.name ?? (part.answer === "cancelled" ? "Cancelled" : part.answer === "expired" ? "Expired" : part.answer);
+}
+
+/** In the transcript a waiting question only points at the bar above the composer, where it is answered. */
+function Prompt({ part }: { part: PromptPart }) {
   const answered = part.answer !== undefined;
-  const chosen = part.options.find((o) => o.id === part.answer)?.name ?? (part.answer === "cancelled" ? "Cancelled" : part.answer === "expired" ? "Expired" : part.answer);
   return (
-    <div class={`card prompt ${answered ? "done" : "waiting"}`}>
+    <div class={`card prompt ${answered ? "done" : "asked"}`}>
       <div class="card-title">{part.title}</div>
+      <div class="card-status">{answered ? `→ ${chosenLabel(part)}` : "Waiting for your answer below ↓"}</div>
+    </div>
+  );
+}
+
+/** The oldest unanswered question, pinned above the composer so it cannot scroll out of sight. */
+export function PendingPrompt({ part, more, actions }: { part: PromptPart; more: number; actions: PartActions }) {
+  return (
+    <div class="card prompt waiting dock" role="alertdialog" aria-label={part.title}>
+      <div class="card-title">
+        {part.title}
+        {more > 0 && <span class="muted small"> (+{more} more)</span>}
+      </div>
       {part.detail && <pre class="card-detail">{part.detail}</pre>}
-      {answered ? (
-        <div class="card-status">→ {chosen}</div>
-      ) : (
-        <div class="card-actions">
-          {part.options.map((o) => (
-            <button key={o.id} class={o.kind.startsWith("allow") ? "primary" : "secondary"} onClick={() => actions.answer(part.promptId, o.id)}>
-              {o.name}
-            </button>
-          ))}
-        </div>
-      )}
+      <div class="card-actions">
+        {part.options.map((o) => (
+          <button key={o.id} class={o.kind.startsWith("allow") ? "primary" : "secondary"} onClick={() => actions.answer(part.promptId, o.id)}>
+            {o.name}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
