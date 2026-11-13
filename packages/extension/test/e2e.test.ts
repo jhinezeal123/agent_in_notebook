@@ -5,9 +5,16 @@
 //   E2E=1 [AINB_E2E_JUPYTER=<path to jupyter executable>] pnpm --filter @ainb/extension exec vitest run test/e2e.test.ts
 //
 // Running cells on Colab needs a signed-in runtime, so Colab covers editing and
-// review; Jupyter covers running.
+// review; Jupyter covers running. The terminal tools need a Linux or macOS
+// kernel machine (like Colab's and Kaggle's); on Windows, point the test at a
+// Jupyter in a Linux container instead (token "e2e", app exposed in the browser):
+//
+//   docker run -d --rm --name ainb-jnb -p 8899:8888 python:3.12-slim bash -c \
+//     "pip install -q 'notebook>=7,<8' && jupyter notebook --ip=0.0.0.0 --allow-root --no-browser \
+//      --IdentityProvider.token=e2e --JupyterNotebookApp.expose_app_in_browser=True"
+//   E2E=1 AINB_E2E_JUPYTER_URL=http://localhost:8899 pnpm --filter @ainb/extension exec vitest run test/e2e.test.ts
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -17,6 +24,8 @@ import { formatLaunchCommand } from "@ainb/protocol";
 
 const RUN = !!process.env.E2E;
 const JUPYTER = process.env.AINB_E2E_JUPYTER;
+/** A Jupyter server already running (token "e2e"); the test notebook is uploaded to it. */
+const JUPYTER_URL = process.env.AINB_E2E_JUPYTER_URL?.replace(/\/$/, "");
 const ROOT = resolve(__dirname, "../../..");
 const EXT = resolve(__dirname, "../dist");
 const CLI = resolve(ROOT, "packages/bridge/dist/cli.js");
@@ -24,6 +33,16 @@ const FAKE_AGENT = resolve(ROOT, "packages/bridge/test/fixtures/fake-agent.mjs")
 const TOKEN = "e2e-token-0123456789abcdef";
 const PORT = 47900 + Math.floor(Math.random() * 90);
 const JUPYTER_PORT = 8890 + Math.floor(Math.random() * 9);
+const JUPYTER_BASE = JUPYTER_URL ?? `http://localhost:${JUPYTER_PORT}`;
+const TEST_NOTEBOOK = {
+  cells: [
+    { cell_type: "markdown", id: "intro", metadata: {}, source: ["# E2E"] },
+    { cell_type: "code", execution_count: null, id: "calc", metadata: {}, outputs: [], source: ["x = 41\n", "print(x + 1)"] },
+  ],
+  metadata: { kernelspec: { display_name: "Python 3", language: "python", name: "python3" } },
+  nbformat: 4,
+  nbformat_minor: 5,
+};
 const COLAB = "https://colab.research.google.com/github/googlecolab/colabtools/blob/main/notebooks/colab-github-demo.ipynb";
 
 let bridge: ChildProcess | null = null;
@@ -53,20 +72,20 @@ beforeAll(async () => {
   bridge = spawn(process.execPath, [CLI, "serve"], { env: { ...process.env, AINB_HOME: home }, stdio: "inherit" });
   await waitHttp(`http://127.0.0.1:${PORT}/health`, 20_000);
 
-  if (JUPYTER) {
+  if (JUPYTER_URL) {
+    await waitHttp(`${JUPYTER_URL}/api/status?token=e2e`, 180_000);
+    // A fresh copy of the test notebook, and no kernel left from an earlier run.
+    const kernels = (await (await fetch(`${JUPYTER_URL}/api/sessions?token=e2e`)).json()) as { id: string }[];
+    for (const k of kernels) await fetch(`${JUPYTER_URL}/api/sessions/${k.id}?token=e2e`, { method: "DELETE" });
+    const put = await fetch(`${JUPYTER_URL}/api/contents/e2e.ipynb?token=e2e`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "notebook", format: "json", content: TEST_NOTEBOOK }),
+    });
+    if (!put.ok) throw new Error(`could not upload the test notebook: HTTP ${put.status}`);
+  } else if (JUPYTER) {
     const work = mkdtempSync(join(tmpdir(), "ainb-jnb-"));
-    writeFileSync(
-      join(work, "e2e.ipynb"),
-      JSON.stringify({
-        cells: [
-          { cell_type: "markdown", id: "intro", metadata: {}, source: ["# E2E"] },
-          { cell_type: "code", execution_count: null, id: "calc", metadata: {}, outputs: [], source: ["x = 41\n", "print(x + 1)"] },
-        ],
-        metadata: { kernelspec: { display_name: "Python 3", language: "python", name: "python3" } },
-        nbformat: 4,
-        nbformat_minor: 5,
-      }),
-    );
+    writeFileSync(join(work, "e2e.ipynb"), JSON.stringify(TEST_NOTEBOOK));
     jupyter = spawn(
       JUPYTER,
       ["notebook", "--no-browser", `--port=${JUPYTER_PORT}`, "--IdentityProvider.token=e2e", "--JupyterNotebookApp.expose_app_in_browser=True"],
@@ -92,7 +111,8 @@ afterAll(async () => {
   await ctx?.close();
   bridge?.kill();
   if (jupyter?.pid) {
-    if (process.platform === "win32") spawn("taskkill", ["/pid", String(jupyter.pid), "/T", "/F"], { stdio: "ignore" });
+    // Synchronously: the worker exits right after afterAll, which would leave the server and its kernel running.
+    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(jupyter.pid), "/T", "/F"], { stdio: "ignore" });
     else jupyter.kill();
   }
 });
@@ -243,13 +263,13 @@ describe.skipIf(!RUN)("Colab", () => {
   }, 60_000);
 });
 
-describe.skipIf(!RUN || !JUPYTER)("Jupyter (Kaggle's editor)", () => {
+describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", () => {
   let nb: Page;
   let panel: Page;
 
   it("attaches, edits, runs, and reviews with the inline card", async () => {
     nb = await ctx.newPage();
-    await nb.goto(`http://localhost:${JUPYTER_PORT}/notebooks/e2e.ipynb?token=e2e`, { waitUntil: "domcontentloaded" });
+    await nb.goto(`${JUPYTER_BASE}/notebooks/e2e.ipynb?token=e2e`, { waitUntil: "domcontentloaded" });
     panel = await openPanel(nb);
     await expect.poll(() => panel.locator(".top-title").textContent(), { timeout: 60_000 }).toContain("e2e.ipynb");
     const model = panel.getByLabel("Model", { exact: true });
@@ -307,6 +327,51 @@ describe.skipIf(!RUN || !JUPYTER)("Jupyter (Kaggle's editor)", () => {
     await prompt.waitFor({ timeout: 30_000 });
     await prompt.getByRole("button", { name: "Run", exact: true }).click();
     await expect.poll(last, { timeout: 60_000 }).toContain("cell calc: ok");
+  }, 240_000);
+
+  it("works a terminal on the kernel's machine and runs code without adding a cell", async () => {
+    const widgets = () => nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets.map((w: any) => [w.model.id, w.model.sharedModel.getSource()]));
+    const before = await widgets();
+    const last = () => panel.locator(".msg.agent").last().textContent();
+
+    // Review is still on: the approval shows the exact command.
+    await send(panel, script([{ tool: "run_shell", args: { command: "echo should-not-run" } }]));
+    const prompt = panel.locator(".card.prompt.waiting");
+    await prompt.waitFor({ timeout: 30_000 });
+    expect(await prompt.locator(".card-detail").textContent()).toBe("echo should-not-run");
+    await prompt.getByRole("button", { name: "Don't run", exact: true }).click();
+    await expect.poll(last, { timeout: 30_000 }).toContain("The user declined to run this command");
+
+    await panel.getByLabel("Review").uncheck();
+    if (!JUPYTER_URL) {
+      // This Jupyter runs here; on Windows the kernel's machine has no terminal sessions to offer.
+      if (process.platform !== "win32") return;
+      await send(panel, script([{ tool: "run_shell", args: { command: "echo hi" } }]));
+      await expect.poll(last, { timeout: 60_000 }).toContain("need a Linux or macOS machine");
+      return;
+    }
+    await send(
+      panel,
+      script([
+        { tool: "run_shell", args: { command: "cd /tmp && export GREETING=hi && echo ready" } },
+        { tool: "run_shell", args: { command: 'pwd; echo "$GREETING"; exit_code_test() { return 3; }; exit_code_test' } },
+        { tool: "run_shell", args: { command: "sleep 3; echo late", wait_seconds: 1 } },
+        { tool: "shell_wait", args: {} },
+        { tool: "run_code", args: { code: "x * 3" } },
+        { tool: "run_code", args: { code: "import time\ntime.sleep(3)\nprint('woke')", wait_seconds: 1 }, capture: { id: "run id (exec-\\d+)" } },
+        { tool: "wait_for_code", args: { run_id: "{{id}}" } },
+      ]),
+    );
+    await expect.poll(last, { timeout: 120_000 }).toContain("RESULT wait_for_code");
+    const text = (await last())!;
+    expect(text).toMatch(/RESULT run_shell: exit code 0 · \d+\.\d s\s*ready/);
+    expect(text).toMatch(/RESULT run_shell \(error\): exit code 3 · [^\n]*\s*\/tmp\s*hi/);
+    expect(text).toMatch(/RESULT run_shell: still running after/);
+    expect(text).toMatch(/RESULT shell_wait: exit code 0 · [3-9]\.\d s\s*late/);
+    expect(text).toMatch(/RESULT run_code: ok\s*21/);
+    expect(text).toMatch(/RESULT run_code: still running after [^\n]*\(run id exec-\d+\)/);
+    expect(text).toMatch(/RESULT wait_for_code: ok\s*woke/);
+    expect(await widgets()).toEqual(before);
   }, 240_000);
 
   it("manages a custom ACP command and selects its model before chatting", async () => {

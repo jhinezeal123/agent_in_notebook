@@ -27,7 +27,8 @@ export interface ChatSettings {
 
 export const DEFAULT_SETTINGS: ChatSettings = { scope: "write", review: true, targetCellIds: [], notebookOnly: true };
 
-export type ToolAction = "read" | "update" | "insert" | "delete" | "move" | "run" | "interrupt";
+/** `execute`: run code or a shell command on the kernel without a cell. */
+export type ToolAction = "read" | "update" | "insert" | "delete" | "move" | "run" | "execute" | "interrupt";
 
 export type PolicyDecision =
   | { allow: true; review: boolean; askBeforeRun: boolean }
@@ -82,13 +83,17 @@ export function decide(
       }
       return { allow: true, review: action === "move" ? false : review, askBeforeRun: false };
     case "run":
+    case "execute":
     case "interrupt":
       if (scope !== "auto") {
         return {
           allow: false,
-          reason: `Mode is '${SCOPE_LABEL[scope]}': running cells is not allowed. Tell the user which cells to run instead.`,
+          reason:
+            action === "execute"
+              ? `Mode is '${SCOPE_LABEL[scope]}': running code is not allowed. Tell the user the command or code to run instead.`
+              : `Mode is '${SCOPE_LABEL[scope]}': running cells is not allowed. Tell the user which cells to run instead.`,
         };
       }
-      return { allow: true, review: false, askBeforeRun: review && action === "run" };
+      return { allow: true, review: false, askBeforeRun: review && action !== "interrupt" };
   }
 }

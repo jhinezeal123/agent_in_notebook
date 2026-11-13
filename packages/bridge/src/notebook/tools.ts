@@ -14,6 +14,7 @@ import {
   type CellInfo,
   type CellOutput,
   type ChatSettings,
+  type ExecResult,
   type NotebookInfo,
   type NotebookOp,
   type NotebookOpName,
@@ -24,6 +25,8 @@ import {
   type ToolAction,
   wasShortened,
 } from "@ainb/protocol";
+import { RecentRuns } from "./exec.js";
+import { SCROLLBACK, SESSION_NAME, ShellError, type KernelExec, type Report, type ShellSession, type ShellSessions } from "./shell.js";
 
 export type ReviewOutcome = "accepted" | "rejected" | "pending" | "discarded";
 
@@ -34,8 +37,8 @@ export interface ToolContext {
   call<N extends NotebookOpName>(op: NotebookOpOf<N>, timeoutMs?: number): Promise<NotebookOpResults[N]>;
   /** Wait for a review the page opened. */
   awaitReview(reviewId: string, waitMs: number): Promise<ReviewOutcome>;
-  /** In review mode, ask the user before running cells. Resolves true to run. */
-  confirmRun(summary: string): Promise<boolean>;
+  /** In review mode, ask the user before running code. `detail` shows what would run. Resolves true to run. */
+  confirmRun(summary: string, detail?: string): Promise<boolean>;
   /** Longest a call may block on the user or a running cell. */
   waitMs: number;
   /** The agent reads images in tool results, so plots are attached rather than described as hidden. */
@@ -46,6 +49,10 @@ export interface ToolContext {
    * second would undo the first, and runs on Jupyter go through the active cell.
    */
   exclusive<T>(lock: "edit" | "run", fn: () => Promise<T>): Promise<T>;
+  /** Outputs of the chat's latest run_shell / run_code calls, for read_output. */
+  runs: RecentRuns;
+  /** The chat's terminal sessions on the notebook's machine. */
+  shells: ShellSessions;
 }
 
 export interface ToolResult {
@@ -123,6 +130,10 @@ export const RUN_BUDGET = 30_000;
 const RUN_OUTPUT_MIN = 1200;
 /** One read_output page. */
 const PAGE_MAX = 12_000;
+/** Output of one terminal / run_code result. */
+const EXEC_OUTPUT_MAX = 10_000;
+/** What a tool call keeps of its time for answering after a wait. */
+const WAIT_MARGIN_MS = 10_000;
 
 const SHORTENED_HINT = "(output shortened: read_output with this cell id pages through or searches all of it)";
 
@@ -231,6 +242,13 @@ function reviewText(outcome: ReviewOutcome, what: string, reviewId: string): Too
 }
 
 const cellId = z.string().describe("Cell id, as shown by list_cells.");
+const sessionArg = z.string().regex(SESSION_NAME).optional().describe('Terminal session name, like a terminal tab (letters, digits, - and _). Default "main".');
+const waitArg = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe("Return after this long even if it is still running (it keeps running). Default: as long as this tool call may take.");
 
 export const TOOLS = [
   tool({
@@ -260,9 +278,9 @@ export const TOOLS = [
   tool({
     name: "read_output",
     description:
-      "The full text output of one code cell, for when a result was shortened. Search it with pattern (a regular expression, case-insensitive) or page through it with start_line / line_count.",
+      "The full text output of one code cell, or of a run_shell / run_code result, for when it was shortened. Search it with pattern (a regular expression, case-insensitive) or page through it with start_line / line_count.",
     schema: z.object({
-      cell_id: cellId,
+      cell_id: z.string().describe("Cell id, or the run id (run-N) a run_shell / run_code result named."),
       pattern: z.string().min(1).optional().describe("Show only the lines matching this, with context."),
       context_lines: z.number().int().min(0).max(20).optional().describe("Lines shown around each match. Default 2."),
       start_line: z.number().int().min(1).optional().describe("First line to show (1-based). Default 1."),
@@ -270,10 +288,15 @@ export const TOOLS = [
     }),
     async run(ctx, a) {
       check(ctx, "read", null);
-      const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true })).cells[0];
-      if (!cell) throw new Denied(`No cell with id "${a.cell_id}". Call list_cells to see the current ids.`);
-      const text = outputsToText(cell.outputs ?? [], Infinity);
-      if (!text) return { text: `Cell ${a.cell_id} has no text output.` };
+      let outputs = ctx.runs.get(a.cell_id);
+      if (!outputs) {
+        if (/^run-\d+$/.test(a.cell_id)) throw new Denied(`The output of ${a.cell_id} is no longer kept (only the latest runs are). Run it again.`);
+        const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true })).cells[0];
+        if (!cell) throw new Denied(`No cell with id "${a.cell_id}". Call list_cells to see the current ids.`);
+        outputs = cell.outputs ?? [];
+      }
+      const text = outputsToText(outputs, Infinity);
+      if (!text) return { text: `${a.cell_id.startsWith("run-") ? "Run" : "Cell"} ${a.cell_id} has no text output.` };
       return { text: a.pattern ? searchLines(text, a.pattern, a.context_lines ?? 2) : pageLines(text, a.start_line ?? 1, a.line_count ?? 200) };
     },
   }),
@@ -424,6 +447,138 @@ export const TOOLS = [
     },
   }),
   tool({
+    name: "run_shell",
+    description:
+      "Run a command in a terminal on the machine the notebook's kernel runs on (the Colab or Kaggle VM), as you would in a terminal on your own computer. " +
+      "Each session is a persistent interactive bash: cd, exported variables and an activated environment carry over to the next command, and it outlives kernel restarts. " +
+      "Commands run until they finish, however long. If one is still running when this call has waited long enough, you get its output so far and it keeps running: " +
+      "then use shell_wait, shell_input (to answer a prompt) or shell_interrupt (Ctrl+C). " +
+      "Use more sessions, by name, to run things side by side (a server in one, commands in another). " +
+      "You see what the terminal shows (progress bars in their final state). The notebook's Python variables are not visible here; run_code sees them. " +
+      "Steps the notebook needs in order to run again (installs it imports, downloads it reads) still belong in cells.",
+    schema: z.object({
+      command: z.string().min(1).describe("What to type at the prompt; may span several lines."),
+      session: sessionArg,
+      wait_seconds: waitArg,
+    }),
+    async run(ctx, a) {
+      const d = check(ctx, "execute", null);
+      await requirePython(ctx);
+      const name = a.session ?? "main";
+      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(`Run in the notebook machine's terminal${name === "main" ? "" : ` (${name})`}`, a.command))) {
+        return { text: "The user declined to run this command. Nothing was run." };
+      }
+      const deadline = Date.now() + waitWindow(ctx, a.wait_seconds);
+      const exec = kernelExec(ctx);
+      return ctx.shells.exclusive(name, async (sh) => {
+        const { paused: before } = await catchUp(sh, exec, deadline);
+        if (sh.state === "running") return busySession(sh);
+        // A command that ended after the agent last looked: say how, before the new one.
+        const previous = sh.command?.end ? shellResult(ctx, sh, sh.report(false)) : undefined;
+        await sh.start(exec, a.command);
+        const cmd = sh.command!;
+        const { paused } = await sh.pollUntil(exec, () => !!cmd.end, deadline);
+        const result = shellResult(ctx, sh, sh.report(paused || before));
+        if (previous) result.text = `(the previous command ended meanwhile: ${previous.text})\n\n${result.text}`;
+        return result;
+      });
+    },
+  }),
+  tool({
+    name: "shell_wait",
+    description:
+      "Wait for the command running in a terminal session and show what it printed since you last looked, or, with nothing running, what background jobs printed.",
+    schema: z.object({ session: sessionArg, wait_seconds: waitArg }),
+    async run(ctx, a) {
+      check(ctx, "read", null);
+      const name = a.session ?? "main";
+      const deadline = Date.now() + waitWindow(ctx, a.wait_seconds);
+      const exec = kernelExec(ctx);
+      return ctx.shells.exclusive(name, async (sh) => {
+        if (sh.state === "new") await sh.open(exec, deadline);
+        const cmd = sh.command;
+        const { paused } = await sh.pollUntil(exec, () => sh.state !== "running" || !!cmd?.end, deadline);
+        return shellResult(ctx, sh, sh.report(paused));
+      });
+    },
+  }),
+  tool({
+    name: "shell_input",
+    description:
+      "Type into the program running in a terminal session (answer a prompt, feed a REPL), then show what it printed. " +
+      "Enter is pressed after the text unless press_enter is false. Control characters work too: \\u0004 is Ctrl+D, \\u001b is Escape.",
+    schema: z.object({
+      text: z.string(),
+      session: sessionArg,
+      press_enter: z.boolean().optional().describe("Default true."),
+    }),
+    async run(ctx, a) {
+      const d = check(ctx, "execute", null);
+      const name = a.session ?? "main";
+      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(`Type into the terminal${name === "main" ? "" : ` (${name})`}`, a.text))) {
+        return { text: "The user declined. Nothing was typed." };
+      }
+      const exec = kernelExec(ctx);
+      return ctx.shells.exclusive(name, async (sh) => {
+        await catchUp(sh, exec, Date.now() + waitWindow(ctx));
+        if (sh.state !== "running") return { text: `Nothing is running in session "${name}". Use run_shell to run a command.`, isError: true };
+        const cmd = sh.command;
+        await sh.type(exec, a.text + (a.press_enter ?? true ? "\r" : ""));
+        const { paused } = await sh.pollUntil(exec, () => !!cmd?.end, Date.now() + Math.min(2_000, waitWindow(ctx)));
+        return shellResult(ctx, sh, sh.report(paused));
+      });
+    },
+  }),
+  tool({
+    name: "shell_interrupt",
+    description: "Press Ctrl+C in a terminal session, stopping the command running there, and show its last output.",
+    schema: z.object({ session: sessionArg }),
+    async run(ctx, a) {
+      check(ctx, "interrupt", null);
+      const name = a.session ?? "main";
+      const exec = kernelExec(ctx);
+      return ctx.shells.exclusive(name, async (sh) => {
+        await catchUp(sh, exec, Date.now() + waitWindow(ctx));
+        if (sh.state !== "running") return { text: `Nothing is running in session "${name}".` };
+        const cmd = sh.command;
+        await sh.type(exec, "\u0003");
+        const { paused } = await sh.pollUntil(exec, () => !!cmd?.end, Date.now() + Math.min(5_000, waitWindow(ctx)));
+        return shellResult(ctx, sh, sh.report(paused));
+      });
+    },
+  }),
+  tool({
+    name: "run_code",
+    description:
+      "Run code on the notebook's kernel, in its language, without adding a cell, and see its output: it sees and changes the notebook's variables " +
+      "(df.shape, df.head(), a model's config, torch.cuda.is_available()). It runs until it finishes, like a cell; if it is still running when this call " +
+      "has waited long enough, you get its output so far and a run id for wait_for_code, and the kernel stays busy meanwhile (interrupt_kernel stops it). " +
+      "Not while a cell is running. Work the notebook depends on belongs in cells (insert_cell, run_cells).",
+    schema: z.object({ code: z.string().min(1), wait_seconds: waitArg }),
+    async run(ctx, a) {
+      const d = check(ctx, "execute", null);
+      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun("Run code on the kernel (no cell is added)", a.code))) {
+        return { text: "The user declined to run this code. Nothing was run." };
+      }
+      const waitMs = waitWindow(ctx, a.wait_seconds);
+      const started = Date.now();
+      const res = await ctx.exclusive("run", () => ctx.call({ op: "execute", code: a.code, waitMs }, waitMs + 30_000));
+      return codeResult(ctx, res, Date.now() - started);
+    },
+  }),
+  tool({
+    name: "wait_for_code",
+    description: "Keep waiting for code run_code left running, by the run id it gave.",
+    schema: z.object({ run_id: z.string().min(1), wait_seconds: waitArg }),
+    async run(ctx, a) {
+      check(ctx, "read", null);
+      const waitMs = waitWindow(ctx, a.wait_seconds);
+      const started = Date.now();
+      const res = await ctx.exclusive("run", () => ctx.call({ op: "execute_wait", execId: a.run_id, waitMs }, waitMs + 30_000));
+      return codeResult(ctx, res, Date.now() - started);
+    },
+  }),
+  tool({
     name: "interrupt_kernel",
     description: "Interrupt the running kernel (stop the executing cell).",
     schema: z.object({}),
@@ -502,6 +657,99 @@ function searchLines(text: string, pattern: string, context: number): string {
   return `${hits.length} matching line${hits.length === 1 ? "" : "s"} of ${lines.length}.${extra}\n${body}`;
 }
 
+/** How long a call waits: what was asked, within what is left of the tool call's time. */
+function waitWindow(ctx: ToolContext, seconds?: number): number {
+  return Math.max(1_000, Math.min((seconds ?? Infinity) * 1000, ctx.waitMs - WAIT_MARGIN_MS));
+}
+
+function kernelExec(ctx: ToolContext): KernelExec {
+  return (code, waitMs) => ctx.call({ op: "execute", code, waitMs }, waitMs + 15_000);
+}
+
+async function requirePython(ctx: ToolContext): Promise<void> {
+  const info = await ctx.call({ op: "info" });
+  if (info.language !== "python") {
+    throw new Denied(`The terminal is reached through a Python kernel; this notebook's kernel runs ${info.language}. Use run_code with the language's own call (system() in R, run() in Julia).`);
+  }
+}
+
+export function duration(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${Math.round(s - m * 60)} s`;
+  return `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+/** Open the session (or find it again after a bridge restart), then read what it printed meanwhile. */
+async function catchUp(sh: ShellSession, exec: KernelExec, deadline: number): Promise<{ paused: boolean }> {
+  if (sh.state === "new" || sh.state === "exited") {
+    await sh.open(exec, deadline);
+    return { paused: false };
+  }
+  return sh.refresh(exec);
+}
+
+function busySession(sh: ShellSession): ToolResult {
+  const c = sh.command;
+  return {
+    text:
+      `Session "${sh.name}" is still running ${c ? `\`${firstLine(c.command, 60)}\` (for ${duration(Date.now() - c.startedAt)})` : "a command"}. ` +
+      "Wait for it (shell_wait), answer it (shell_input), stop it (shell_interrupt), or run this in another session (session: \"<name>\").",
+    isError: true,
+  };
+}
+
+/** Text of an output for the agent, shortened when long, the full text kept for read_output. */
+function shortened(ctx: ToolContext, text: string, full = text): string {
+  const body = capLines(text, EXEC_OUTPUT_MAX, 0.3);
+  if (!wasShortened(body)) return body;
+  const id = ctx.runs.add([{ kind: "stream", name: "stdout", text: full }]);
+  return `${body}\n(output shortened: read_output with cell_id "${id}" pages through or searches all of it)`;
+}
+
+function shellResult(ctx: ToolContext, sh: ShellSession, r: Report): ToolResult {
+  const where = sh.name === "main" ? "" : ` · session ${sh.name}`;
+  const notes: string[] = [];
+  const cmd = r.command;
+  let head: string;
+  let failed = false;
+  if (r.state === "exited") {
+    head = `the shell exited${r.exitCode != null ? ` (exit code ${r.exitCode})` : ""}${where}; the next run_shell starts a new one`;
+  } else if (r.full !== undefined && cmd) {
+    head = `exit code ${cmd.status}${cmd.status === 130 ? " (interrupted)" : ""} · ${duration(Date.now() - cmd.startedAt)}${where}`;
+    failed = cmd.status !== 0;
+  } else if (cmd && r.state === "running") {
+    head =
+      `still running after ${duration(Date.now() - cmd.startedAt)}${where}. It keeps running: shell_wait for more output, ` +
+      "shell_input to type into it, shell_interrupt for Ctrl+C";
+  } else {
+    head = `idle${where}`;
+  }
+  if (r.paused) notes.push("(the kernel was busy running a cell, so the terminal could not be read for part of this wait; the command itself kept running)");
+  if (r.screen) notes.push("(a full-screen program is showing; this is its screen)");
+  if (r.scrolledOut) notes.push(`(the start of this output scrolled out of the terminal's ${SCROLLBACK}-line scrollback)`);
+  const parts = [head, ...notes];
+  if (r.between) parts.push(`(printed in the terminal before this command, by background jobs:)\n${capLines(r.between, 3000, 0.3)}\n(the command's output:)`);
+  const text = r.text || (r.full !== undefined || r.state === "running" ? "(no output)" : "");
+  if (text) parts.push(shortened(ctx, text, r.full ?? text));
+  return { text: parts.join("\n"), isError: failed || undefined };
+}
+
+function codeResult(ctx: ToolContext, res: ExecResult, ms: number): ToolResult {
+  const att = new Attachments(ctx.images);
+  let head: string;
+  if (res.status === "running") {
+    head =
+      `still running after ${duration(ms)} (run id ${res.execId}). The kernel stays busy until it ends: ` +
+      "wait_for_code with this run id for the rest, interrupt_kernel to stop it";
+  } else head = res.status === "ok" ? "ok" : `error${res.message ? ` — ${res.message}` : ""}`;
+  const body = res.outputs.length ? outputsToText(res.outputs, EXEC_OUTPUT_MAX, att.attach) : "";
+  let text = `${head}\n${body || "(no output)"}`;
+  if (wasShortened(body)) text += `\n(output shortened: read_output with cell_id "${ctx.runs.add(res.outputs)}" pages through or searches all of it)`;
+  return att.result(text, res.status === "error");
+}
+
 async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: number): Promise<ToolResult> {
   const timeoutMs = Math.min((timeoutSeconds ?? Infinity) * 1000, ctx.waitMs);
   // One run at a time: the kernel runs cells one after another anyway, and Jupyter runs "the active cell".
@@ -548,7 +796,7 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
   try {
     return await (t as ToolDef<z.ZodType>).run(ctx, parsed.data);
   } catch (e) {
-    if (e instanceof Denied) return { text: e.message, isError: true };
+    if (e instanceof Denied || e instanceof ShellError) return { text: e.message, isError: true };
     return { text: `${name} failed: ${(e as Error).message}`, isError: true };
   }
 }

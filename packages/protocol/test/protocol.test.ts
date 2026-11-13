@@ -64,12 +64,18 @@ describe("decide", () => {
     expect(decide(s({ scope: "write", review: true }), "move", "a", [])).toEqual({ allow: true, review: false, askBeforeRun: false });
     expect(decide(s({ scope: "write" }), "run", "a", []).allow).toBe(false);
     expect(decide(s({ scope: "write" }), "interrupt", null, []).allow).toBe(false);
+    const exec = decide(s({ scope: "write" }), "execute", null, []);
+    expect(exec.allow).toBe(false);
+    expect(!exec.allow && exec.reason).toMatch(/running code is not allowed/);
+    expect(decide(s({ scope: "cell" }), "execute", null, ["a"]).allow).toBe(false);
   });
 
   it("auto scope runs, asking first only in review", () => {
     expect(decide(s({ scope: "auto", review: false }), "run", "a", [])).toEqual({ allow: true, review: false, askBeforeRun: false });
     expect(decide(s({ scope: "auto", review: true }), "run", "a", [])).toEqual({ allow: true, review: false, askBeforeRun: true });
     expect(decide(s({ scope: "auto", review: true }), "interrupt", null, [])).toEqual({ allow: true, review: false, askBeforeRun: false });
+    expect(decide(s({ scope: "auto", review: true }), "execute", null, [])).toEqual({ allow: true, review: false, askBeforeRun: true });
+    expect(decide(s({ scope: "auto", review: false }), "execute", null, [])).toEqual({ allow: true, review: false, askBeforeRun: false });
   });
 });
 
