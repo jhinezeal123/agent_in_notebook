@@ -7,6 +7,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "bridge": "pnpm --filter @ainb/bridge start"
+    "bridge": "pnpm --filter @ainb/bridge start",
+    "ainb": "node packages/bridge/dist/cli.js"
   }
 }

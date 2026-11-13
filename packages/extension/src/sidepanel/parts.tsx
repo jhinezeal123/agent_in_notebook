@@ -15,7 +15,7 @@ export interface PartActions {
 
 type PromptPart = Extract<Part, { type: "prompt" }>;
 
-async function copyText(text: string, button?: HTMLElement): Promise<void> {
+export async function copyText(text: string, button?: HTMLElement): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
     if (button) {

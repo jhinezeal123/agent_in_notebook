@@ -40,6 +40,8 @@ export interface BridgeOptions {
   /** Extra allowed WebSocket origins besides chrome-extension://. */
   allowOrigins?: string[];
   log?: (msg: string) => void;
+  /** Called on an authorized POST /shutdown. */
+  onShutdown?: () => void;
 }
 
 export class Bridge {
@@ -97,7 +99,8 @@ export class Bridge {
     clearInterval(this.pingTimer);
     for (const c of this.chats.values()) c.close();
     this.chats.clear();
-    this.ext?.ws.close();
+    // Tells the extension not to reconnect (or start a new bridge) by itself.
+    this.ext?.ws.close(4001, "stopped");
     this.wss.close();
     await new Promise<void>((r) => this.server.close(() => r()));
   }
@@ -351,10 +354,17 @@ export class Bridge {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, version: BRIDGE_VERSION, extension: !!this.ext });
     }
-    if (!isLoopback(req) || req.method !== "POST" || !url.pathname.startsWith("/mcp/")) return json(res, 404, { error: "not found" });
+    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || url.pathname === "/shutdown")) return json(res, 404, { error: "not found" });
     // Browsers attach Origin to cross-site requests; the relay is for local processes only.
     if (req.headers.origin) return json(res, 403, { error: "forbidden" });
     const auth = req.headers.authorization ?? "";
+    if (url.pathname === "/shutdown") {
+      // `ainb stop`, for a bridge running in the background with no console to Ctrl+C.
+      if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });
+      json(res, 200, { ok: true });
+      setTimeout(() => this.opts.onShutdown?.(), 50);
+      return;
+    }
     const chat = this.byToken.get(auth.replace(/^Bearer\s+/i, ""));
     if (!chat) return json(res, 401, { error: "unknown chat token" });
 

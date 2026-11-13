@@ -8,6 +8,19 @@ import type { NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } fr
 export const BRIDGE_DEFAULT_PORT = 47821;
 export const WIRE_VERSION = 1;
 
+// ---------------------------------------------------------------- native messaging
+
+/** The name `ainb install` registers the bridge under as a browser native messaging host. */
+export const NATIVE_HOST = "com.agent_in_notebook.bridge";
+/** The extension's ID, fixed by the `key` in its manifest. */
+export const EXTENSION_ID = "mkdjlgboacefhokakjlobfailhipgklf";
+
+/** One request to the native host: start the bridge if needed and say how to reach it. */
+export type NativeRequest = { type: "connect" };
+export type NativeReply =
+  | { ok: true; port: number; token: string; version: string; started: boolean }
+  | { ok: false; error: string; log?: string };
+
 export type Envelope =
   | { kind: "req"; id: number; method: string; params: unknown }
   | { kind: "res"; id: number; ok: true; result: unknown }

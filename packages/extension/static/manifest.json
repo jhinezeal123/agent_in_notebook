@@ -4,11 +4,12 @@
   "description": "Let Claude Code, Codex, Gemini CLI, OpenCode or any ACP agent work in your Colab and Kaggle notebooks.",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArekekFAywP6uVQpkPwbJlZpi0SKbkWl5732vT7p1LOXZniXBVdKpnxrweGfSaCuQA1fGayoNO3kUNnevaUJHMzb11e9M8HoWuwpZ2wG0kUewn4YQmf6Mtjl3ChzccHBiQXb/DIgQWpEn5QQ48bu+WnU82OMb+Ggol2dyuIjK7Oo8Ze82UCeGAhMsbpeEwos5SkZtHtzfOVGjAE809cdlMOP17PWyuBND/8Fy8AyscGKPLIr6ifnOkFD6xlFRy16TfuaGgFE7f0cFx0JmEx9+UA0FXsz6CjeAxCf3T+cH1mD/w8wI8p0M9TMxa0DCs0OPPqaBB+nbp5tV8NGjvW997QIDAQAB",
   "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
   "action": { "default_title": "Agent in Notebook", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
   "side_panel": { "default_path": "sidepanel.html" },
   "background": { "service_worker": "background.js", "type": "module" },
-  "permissions": ["sidePanel", "storage", "tabs", "webNavigation", "alarms", "clipboardWrite"],
+  "permissions": ["sidePanel", "storage", "tabs", "webNavigation", "alarms", "clipboardWrite", "nativeMessaging"],
   "host_permissions": [
     "https://colab.research.google.com/*",
     "https://*.kaggle.com/*",

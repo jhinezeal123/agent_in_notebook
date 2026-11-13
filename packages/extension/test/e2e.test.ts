@@ -107,7 +107,11 @@ async function openPanel(notebookPage: Page): Promise<Page> {
   const tabId = await tabIdOf(notebookPage);
   const panel = await ctx.newPage();
   await panel.goto(`chrome-extension://${extId}/sidepanel.html?tab=${tabId}`);
-  if (await panel.getByText("Connect to the bridge").isVisible().catch(() => false)) {
+  // Either the setup screen or, once paired, the main view.
+  await panel.locator(".setup, .app").first().waitFor({ timeout: 30_000 });
+  if (await panel.locator(".setup").count()) {
+    // No native host in this browser: pair by hand.
+    await panel.getByText("Connect with a pairing token instead").click();
     await panel.getByPlaceholder("from the bridge's console").fill(TOKEN);
     await panel.getByLabel("Port").fill(String(PORT));
     await panel.getByRole("button", { name: "Connect" }).click();

@@ -2,13 +2,24 @@
 // router for notebook ops to the right tab and frame, and the hub for side
 // panels.
 
-import { BRIDGE_DEFAULT_PORT, notebookKey, RpcPeer, WIRE_VERSION, type Envelope, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
+import {
+  BRIDGE_DEFAULT_PORT,
+  NATIVE_HOST,
+  notebookKey,
+  RpcPeer,
+  WIRE_VERSION,
+  type Envelope,
+  type NativeReply,
+  type NativeRequest,
+  type NotebookInfo,
+  type NotebookOp,
+} from "@ainb/protocol";
 import type { BackgroundToContent, ContentToBackground, OpResponse } from "../shared/page-messages.js";
-import type { BridgeState, PanelEvent, PanelRequest, PanelResponse } from "../shared/panel-messages.js";
+import type { BridgeState, NativeStatus, PanelEvent, PanelRequest, PanelResponse } from "../shared/panel-messages.js";
 
 const VERSION = chrome.runtime.getManifest().version;
 
-const state: BridgeState = { conn: "disconnected", agents: [], config: { port: BRIDGE_DEFAULT_PORT, token: "" } };
+const state: BridgeState = { conn: "disconnected", agents: [], config: { port: BRIDGE_DEFAULT_PORT, token: "" }, extensionId: chrome.runtime.id };
 /** Notebook frames by tab. */
 const tabs = new Map<number, { frameId: number; info: NotebookInfo }>();
 const panels = new Set<chrome.runtime.Port>();
@@ -20,14 +31,24 @@ let retryDelay = 1000;
 
 /** The bridge closes a connection with this code when a newer one replaces it. */
 const CLOSE_REPLACED = 4000;
+/** ...and with this one when it shuts down on purpose (Ctrl+C, `ainb stop`). */
+const CLOSE_STOPPED = 4001;
 const REPLACED_MESSAGE =
   "Another Chrome window or profile connected to the bridge, so this one stepped back. Connect again here to take over.";
+
+/** Ask the native host (which can start the bridge) before the next connection attempt. */
+let askNative = true;
+/** The bridge was stopped on purpose: no automatic reconnect or restart until the user asks. */
+let stopped = false;
+let connecting: Promise<void> | null = null;
 
 // ------------------------------------------------------------------ bridge
 
 async function loadConfig() {
-  const { config } = (await chrome.storage.local.get("config")) as { config?: { port?: unknown; token?: unknown } };
-  if (config && typeof config.port === "number") state.config = { port: config.port, token: String(config.token ?? "") };
+  const { config } = (await chrome.storage.local.get("config")) as { config?: { port?: unknown; token?: unknown; source?: unknown } };
+  if (config && typeof config.port === "number") {
+    state.config = { port: config.port, token: String(config.token ?? ""), source: config.source === "manual" ? "manual" : config.source === "native" ? "native" : undefined };
+  }
   // Remember a takeover across service-worker restarts (until the browser restarts),
   // or two profiles would keep stealing the bridge from each other.
   try {
@@ -48,7 +69,7 @@ function setConn(conn: BridgeState["conn"], error?: string) {
 }
 
 function scheduleReconnect() {
-  if (retryTimer || state.conn === "unpaired" || state.conn === "replaced") return;
+  if (retryTimer || stopped || state.conn === "unpaired" || state.conn === "replaced") return;
   retryTimer = setTimeout(() => {
     retryTimer = null;
     connect();
@@ -56,13 +77,60 @@ function scheduleReconnect() {
   retryDelay = Math.min(retryDelay * 2, 10_000);
 }
 
-function connect() {
+/**
+ * Ask the native host for the bridge's port and token; it starts the bridge if
+ * it is not running. Records the outcome in `state.native`.
+ */
+async function pairNatively(): Promise<boolean> {
+  let reply: NativeReply | undefined;
+  try {
+    reply = (await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: "connect" } satisfies NativeRequest)) as NativeReply;
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    const native: NativeStatus = /not found/i.test(msg) ? { status: "missing" } : /forbidden/i.test(msg) ? { status: "forbidden" } : { status: "error", error: msg };
+    state.native = native;
+    return false;
+  }
+  if (!reply?.ok) {
+    state.native = { status: "error", error: reply?.error ?? "The native host did not answer.", log: reply?.log };
+    return false;
+  }
+  state.native = { status: "ok" };
+  if (reply.port !== state.config.port || reply.token !== state.config.token || state.config.source !== "native") {
+    state.config = { port: reply.port, token: reply.token, source: "native" };
+    await chrome.storage.local.set({ config: state.config });
+  }
+  return true;
+}
+
+function connect(): void {
+  connecting ??= connectNow().finally(() => (connecting = null));
+}
+
+async function connectNow(): Promise<void> {
   if (state.conn === "replaced") return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  // Only start the bridge while a side panel is open: opening one is the user asking for it,
+  // and the browser starting up is not.
+  let fresh = false;
+  if (askNative && panels.size > 0 && state.config.source !== "manual") {
+    askNative = false;
+    setConn("connecting");
+    fresh = await pairNatively();
+    if (!fresh && state.native?.status === "error") {
+      setConn("disconnected", state.native.error);
+      return;
+    }
+  }
   if (!state.config.token) {
     setConn("unpaired", "Paste the pairing token printed by the bridge.");
     return;
   }
+  openSocket(fresh);
+}
+
+/** `fresh`: the config just came from the native host, so a rejected token is not worth asking it again. */
+function openSocket(fresh: boolean): void {
   setConn("connecting");
   const socket = new WebSocket(`ws://127.0.0.1:${state.config.port}/ext`);
   ws = socket;
@@ -92,8 +160,17 @@ function connect() {
       for (const [tabId, t] of tabs) peer.emit("notebook.attached", { tabId, info: t.info });
     } catch (e) {
       const msg = (e as Error).message;
-      setConn(/token/i.test(msg) ? "unpaired" : "disconnected", msg);
+      const badToken = /token/i.test(msg);
+      // The token may have been reset (`ainb token --reset`): the native host knows the new one.
+      const retry = badToken && !fresh && state.config.source !== "manual" && panels.size > 0;
+      setConn(badToken ? "unpaired" : "disconnected", badToken && fresh ? `${msg}. The running bridge has another token than config.json: restart it ("ainb stop", then open this panel again).` : msg);
       socket.close();
+      if (retry) {
+        askNative = true;
+        state.conn = "disconnected";
+        if (ws === socket) ws = null;
+        connect();
+      }
     }
   };
   socket.onmessage = (e) => {
@@ -111,7 +188,13 @@ function connect() {
       if (e.code === CLOSE_REPLACED) {
         setConn("replaced", REPLACED_MESSAGE);
         void chrome.storage.session?.set({ replaced: true }).catch(() => {});
+      } else if (e.code === CLOSE_STOPPED) {
+        stopped = true;
+        askNative = true;
+        setConn("disconnected", "The bridge was stopped.");
       } else if (state.conn !== "unpaired") {
+        // Not running, or it crashed: the native host can start it again.
+        askNative = true;
         setConn("disconnected", state.conn === "connected" ? "Lost the connection to the bridge." : "The bridge is not running.");
         scheduleReconnect();
       }
@@ -123,6 +206,8 @@ function reconnect() {
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = null;
   retryDelay = 1000;
+  stopped = false;
+  askNative = true;
   state.conn = "disconnected";
   void chrome.storage.session?.remove("replaced").catch(() => {});
   const old = ws;
@@ -246,7 +331,13 @@ async function handlePanel(method: string, params: any): Promise<unknown> {
       return state;
     case "config.set": {
       const port = Number(params.port) || BRIDGE_DEFAULT_PORT;
-      state.config = { port, token: String(params.token ?? "").trim() };
+      state.config = { port, token: String(params.token ?? "").trim(), source: "manual" };
+      await chrome.storage.local.set({ config: state.config });
+      reconnect();
+      return state;
+    }
+    case "config.auto": {
+      state.config = { ...state.config, source: undefined };
       await chrome.storage.local.set({ config: state.config });
       reconnect();
       return state;
@@ -292,7 +383,8 @@ chrome.runtime.onConnect.addListener((port) => {
     );
   });
   port.postMessage({ event: "state", params: state } satisfies PanelEvent);
-  if (state.conn === "disconnected") reconnect();
+  // Opening the panel is the user asking for the bridge: (re)start it if needed.
+  if (state.conn === "disconnected" || (state.conn === "unpaired" && state.config.source !== "manual")) reconnect();
 });
 
 // ------------------------------------------------------------------ startup
@@ -303,5 +395,5 @@ void loadConfig().then(connect);
 // A wake-up alarm reconnects after the worker was suspended without a socket.
 chrome.alarms.create("ainb-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(() => {
-  if (!ws) connect();
+  if (!ws && !stopped) connect();
 });

@@ -42,21 +42,31 @@ pnpm install
 pnpm build
 ```
 
-**1. Chạy bridge**
+**1. Nạp extension**
+
+`chrome://extensions` → bật *Developer mode* → *Load unpacked* → chọn `packages/extension/dist`. ID của extension cố định (`mkdjlgboacefhokakjlobfailhipgklf`, nhờ trường `key` trong manifest). Nếu bạn đã nạp bản cũ hơn (chưa có `key`), hãy gỡ nó ra rồi nạp lại.
+
+**2. Đăng ký bridge với trình duyệt (một lần)**
+
+```sh
+pnpm ainb install      # = node packages/bridge/dist/cli.js install
+```
+
+Lệnh này đăng ký bridge làm *native messaging host* cho Chrome, Chromium, Edge và Brave. Trên Windows nó ghi khóa registry trong `HKCU`, không cần quyền admin. Từ đó, khi bạn mở side panel, extension tự bật bridge nếu bridge chưa chạy và tự ghép nối, không cần mở terminal hay dán token. Nếu bạn chuyển thư mục project hoặc đổi bản Node, hãy chạy lại `install`. Gỡ đăng ký bằng `pnpm ainb uninstall`.
+
+Bridge được bật theo cách này sẽ chạy nền và ghi log vào `~/.agent-in-notebook/bridge.log`. Các lệnh đi kèm: `pnpm ainb status`, `pnpm ainb stop`. Sau `stop`, extension không tự bật lại bridge cho tới khi bạn bấm **Start the bridge** hoặc mở lại side panel.
+
+Vẫn có thể chạy bridge bằng tay như trước, chẳng hạn để xem log trực tiếp hoặc khi bridge chạy trong WSL:
 
 ```sh
 pnpm bridge            # = node packages/bridge/dist/cli.js serve
 ```
 
-Bridge in ra **pairing token** và danh sách agent tìm thấy trên máy. In lại token: `node packages/bridge/dist/cli.js token`. Đổi token: thêm `--reset`.
-
-**2. Nạp extension**
-
-`chrome://extensions` → bật *Developer mode* → *Load unpacked* → chọn `packages/extension/dist`.
+Bridge in ra **pairing token**; dán token đó vào mục *Connect with a pairing token instead* trên side panel. In lại token: `pnpm ainb token`. Đổi token: thêm `--reset`.
 
 **3. Dùng**
 
-Mở một notebook Colab hoặc Kaggle (ở chế độ chỉnh sửa), bấm icon extension để mở side panel, dán pairing token, chọn agent, chọn mode, rồi chat. Nếu notebook đã mở từ trước khi cài extension, hãy reload tab một lần.
+Mở một notebook Colab hoặc Kaggle (ở chế độ chỉnh sửa), bấm icon extension để mở side panel, chọn agent, chọn mode, rồi chat. Nếu notebook đã mở từ trước khi cài extension, hãy reload tab một lần.
 
 ### Agent
 
@@ -96,6 +106,7 @@ jupyter notebook --JupyterNotebookApp.expose_app_in_browser=True
 ## Bảo mật
 
 - Bridge chỉ nghe trên `127.0.0.1`. WebSocket chỉ nhận origin `chrome-extension://` **và** đúng pairing token, nên trang web lạ không gọi vào được.
+- Native messaging: trình duyệt chỉ cho extension có ID nằm trong `allowed_origins` gọi native host, nên chỉ extension này nhận được token từ host. `POST /shutdown` (`ainb stop`) cần pairing token và bị từ chối nếu có header `Origin`.
 - Mỗi chat có một token riêng cho MCP relay. Relay từ chối mọi request có header `Origin` (tức là đến từ trình duyệt).
 - Agent chạy trong thư mục riêng `~/.agent-in-notebook/workspaces/<notebook>` (mỗi notebook một thư mục). Bridge không sửa config của agent.
 - Lịch sử chat được lưu ở `~/.agent-in-notebook/chats/` (tối đa 200 tin nhắn gần nhất mỗi notebook). Lịch sử và thư mục làm việc không được dùng trong 30 ngày sẽ bị xóa khi bridge khởi động.
@@ -114,6 +125,9 @@ REAL_AGENTS=claude,codex,opencode pnpm --filter @ainb/bridge exec vitest run tes
 # E2E trên trình duyệt thật: Chromium + extension + bridge + Colab công khai + Jupyter local
 pnpm --filter @ainb/extension exec playwright install chromium
 E2E=1 AINB_E2E_JUPYTER=/đường/dẫn/tới/jupyter pnpm --filter @ainb/extension exec vitest run test/e2e.test.ts
+
+# Native messaging: đăng ký host cho trình duyệt của user (gỡ lại sau khi chạy xong)
+E2E_NATIVE=1 pnpm --filter @ainb/extension exec vitest run test/native-e2e.test.ts
 ```
 
 `AINB_DEBUG=1 pnpm bridge` in toàn bộ luồng ACP của agent (update, xin quyền, stderr).

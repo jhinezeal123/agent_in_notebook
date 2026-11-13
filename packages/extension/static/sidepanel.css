@@ -195,6 +195,12 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .field input { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); font-size: 13px; color: var(--fg); }
 .status { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 .status.unpaired, .status.replaced { color: var(--warn); }
+.cmd { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg-3); margin: 8px 0; }
+.cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; background: none; padding: 0; }
+.setup-log { font-size: 11px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-3); border-radius: 6px; padding: 6px 8px; }
+.setup details.manual { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 10px; }
+.setup details.manual summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.row-actions { display: flex; align-items: center; gap: 12px; }
 
 .agent-manager { width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); }
 .agent-manager::backdrop { background: rgba(0, 0, 0, .45); }
