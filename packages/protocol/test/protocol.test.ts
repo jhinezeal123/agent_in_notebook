@@ -66,7 +66,7 @@ describe("decide", () => {
     expect(decide(s({ scope: "write" }), "interrupt", null, []).allow).toBe(false);
     const exec = decide(s({ scope: "write" }), "execute", null, []);
     expect(exec.allow).toBe(false);
-    expect(!exec.allow && exec.reason).toMatch(/running code is not allowed/);
+    expect(!exec.allow && exec.reason).toMatch(/commands, code and changes to files on the notebook's machine are not allowed/);
     expect(decide(s({ scope: "cell" }), "execute", null, ["a"]).allow).toBe(false);
   });
 

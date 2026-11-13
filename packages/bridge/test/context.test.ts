@@ -2,45 +2,10 @@
 // read_output, data URIs kept through edits, and parallel edits serialized.
 
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, type ChatSettings, type NotebookOp } from "@ainb/protocol";
-import { RecentRuns } from "../src/notebook/exec.js";
-import { ShellSessions } from "../src/notebook/shell.js";
-import { callTool, RUN_BUDGET, type ToolContext } from "../src/notebook/tools.js";
+import type { NotebookOp } from "@ainb/protocol";
+import { callTool, RUN_BUDGET } from "../src/notebook/tools.js";
 import { FakeNotebook } from "./fixtures/fake-extension.js";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** A tool context on a FakeNotebook; `latency` makes ops slow enough for calls to overlap. */
-function context(
-  nb: FakeNotebook,
-  opts: { settings?: Partial<ChatSettings>; latency?: number; locks?: boolean; overrides?: Partial<ToolContext> } = {},
-): ToolContext {
-  const settings: ChatSettings = { ...DEFAULT_SETTINGS, scope: "auto", review: false, ...opts.settings };
-  const locks = new Map<string, Promise<unknown>>();
-  return {
-    settings: () => settings,
-    targets: () => [],
-    call: async (op) => {
-      if (opts.latency) await sleep(opts.latency);
-      const r = nb.handle(op as NotebookOp);
-      if (opts.latency) await sleep(opts.latency);
-      return r as never;
-    },
-    awaitReview: async () => "pending",
-    confirmRun: async () => true,
-    waitMs: 10_000,
-    images: false,
-    exclusive: (lock, fn) => {
-      if (opts.locks === false) return fn();
-      const run = (locks.get(lock) ?? Promise.resolve()).then(fn, fn);
-      locks.set(lock, run.catch(() => {}));
-      return run;
-    },
-    runs: new RecentRuns(),
-    shells: new ShellSessions(),
-    ...opts.overrides,
-  };
-}
+import { context } from "./fixtures/tool-context.js";
 
 function noisyLog(lines: number, tag = "") {
   return Array.from({ length: lines }, (_, i) => `${tag}step ${i + 1}/${lines} loss=${(1 / (i + 1)).toFixed(5)}`).join("\n") + "\n";
@@ -51,7 +16,7 @@ describe("long outputs", () => {
     const nb = new FakeNotebook([{ type: "code", source: "train()" }]);
     nb.cells[0]!.outputs = [{ kind: "stream", name: "stdout", text: noisyLog(3000) }];
     const ctx = context(nb);
-    const read = await callTool(ctx, "read_cells", {});
+    const read = await callTool(ctx, "Read", { file_path: "test.ipynb" });
     expect(read.text.length).toBeLessThan(7000);
     expect(read.text).toContain("read_output with this cell id");
 
@@ -82,18 +47,18 @@ describe("long outputs", () => {
 });
 
 describe("edits", () => {
-  it("shows pasted images as marks and keeps them through edit_cell and update_cell", async () => {
+  it("shows pasted images as marks and keeps them through Edit and NotebookEdit", async () => {
     const b64 = "iVBORw0KGgo".repeat(500);
     const nb = new FakeNotebook([{ type: "markdown", source: `# Plot\n![p](data:image/png;base64,${b64})\nold words` }]);
     const ctx = context(nb);
-    const read = await callTool(ctx, "read_cells", {});
+    const read = await callTool(ctx, "Read", { file_path: "/content/test.ipynb" });
     expect(read.text).not.toContain(b64.slice(0, 50));
     expect(read.text).toContain("[[ainb:data-1 4 KB hidden]]");
 
-    await callTool(ctx, "edit_cell", { cell_id: "c1", old_text: "old words", new_text: "new words" });
+    await callTool(ctx, "Edit", { file_path: "test.ipynb", old_string: "old words", new_string: "new words" });
     expect(nb.cells[0]!.source).toBe(`# Plot\n![p](data:image/png;base64,${b64})\nnew words`);
 
-    await callTool(ctx, "update_cell", { cell_id: "c1", source: "# Plot (v2)\n![p](data:image/png;base64,[[ainb:data-1 4 KB hidden]])" });
+    await callTool(ctx, "NotebookEdit", { notebook_path: "test.ipynb", cell_id: "c1", new_source: "# Plot (v2)\n![p](data:image/png;base64,[[ainb:data-1 4 KB hidden]])" });
     expect(nb.cells[0]!.source).toBe(`# Plot (v2)\n![p](data:image/png;base64,${b64})`);
   });
 
@@ -102,21 +67,15 @@ describe("edits", () => {
       const nb = new FakeNotebook([{ type: "code", source: "a = 1\nb = 2\nc = 3" }]);
       const ctx = context(nb, { latency: 5, locks });
       await Promise.all([
-        callTool(ctx, "edit_cell", { cell_id: "c1", old_text: "a = 1", new_text: "a = 10" }),
-        callTool(ctx, "edit_cell", { cell_id: "c1", old_text: "b = 2", new_text: "b = 20" }),
-        callTool(ctx, "edit_cell", { cell_id: "c1", old_text: "c = 3", new_text: "c = 30" }),
+        callTool(ctx, "Edit", { file_path: "test.ipynb", old_string: "a = 1", new_string: "a = 10" }),
+        callTool(ctx, "Edit", { file_path: "test.ipynb", old_string: "b = 2", new_string: "b = 20" }),
+        callTool(ctx, "Edit", { file_path: "test.ipynb", old_string: "c = 3", new_string: "c = 30" }),
       ]);
       return nb.cells[0]!.source;
     };
     // Without the lock, each edit reads the original source and the last write wins.
     expect(await run(false)).not.toBe("a = 10\nb = 20\nc = 30");
     expect(await run(true)).toBe("a = 10\nb = 20\nc = 30");
-  });
-
-  it("lists cells from summaries with their line counts", async () => {
-    const nb = new FakeNotebook([{ type: "code", source: "\nimport os\nx = 1\n" }]);
-    const res = await callTool(context(nb), "list_cells", {});
-    expect(res.text).toBe("[0] c1 code [ ] (4 lines): import os");
   });
 });
 
@@ -126,10 +85,10 @@ describe("the terminal on the notebook's machine", () => {
   it("runs commands in one persistent session and reports exit codes, adding no cell", async () => {
     const nb = new FakeNotebook([{ type: "code", source: "x = 1" }]);
     const ctx = context(nb, { overrides: long });
-    const first = await callTool(ctx, "run_shell", { command: "echo hello" });
+    const first = await callTool(ctx, "Bash", { command: "echo hello" });
     expect(first.isError).toBeUndefined();
     expect(first.text).toMatch(/^exit code 0 · \d+\.\d s\nhello$/);
-    const failed = await callTool(ctx, "run_shell", { command: "fail" });
+    const failed = await callTool(ctx, "Bash", { command: "fail" });
     expect(failed.isError).toBe(true);
     expect(failed.text).toMatch(/^exit code 1 · .*\nboom$/);
     // One shell for both: opened once, the setup typed once.
@@ -140,27 +99,27 @@ describe("the terminal on the notebook's machine", () => {
 
   it("shows what the screen shows: a progress bar in its final state", async () => {
     const nb = new FakeNotebook([]);
-    const res = await callTool(context(nb, { overrides: long }), "run_shell", { command: "progress" });
+    const res = await callTool(context(nb, { overrides: long }), "Bash", { command: "progress" });
     expect(res.text).toMatch(/^exit code 0 · .*\n100%\|##########\| 100\/100\nDone$/);
   });
 
   it("lets a long command keep running: wait, answer a prompt, interrupt", async () => {
     const nb = new FakeNotebook([]);
     const ctx = context(nb, { overrides: long });
-    const started = await callTool(ctx, "run_shell", { command: "forever", wait_seconds: 1 });
+    const started = await callTool(ctx, "Bash", { command: "forever", wait_seconds: 1 });
     expect(started.isError).toBeUndefined();
     expect(started.text).toMatch(/^still running after \d+\.\d s\. It keeps running: shell_wait.*\nworking\.\.\.$/);
     // The session is busy; another one is free.
-    const busy = await callTool(ctx, "run_shell", { command: "echo hi" });
+    const busy = await callTool(ctx, "Bash", { command: "echo hi" });
     expect(busy.isError).toBe(true);
     expect(busy.text).toMatch(/Session "main" is still running `forever`/);
-    expect((await callTool(ctx, "run_shell", { command: "echo side", session: "other" })).text).toMatch(/^exit code 0 · .* · session other\nside$/);
+    expect((await callTool(ctx, "Bash", { command: "echo side", session: "other" })).text).toMatch(/^exit code 0 · .* · session other\nside$/);
     // Waiting again shows only the line still being written, not the whole output again.
     expect((await callTool(ctx, "shell_wait", { wait_seconds: 1 })).text).toMatch(/^still running after .*\n\(no output\)$/);
     const stopped = await callTool(ctx, "shell_interrupt", {});
     expect(stopped.text).toMatch(/^exit code 130 \(interrupted\) · .*\n\^C$/);
 
-    const asked = await callTool(ctx, "run_shell", { command: "ask", wait_seconds: 1 });
+    const asked = await callTool(ctx, "Bash", { command: "ask", wait_seconds: 1 });
     expect(asked.text).toMatch(/still running.*\nContinue\? \[y\/N\]$/);
     const answered = await callTool(ctx, "shell_input", { text: "y" });
     // The answer shows as typed, the way a terminal echoes it.
@@ -171,9 +130,9 @@ describe("the terminal on the notebook's machine", () => {
   it("reports what background jobs printed between commands", async () => {
     const nb = new FakeNotebook([]);
     const ctx = context(nb, { overrides: long });
-    await callTool(ctx, "run_shell", { command: "echo started" });
+    await callTool(ctx, "Bash", { command: "echo started" });
     nb.vm.background("main", "server listening on :8000\r\n");
-    const res = await callTool(ctx, "run_shell", { command: "echo next" });
+    const res = await callTool(ctx, "Bash", { command: "echo next" });
     expect(res.text).toMatch(/^exit code 0 · .*\n\(printed in the terminal before this command, by background jobs:\)\nserver listening on :8000\n\(the command's output:\)\nnext$/);
     nb.vm.background("main", "GET / 200\r\n");
     expect((await callTool(ctx, "shell_wait", {})).text).toBe("idle\n(printed in the terminal before this command, by background jobs:)\nGET / 200\n(the command's output:)");
@@ -182,7 +141,7 @@ describe("the terminal on the notebook's machine", () => {
   it("keeps a long output for read_output", async () => {
     const nb = new FakeNotebook([]);
     const ctx = context(nb, { overrides: long });
-    const res = await callTool(ctx, "run_shell", { command: "lines 3000" });
+    const res = await callTool(ctx, "Bash", { command: "lines 3000" });
     expect(res.text.length).toBeLessThan(10_300);
     expect(res.text).toContain("line 3000");
     expect(res.text).toContain('read_output with cell_id "run-1"');
@@ -192,14 +151,14 @@ describe("the terminal on the notebook's machine", () => {
   it("notices when the shell exits and starts a new one next time", async () => {
     const nb = new FakeNotebook([]);
     const ctx = context(nb, { overrides: long });
-    expect((await callTool(ctx, "run_shell", { command: "exit 3" })).text).toMatch(/^the shell exited \(exit code 3\); the next run_shell starts a new one/);
-    expect((await callTool(ctx, "run_shell", { command: "echo again" })).text).toMatch(/^exit code 0 · .*\nagain$/);
+    expect((await callTool(ctx, "Bash", { command: "exit 3" })).text).toMatch(/^the shell exited \(exit code 3\); the next Bash call starts a new one/);
+    expect((await callTool(ctx, "Bash", { command: "echo again" })).text).toMatch(/^exit code 0 · .*\nagain$/);
     expect(nb.vm.ops.filter((o) => o === "open")).toHaveLength(2);
   });
 
   it("picks up a session that runs from before the bridge restarted", async () => {
     const nb = new FakeNotebook([]);
-    await callTool(context(nb, { overrides: long }), "run_shell", { command: "forever", wait_seconds: 1 });
+    await callTool(context(nb, { overrides: long }), "Bash", { command: "forever", wait_seconds: 1 });
     // A new bridge: no sessions in memory, the shell still runs on the machine.
     const fresh = context(nb, { overrides: long });
     const waited = await callTool(fresh, "shell_wait", { wait_seconds: 1 });
@@ -209,17 +168,17 @@ describe("the terminal on the notebook's machine", () => {
 
   it("is refused outside Autonomous mode, and asks first with review on", async () => {
     const nb = new FakeNotebook([]);
-    for (const [tool, args] of [["run_shell", { command: "ls" }], ["run_code", { code: "1" }], ["shell_input", { text: "y" }]] as const) {
+    for (const [tool, args] of [["Bash", { command: "ls" }], ["run_code", { code: "1" }], ["shell_input", { text: "y" }], ["Write", { file_path: "a.txt", content: "x" }]] as const) {
       const res = await callTool(context(nb, { settings: { scope: "write" } }), tool, args);
       expect(res.isError).toBe(true);
-      expect(res.text).toMatch(/running code is not allowed/);
+      expect(res.text).toMatch(/commands, code and changes to files on the notebook's machine are not allowed/);
     }
     const asked: [string, string | undefined][] = [];
     const ctx = context(nb, {
       settings: { review: true },
       overrides: { ...long, confirmRun: async (summary, detail) => (asked.push([summary, detail]), false) },
     });
-    expect((await callTool(ctx, "run_shell", { command: "rm -rf /content/tmp" })).text).toMatch(/declined/);
+    expect((await callTool(ctx, "Bash", { command: "rm -rf /content/tmp" })).text).toMatch(/declined/);
     expect(asked).toEqual([["Run in the notebook machine's terminal", "rm -rf /content/tmp"]]);
     expect(nb.vm.commands).toHaveLength(0);
   });
@@ -227,7 +186,7 @@ describe("the terminal on the notebook's machine", () => {
   it("needs a Python kernel to reach the machine", async () => {
     const nb = new FakeNotebook([]);
     nb.language = "R";
-    expect((await callTool(context(nb, { overrides: long }), "run_shell", { command: "ls" })).text).toMatch(/Python kernel.*system\(\) in R/);
+    expect((await callTool(context(nb, { overrides: long }), "Bash", { command: "ls" })).text).toMatch(/Python kernel.*system\(\) in R/);
   });
 });
 

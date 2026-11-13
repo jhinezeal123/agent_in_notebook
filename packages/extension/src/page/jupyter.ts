@@ -2,8 +2,9 @@
 // an iframe, with exposeAppInBrowser on, so window.jupyterapp is reachable).
 // Local Jupyter works the same when started with expose_app_in_browser.
 
-import { normalizeIpynbOutputs, type CellInfo, type CellType, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
-import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "@ainb/protocol";
+import { normalizeIpynbOutputs, type CellInfo, type CellType, type ExecResult, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
+import { KERNEL_BUSY, NoServerPython, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "@ainb/protocol";
+import { ServerPython, type TerminalLink } from "./server-python.js";
 import { createReviewCard } from "./review-widget.js";
 
 type Any = any;
@@ -32,6 +33,7 @@ export function detectJupyter(): boolean {
 export class JupyterAdapter implements NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
   private readonly cards = new Map<string, HTMLElement>();
+  private readonly server = new ServerPython(() => this.openTerminal());
 
   constructor() {
     this.platform = /(^|\.)kaggle\.(com|net)$/.test(location.hostname) || /kaggle/i.test(document.referrer) ? "kaggle" : "jupyter";
@@ -77,6 +79,7 @@ export class JupyterAdapter implements NotebookAdapter {
       kernel: !k ? "disconnected" : status === "idle" ? "idle" : status === "busy" ? "busy" : status === "dead" ? "disconnected" : "unknown",
       language: String(nb.model?.defaultKernelLanguage || panel.sessionContext?.kernelPreference?.language || "python"),
       docPath: typeof panel.context?.path === "string" ? panel.context.path : undefined,
+      serverTerminals: this.terminalsAvailable() && this.server.usable,
     };
   }
 
@@ -168,6 +171,49 @@ export class JupyterAdapter implements NotebookAdapter {
       );
     }
     return kernel;
+  }
+
+  private terminalsAvailable(): boolean {
+    try {
+      return !!this.app?.serviceManager?.terminals?.isAvailable?.();
+    } catch {
+      return false;
+    }
+  }
+
+  machineExec(code: string, waitMs: number): Promise<ExecResult> {
+    if (!this.terminalsAvailable()) return Promise.reject(new NoServerPython("This notebook server has no terminals."));
+    return this.server.run(code, waitMs);
+  }
+
+  /** A terminal of the notebook server for ServerPython; shut down when the page goes. */
+  private async openTerminal(): Promise<TerminalLink> {
+    const conn = await this.app.serviceManager.terminals.startNew();
+    const output: ((t: string) => void)[] = [];
+    const closed: (() => void)[] = [];
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      for (const cb of closed) cb();
+    };
+    conn.messageReceived.connect((_: unknown, msg: Any) => {
+      if (msg?.type === "stdout") for (const cb of output) cb(String(msg.content?.[0] ?? ""));
+      else if (msg?.type === "disconnect") end();
+    });
+    conn.disposed?.connect?.(() => end());
+    const shutdown = () => void Promise.resolve(conn.shutdown?.()).catch(() => {});
+    window.addEventListener("pagehide", shutdown, { once: true });
+    return {
+      send: (text) => conn.send({ type: "stdin", content: [text] }),
+      onOutput: (cb) => output.push(cb),
+      onClose: (cb) => closed.push(cb),
+      close: () => {
+        window.removeEventListener("pagehide", shutdown);
+        shutdown();
+        end();
+      },
+    };
   }
 
   async startExecution(code: string): Promise<Execution> {

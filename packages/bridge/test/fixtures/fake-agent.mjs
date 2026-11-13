@@ -1,6 +1,6 @@
 // A scripted ACP agent for tests. It connects to the MCP servers it is given,
 // like a real agent, and follows a script embedded in the prompt:
-//   SCRIPT: [{"tool":"list_cells","args":{}}, {"say":"hi"}, {"permission":"Run ls"}, {"sleep":200}]
+//   SCRIPT: [{"tool":"Read","args":{"file_path":"test.ipynb"}}, {"say":"hi"}, {"permission":"Run ls"}, {"sleep":200}]
 // A tool step can `capture` {name: regex} from its result; later args use it as {{name}}.
 // Every tool result is echoed back as a message chunk "RESULT <tool>: <text>".
 

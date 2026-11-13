@@ -47,6 +47,10 @@ export class FakeNotebook {
   executed: { code: string; waitMs: number }[] = [];
   /** A busy kernel refuses execute, like the real adapters. */
   busy = false;
+  /** No runtime connected: execute fails, like Colab before Connect. */
+  connected = true;
+  /** The notebook server lends a terminal: machine_exec reaches the machine without the kernel. */
+  serverTerminals = false;
   language = "python";
   /** The machine behind the kernel, for the terminal tools. */
   vm = new FakeVm();
@@ -57,6 +61,7 @@ export class FakeNotebook {
   private nextId = 1;
   private exec = 0;
   onEvent: (e: unknown) => void = () => {};
+  platform: NotebookInfo["platform"] = "colab";
 
   constructor(cells: { type: "code" | "markdown"; source: string }[]) {
     for (const c of cells) this.cells.push({ id: `c${this.nextId++}`, type: c.type, source: c.source, outputs: [], executionCount: null });
@@ -65,7 +70,7 @@ export class FakeNotebook {
 
   info(): NotebookInfo {
     return {
-      platform: "colab",
+      platform: this.platform,
       title: "test.ipynb",
       url: "https://colab.research.google.com/drive/test",
       cellCount: this.cells.length,
@@ -73,6 +78,7 @@ export class FakeNotebook {
       selectedCellIds: this.activeCellId ? [this.activeCellId] : [],
       kernel: this.busy ? "busy" : "idle",
       language: this.language,
+      serverTerminals: this.serverTerminals || undefined,
     };
   }
 
@@ -204,10 +210,14 @@ export class FakeNotebook {
         return { results };
       }
       case "execute":
+        if (!this.connected) throw new Error("Colab is not connected to a runtime. Ask the user to connect it (the Connect button), then try again.");
         if (this.busy) throw new Error("The kernel is busy running a cell, so this would wait behind it.");
-        if (op.code.includes("_ainb_shell")) return this.vm.handle(op.code);
+        if (op.code.includes("_ainb_shell") || op.code.includes("_ainb_fs")) return this.vm.handle(op.code);
         this.executed.push({ code: op.code, waitMs: op.waitMs });
         return this.execResult(op.code);
+      case "machine_exec":
+        if (this.serverTerminals) return this.vm.handle(op.code);
+        return this.handle({ op: "execute", code: op.code, waitMs: op.waitMs });
       case "execute_wait": {
         const next = this.execWaits.get(op.execId)?.shift();
         if (!next) throw new Error(`No execution "${op.execId}" here.`);
@@ -330,19 +340,126 @@ export class FakeVm {
   commands: string[] = [];
   /** Kernel snippets seen, by operation. */
   ops: string[] = [];
+  /** Where each new shell was started, and what it added to its environment. */
+  started: { cwd?: string; env?: Record<string, string> }[] = [];
+  /** The machine's files, by absolute path. */
+  files = new Map<string, { data: Buffer; mtime: number }>();
+  /** Paths the file helper claimed for notebook files. */
+  claimed = new Set<string>();
+  cwd = "/content";
+  /** What `script NAME` typed into the shell does (change files, say). */
+  scripts = new Map<string, (vm: FakeVm) => string>();
+  private clock = 1;
 
   handle(code: string): ExecResult {
     const body = JSON.parse(code.match(/^exec\((".*"), \{"__name__": "__ainb__"\}\)$/s)![1]!) as string;
-    const m = body.match(/_ainb_shell\(("[^"]*"), ("[^"]*"), _json\.loads\((".*")\)\)\n$/s)!;
-    const op = JSON.parse(m[1]!) as string;
-    const name = JSON.parse(m[2]!) as string;
-    const args = JSON.parse(JSON.parse(m[3]!)) as Record<string, any>;
+    const m = body.match(/\n(_ainb_\w+)\(_json\.loads\((".*")\)\)\n$/s)!;
+    const args = JSON.parse(JSON.parse(m[2]!)) as Record<string, any>;
+    const res = m[1] === "_ainb_fs" ? this.fs(args) : this.shell(args.op, args.name, args);
+    return { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb ${JSON.stringify(res)}\n` }] };
+  }
+
+  /** Put a file on the machine. */
+  write(path: string, text: string | Buffer): void {
+    this.files.set(path, { data: typeof text === "string" ? Buffer.from(text, "utf8") : text, mtime: this.clock++ });
+  }
+
+  read(path: string): string | undefined {
+    return this.files.get(path)?.data.toString("utf8");
+  }
+
+  private stat(path: string) {
+    const f = this.files.get(path);
+    if (f) return { size: f.data.length, mtime: String(f.mtime), dir: false };
+    const dir = path.endsWith("/") ? path : `${path}/`;
+    if (path === "/" || [...this.files.keys()].some((p) => p.startsWith(dir))) return { size: 0, mtime: "0", dir: true };
+    return null;
+  }
+
+  private fs(args: Record<string, any>): Record<string, unknown> {
+    const op = args.op as string;
+    this.ops.push(`fs:${op}`);
+    const missing = (p: string) => ({ error: `File does not exist: ${p}` });
+    switch (op) {
+      case "hello":
+        return { cwd: this.cwd, home: "/root", posix: true, path: "/usr/local/bin:/usr/bin", python: "/opt/venv/bin/python3" };
+      case "stat":
+        return { stats: (args.paths as string[]).map((p) => this.stat(p)) };
+      case "read_lines": {
+        const f = this.files.get(args.path);
+        if (!f) return missing(args.path);
+        if (f.data.includes(0)) return { binary: true, stat: this.stat(args.path) };
+        const all = f.data.toString("utf8").split("\n");
+        if (all.at(-1) === "") all.pop();
+        const lines = all.slice(args.offset - 1, args.offset - 1 + args.limit);
+        return { lines, total: all.length, stat: this.stat(args.path), full: true };
+      }
+      case "read": {
+        const f = this.files.get(args.path);
+        if (!f) return missing(args.path);
+        return { data: f.data.subarray(args.offset, args.offset + args.max).toString("base64"), stat: this.stat(args.path) };
+      }
+      case "write": {
+        const tmp = `${args.path}.ainb-tmp`;
+        const chunk = Buffer.from(args.data, "base64");
+        const prev = args.first ? Buffer.alloc(0) : this.files.get(tmp)!.data;
+        this.files.set(tmp, { data: Buffer.concat([prev, chunk]), mtime: 0 });
+        if (!args.last) return { ok: true };
+        const data = this.files.get(tmp)!.data;
+        this.files.delete(tmp);
+        const cur = this.stat(args.path);
+        const e = args.expect;
+        if (e !== "any" && (e === null ? cur !== null : !cur || cur.size !== e.size || cur.mtime !== e.mtime)) return { conflict: true, stat: cur };
+        this.write(args.path, data);
+        return { stat: this.stat(args.path) };
+      }
+      case "claim":
+        for (const p of args.paths as string[]) {
+          if (this.claimed.has(p) || !this.files.has(p)) {
+            this.claimed.add(p);
+            return { path: p };
+          }
+        }
+        return { error: "every name is taken" };
+      case "remove":
+        this.files.delete(args.path);
+        return {};
+      case "glob": {
+        const full = (args.pattern as string).startsWith("/") ? args.pattern : `${args.base}/${args.pattern}`;
+        const re = new RegExp(`^${full.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/\u0000/g, ".*")}$`);
+        const paths = [...this.files.keys()].filter((p) => re.test(p)).sort((a, b) => this.files.get(b)!.mtime - this.files.get(a)!.mtime);
+        return { paths: paths.slice(0, args.limit), total: paths.length, more: false };
+      }
+      case "grep": {
+        const re = new RegExp(args.pattern, args.ignore_case ? "i" : "");
+        const base = (args.base as string).replace(/\/$/, "");
+        const files: string[] = [];
+        const counts: [string, number][] = [];
+        const hits: [string, number, string, boolean][] = [];
+        for (const [p, f] of this.files) {
+          if (p !== base && !p.startsWith(`${base}/`)) continue;
+          const lines = f.data.toString("utf8").split("\n");
+          const found = lines.flatMap((l, i) => (re.test(l) ? [i] : []));
+          if (!found.length) continue;
+          files.push(p);
+          counts.push([p, found.length]);
+          for (const i of found) hits.push([p, i + 1, lines[i]!, true]);
+        }
+        return { files, counts, hits: hits.slice(0, args.limit), more: false };
+      }
+      default:
+        return { error: `unknown operation ${op}` };
+    }
+  }
+
+  private shell(op: string, name: string, args: Record<string, any>): Record<string, unknown> {
     this.ops.push(op);
     let res: Record<string, unknown>;
     if (op === "open") {
       const sh = this.shells.get(name);
       if (sh?.alive) res = { state: "alive", size: sh.log.length };
       else {
+        this.started.push({ cwd: args.cwd, env: args.env });
         this.shells.set(name, { log: "root@vm:/content# ", alive: true, exit: null, files: new Map(), line: "" });
         res = { state: "started", size: 0 };
       }
@@ -359,7 +476,7 @@ export class FakeVm {
         res = { size: sh.log.length, data: Buffer.from(chunk, "latin1").toString("base64"), alive: sh.alive, exit: sh.exit, exists: true };
       }
     }
-    return { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb-shell ${JSON.stringify(res)}\n` }] };
+    return res;
   }
 
   /** Print from a background job of a session. */
@@ -430,6 +547,12 @@ export class FakeVm {
           onInterrupt: () => this.prompt(sh, 130),
         };
         return;
+      case "script": {
+        const run = this.scripts.get(rest[0]!);
+        if (!run) throw new Error(`no script ${rest[0]}`);
+        sh.log += run(this).replace(/\n/g, "\r\n");
+        return this.prompt(sh, 0);
+      }
       case "exit":
         sh.alive = false;
         sh.exit = Number(rest[0] ?? 0);

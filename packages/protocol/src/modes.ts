@@ -27,7 +27,7 @@ export interface ChatSettings {
 
 export const DEFAULT_SETTINGS: ChatSettings = { scope: "write", review: true, targetCellIds: [], notebookOnly: true };
 
-/** `execute`: run code or a shell command on the kernel without a cell. */
+/** `execute`: run code or a command on the notebook's machine without a cell, or change a file there. */
 export type ToolAction = "read" | "update" | "insert" | "delete" | "move" | "run" | "execute" | "interrupt";
 
 export type PolicyDecision =
@@ -41,9 +41,9 @@ export const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 export const SCOPE_HINT: Record<Scope, string> = {
-  cell: "Only the target cell may be changed. Nothing is run.",
-  write: "May add, edit, delete and move code and markdown cells. Nothing is run.",
-  auto: "May change cells and run any cell or the whole notebook.",
+  cell: "Only the target cell may be changed. Nothing is run; files on the machine can be read, not changed.",
+  write: "May add, edit, delete and move code and markdown cells. Nothing is run; files on the machine can be read, not changed.",
+  auto: "May change cells, run any cell or the whole notebook, use the terminal and change files on the machine.",
 };
 
 /**
@@ -90,7 +90,7 @@ export function decide(
           allow: false,
           reason:
             action === "execute"
-              ? `Mode is '${SCOPE_LABEL[scope]}': running code is not allowed. Tell the user the command or code to run instead.`
+              ? `Mode is '${SCOPE_LABEL[scope]}': commands, code and changes to files on the notebook's machine are not allowed. Tell the user what you would run or change instead.`
               : `Mode is '${SCOPE_LABEL[scope]}': running cells is not allowed. Tell the user which cells to run instead.`,
         };
       }

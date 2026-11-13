@@ -29,8 +29,17 @@ export interface AgentSpec {
    * the image prompt capability it declares over ACP.
    */
   images?: boolean;
+  /** Sent as `_meta` when a session starts: options the agent's ACP adapter reads. */
+  sessionMeta?: Record<string, unknown>;
   resolve(): { launch: LaunchSpec } | { missing: string };
 }
+
+/**
+ * Claude Code's own tools for this computer's files and shell. The agent works
+ * on the notebook's machine through the bridge's tools of the same names, so
+ * these are switched off: two Reads, one per machine, would only mislead it.
+ */
+const CLAUDE_LOCAL_TOOLS = ["Bash", "BashOutput", "KillShell", "KillBash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "NotebookRead", "Glob", "Grep", "LS"];
 
 /** Find an executable on PATH, honoring PATHEXT on Windows. */
 export function which(cmd: string): string | null {
@@ -89,6 +98,7 @@ const BUILTIN: AgentSpec[] = [
     loginHint: "Sign in by running `claude` once in a terminal, or set ANTHROPIC_API_KEY.",
     // Verified: reads plot images returned by MCP tools.
     images: true,
+    sessionMeta: { claudeCode: { options: { disallowedTools: CLAUDE_LOCAL_TOOLS } } },
     resolve: nodeScript("@agentclientprotocol/claude-agent-acp", "claude-agent-acp", "The Claude ACP adapter is not installed (pnpm install in the bridge)."),
   },
   {

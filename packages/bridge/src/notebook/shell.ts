@@ -14,8 +14,8 @@
 // by invisible OSC marks the shell prints.
 
 import { createRequire } from "node:module";
-import type { ExecResult } from "@ainb/protocol";
 import type { IMarker, Terminal as XTerm } from "@xterm/headless";
+import { helperCall, KernelBusy, VmError, type KernelExec } from "./kernel.js";
 
 const { Terminal } = createRequire(import.meta.url)("@xterm/headless") as typeof import("@xterm/headless");
 
@@ -27,8 +27,6 @@ export const SCROLLBACK = 10_000;
 const READ_CHUNK = 256 * 1024;
 /** Log replayed into a new emulator when the bridge finds a session it did not start (it restarted). */
 const REPLAY_BYTES = 2 * 1024 * 1024;
-/** Each kernel call waits at most this long; longer means it queued behind a cell. */
-const CALL_WAIT_MS = 15_000;
 const OSC = 7770;
 
 export const SESSION_NAME = /^[A-Za-z0-9_-]{1,32}$/;
@@ -79,10 +77,9 @@ put("exit", os.waitstatus_to_exitcode(status) if hasattr(os, "waitstatus_to_exit
 
 /** Runs in the kernel, in a namespace of its own: one operation on a session's files. */
 const HELPER = String.raw`
-def _ainb_shell(op, name, args):
-    import base64, json, os, shutil, signal, subprocess, sys, time
-    def done(res):
-        print("\x1eainb-shell " + json.dumps(res))
+def _ainb_shell(args):
+    import base64, os, shutil, signal, subprocess, sys, time
+    op, name, done = args["op"], args["name"], _ainb_done
     if os.name != "posix":
         return done({"error": "Terminal sessions need a Linux or macOS machine; this kernel runs on " + sys.platform + "."})
     d = os.path.join("/tmp", "ainb-shell-%d" % os.getuid(), name)
@@ -117,9 +114,13 @@ def _ainb_shell(op, name, args):
                 del env["MPLBACKEND"]
             for k in ("FORCE_COLOR", "CLICOLOR"):
                 env.pop(k, None)
+            env.update(args.get("env") or {})
             env.update(TERM="xterm-256color", PAGER="cat", GIT_PAGER="cat", MANPAGER="cat")
+            cwd = args.get("cwd") or os.getcwd()
+            if not os.path.isdir(cwd):
+                cwd = os.getcwd()
             with open(os.path.join(d, "daemon.log"), "wb") as log:
-                subprocess.Popen([sys.executable, "-c", args["daemon"], d, str(args["cols"]), str(args["rows"]), os.getcwd()],
+                subprocess.Popen([sys.executable, "-c", args["daemon"], d, str(args["cols"]), str(args["rows"]), cwd],
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, start_new_session=True, close_fds=True).wait(10)
             end = time.monotonic() + 10
             while not alive() and time.monotonic() < end:
@@ -177,38 +178,8 @@ const INIT =
   `PROMPT_COMMAND='printf "\\033]${OSC};prompt;%s\\007" "$?"'; PS1='\\[\\033]${OSC};prompt;$?\\007\\]'; ` +
   `printf '\\033]${OSC};ready\\007'\r`;
 
-export class KernelBusy extends Error {}
-
-export class ShellError extends Error {}
-
-/** How the bridge reaches the kernel: run Python and wait at most `waitMs`. */
-export type KernelExec = (code: string, waitMs: number) => Promise<ExecResult>;
-
-function program(op: string, name: string, args: Record<string, unknown>): string {
-  const body = `${HELPER}\nimport json as _json\n_ainb_shell(${JSON.stringify(op)}, ${JSON.stringify(name)}, _json.loads(${JSON.stringify(JSON.stringify(args))}))\n`;
-  // JSON string literals are valid Python string literals.
-  return `exec(${JSON.stringify(body)}, {"__name__": "__ainb__"})`;
-}
-
-async function call<T>(exec: KernelExec, op: string, name: string, args: Record<string, unknown>): Promise<T> {
-  let res: ExecResult;
-  try {
-    res = await exec(program(op, name, args), CALL_WAIT_MS);
-  } catch (e) {
-    if (/kernel is busy/i.test((e as Error).message)) throw new KernelBusy((e as Error).message);
-    throw e;
-  }
-  // Queued behind a cell the user started meanwhile; it runs when that ends.
-  if (res.status === "running") throw new KernelBusy("The kernel is busy running a cell.");
-  const text = res.outputs.map((o) => (o.kind === "stream" ? (o.text ?? "") : "")).join("");
-  const line = text.split("\n").find((l) => l.startsWith("\u001eainb-shell "));
-  if (!line) {
-    const err = res.outputs.find((o) => o.kind === "error");
-    throw new ShellError(err ? `${err.ename}: ${err.evalue}` : (res.message ?? "the kernel did not answer"));
-  }
-  const parsed = JSON.parse(line.slice("\u001eainb-shell ".length));
-  if (parsed.error) throw new ShellError(parsed.error);
-  return parsed as T;
+function call<T>(exec: KernelExec, op: string, name: string, args: Record<string, unknown>): Promise<T> {
+  return helperCall<T>(exec, HELPER, "_ainb_shell", { ...args, op, name });
 }
 
 interface StepReply {
@@ -235,6 +206,12 @@ export interface Command {
   status?: number;
   /** Where the next partial report starts (the line that was still being written). */
   reportFrom?: Pos;
+}
+
+/** Where a new shell starts, and what it adds to its environment. */
+export interface ShellStart {
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 export type SessionState = "new" | "starting" | "idle" | "running" | "exited";
@@ -355,14 +332,17 @@ export class ShellSession {
     }
   }
 
-  /** Start the shell, or pick up one that runs from before the bridge restarted. */
-  async open(exec: KernelExec, deadline: number): Promise<void> {
+  /**
+   * Start the shell, or pick up one that runs from before the bridge restarted.
+   * A new shell starts in `start.cwd` with `start.env` added to its environment.
+   */
+  async open(exec: KernelExec, deadline: number, start: ShellStart = {}): Promise<void> {
     if (this.state !== "new" && this.state !== "exited") return;
     this.reset();
     this.state = "new";
     this.exitCode = undefined;
-    const r = await call<{ state: string; size: number; log?: string }>(exec, "open", this.name, { daemon: DAEMON, cols: COLS, rows: ROWS });
-    if (r.state === "failed") throw new ShellError(`The terminal did not start on the notebook's machine.${r.log ? `\n${r.log}` : ""}`);
+    const r = await call<{ state: string; size: number; log?: string }>(exec, "open", this.name, { daemon: DAEMON, cols: COLS, rows: ROWS, cwd: start.cwd, env: start.env });
+    if (r.state === "failed") throw new VmError(`The terminal did not start on the notebook's machine.${r.log ? `\n${r.log}` : ""}`);
     if (r.state === "alive") {
       // Rebuild the screen from the end of the log; its marks say whether a command runs.
       this.offset = Math.max(0, r.size - REPLAY_BYTES);
@@ -380,7 +360,7 @@ export class ShellSession {
     this.state = "starting";
     await this.sync(exec, INIT);
     await this.pollUntil(exec, () => this.state !== "starting", Math.min(deadline, Date.now() + 15_000));
-    if (this.state === "starting") throw new ShellError("The terminal started but did not answer.");
+    if (this.state === "starting") throw new VmError("The terminal started but did not answer.");
   }
 
   /** Read until `done` holds or the deadline passes. */
@@ -414,7 +394,7 @@ export class ShellSession {
 
   /** Type a command into the idle shell. */
   async start(exec: KernelExec, command: string): Promise<void> {
-    if (this.state !== "idle") throw new ShellError(`Session "${this.name}" is not idle.`);
+    if (this.state !== "idle") throw new VmError(`Session "${this.name}" is not idle.`);
     const id = `${Date.now().toString(36)}${(++this.seq).toString(36)}`;
     const dir = `/tmp/ainb-shell-$(id -u)/${this.name}`;
     const file = `cmd-${id}`;

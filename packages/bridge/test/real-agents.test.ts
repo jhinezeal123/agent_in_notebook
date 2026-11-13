@@ -113,7 +113,7 @@ describe.skipIf(!AGENTS.length)("real agents", () => {
       const before = ext.statuses.length;
       await ext.request("chat.send", {
         chatId: snap.chatId,
-        text: "Call read_cells for cell c1 and look at the image in its output. What single color fills that image? Reply with only the color name in English.",
+        text: "Read the notebook file (notebook_info names it) and look at the image in the output of cell c1. What single color fills that image? Reply with only the color name in English.",
       });
       await ext.waitFor(() => ext.statuses.slice(before).some((s) => s === "idle" || s === "error"), 280_000, "turn end");
       clearInterval(timer);
