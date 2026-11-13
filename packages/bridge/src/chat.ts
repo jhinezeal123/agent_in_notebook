@@ -38,7 +38,7 @@ import { ShellSessions } from "./notebook/shell.js";
 import { callTool, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
 import { keyHash } from "./store.js";
 
-/** How the chat reaches the page and the side panel. */
+/** How the chat reaches its notebook and the chat UI. */
 export interface ChatHost {
   notebookOp(tabId: number, op: unknown, timeoutMs: number): Promise<unknown>;
   emit(event: string, params: unknown): void;

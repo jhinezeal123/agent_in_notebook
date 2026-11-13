@@ -1,7 +1,7 @@
 {
   "name": "agent-in-notebook-vscode",
   "displayName": "Agent in Notebook",
-  "description": "Use your ACP coding agent with the active Jupyter notebook in VS Code.",
+  "description": "Chat with your ACP coding agent about a notebook open in VS Code, or on Colab or Kaggle in Chrome.",
   "publisher": "jhinezeal123",
   "version": "0.1.0",
   "private": true,

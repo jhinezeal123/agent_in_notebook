@@ -150,17 +150,22 @@ describe("the notebook as a file on its machine", () => {
     expect(fileCells(nb, "/content/test.agent.ipynb")[0].source).toEqual(["x = 1"]);
   });
 
-  it("in VS Code, leads the notebook's own path to the editor and never writes that file", async () => {
+  it("in VS Code, keeps the notebook's file on the kernel's machine in step with the editor, as in the browser", async () => {
+    // The UI is VS Code; the kernel (and the agent) are on the notebook's machine, e.g. a Colab VM.
     const nb = new FakeNotebook([{ type: "code", source: "x = 1" }]);
     nb.platform = "vscode";
-    nb.vm.write(file, "saved by VS Code");
+    nb.vm.scripts.set("edit", (vm) => {
+      const doc = JSON.parse(vm.read(file)!);
+      doc.cells[0].source = ["x = 2"];
+      vm.write(file, JSON.stringify(doc));
+      return "";
+    });
     const ctx = context(nb, { overrides: long });
     expect((await callTool(ctx, "notebook_info", {})).text).toContain(`Notebook file: ${file}`);
-    await callTool(ctx, "Glob", { pattern: "*" });
-    await callTool(ctx, "Edit", { file_path: file, old_string: "x = 1", new_string: "x = 2" });
+    const res = await callTool(ctx, "Bash", { command: "script edit" });
+    expect(res.text).toContain("this reached the notebook in VS Code:");
     expect(nb.cells[0]!.source).toBe("x = 2");
-    expect(nb.vm.read(file)).toBe("saved by VS Code");
-    expect(nb.vm.read("/content/test.agent.ipynb")).toBeUndefined();
+    expect((await callTool(ctx, "Read", { file_path: "test.ipynb" })).text).toMatch(/^\/content\/test\.ipynb: the notebook open in VS Code, 1 cell/);
   });
 
   it("reads the notebook while a cell runs; the machine waits for the cell", async () => {

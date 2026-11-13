@@ -1,7 +1,7 @@
 import { render } from "preact";
-import { App } from "../../extension/src/sidepanel/app.js";
-import { PanelHostContext, type PanelHost } from "../../extension/src/sidepanel/host.js";
-import type { PanelEvent, PanelRequest, PanelResponse, Prefs } from "../../extension/src/shared/panel-messages.js";
+import { App } from "../../ui/src/app.js";
+import { PanelHostContext, type PanelHost } from "../../ui/src/host.js";
+import type { PanelEvent, PanelRequest, PanelResponse, Prefs } from "../../ui/src/panel-messages.js";
 
 // VS Code exposes this API only inside its webview and it can be acquired once.
 declare function acquireVsCodeApi(): { postMessage(message: PanelRequest): void };
@@ -24,7 +24,7 @@ window.addEventListener("message", ({ data }: MessageEvent<PanelEvent | PanelRes
 });
 
 const host: PanelHost = {
-  kind: "vscode",
+
   request<T>(method: string, params: unknown = {}): Promise<T> {
     return new Promise((resolve, reject) => {
       const id = nextId++;

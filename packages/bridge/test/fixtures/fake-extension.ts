@@ -250,7 +250,11 @@ export class FakeExtension {
     readonly tabId = 7,
   ) {}
 
-  async connect(port: number, token: string, origin: string | null = "chrome-extension://abcdef", path = "ext"): Promise<unknown> {
+  /**
+   * As VS Code by default: the chat UI and the notebook in one. With an
+   * origin, as the browser extension, which only serves its tab's notebook.
+   */
+  async connect(port: number, token: string, origin: string | null = null, path = origin === null ? "vscode" : "ext"): Promise<unknown> {
     this.ws = new WebSocket(`ws://127.0.0.1:${port}/${path}`, { origin: origin ?? undefined });
     await new Promise<void>((resolve, reject) => {
       this.ws.once("open", () => resolve());

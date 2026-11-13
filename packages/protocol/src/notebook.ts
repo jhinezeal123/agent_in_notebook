@@ -1,4 +1,4 @@
-// Notebook model shared by the page adapters, the bridge and the side panel.
+// Notebook model shared by the notebook adapters, the bridge and the chat UI.
 
 export type Platform = "colab" | "kaggle" | "jupyter" | "vscode";
 
@@ -113,7 +113,7 @@ export interface AppliedChange {
  * once with a `reviewId` and `applied: false`; the decision arrives later as a
  * `review_closed` event. Mutating ops are journaled as `change_applied`
  * events unless `byUser` marks them as the user's own (an undo, a cell
- * inserted from the side panel).
+ * inserted from the chat).
  */
 export type NotebookOp =
   | { op: "info" }

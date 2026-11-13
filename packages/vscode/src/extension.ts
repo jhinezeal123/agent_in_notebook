@@ -1,15 +1,12 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import { OpRunner, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
-import type { PanelEvent, PanelRequest, PanelResponse, Prefs } from "../../extension/src/shared/panel-messages.js";
+import type { PanelEvent, PanelRequest, PanelResponse, Prefs } from "../../ui/src/panel-messages.js";
 import { BridgeLink } from "./bridge.js";
 import { openChatLink, readChatImage } from "./chat-links.js";
 import { VSCodeNotebook } from "./notebook.js";
+import { PanelCore, type LocalNotebooks } from "./panel-core.js";
 
-const bridgeMethods = new Set([
-  "agents.list", "agents.save", "agents.remove", "agents.test", "chat.get", "chat.send",
-  "chat.cancel", "chat.settings", "chat.option", "chat.answer", "chat.review", "chat.undo",
-]);
 const secret = "bridge.config";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -34,23 +31,27 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: vscode.WebviewView;
   private readonly subscriptions: vscode.Disposable[];
   private readonly notebooks = new Map<vscode.NotebookDocument, OpenNotebook>();
-  private activeTab: number | null = null;
   private nextTab = 1;
   private readonly bridge: BridgeLink;
+  /** Which notebook the chat is about, and the notebooks in Chrome tabs. */
+  private readonly core: PanelCore;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.bridge = new BridgeLink(context.extension.packageJSON.version, (event) => {
       this.post(event);
       if (event.event !== "state") return;
+      const connected = event.params.conn === "connected";
       for (const notebook of this.notebooks.values()) {
-        if (event.params.conn === "connected") this.attach(notebook.tabId, notebook.adapter.info());
+        if (connected) this.attach(notebook.tabId, notebook.adapter.info());
         else {
           notebook.chatId = undefined;
           notebook.agentId = undefined;
           void notebook.runner.discardReviews();
         }
       }
-    }, ({ tabId, op }) => this.runOp(tabId, op));
+      this.core.connectionChanged(connected);
+    }, ({ tabId, op }) => this.runOp(tabId, op), (event) => this.core.onBrowser(event));
+    this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event));
     this.subscriptions = [
       vscode.window.onDidChangeActiveNotebookEditor(() => this.activeChanged()),
       vscode.workspace.onDidChangeNotebookDocument(({ notebook, cellChanges }) => {
@@ -59,6 +60,41 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       }),
       vscode.workspace.onDidCloseNotebookDocument((document) => this.closeNotebook(document)),
     ];
+  }
+
+  private localNotebooks(): LocalNotebooks {
+    return {
+      choices: () => [...this.notebooks.values()].map(({ tabId, adapter }) => {
+        const info = adapter.info();
+        return { tabId, platform: info.platform, title: info.title, place: "vscode" as const };
+      }),
+      has: (tabId) => !!this.find(tabId),
+      info: (tabId) => this.find(tabId)?.adapter.info() ?? null,
+      userOp: (tabId, op) => this.runOp(tabId, op),
+      openChat: async (tabId, params) => {
+        const notebook = this.find(tabId);
+        if (!notebook) throw new Error("That notebook is no longer open in VS Code.");
+        const agentId = params.agentId as string;
+        if (notebook.agentId && notebook.agentId !== agentId) await notebook.runner.discardReviews();
+        const info = notebook.adapter.info();
+        const result = await this.bridge.request("chat.open", { ...params, platform: info.platform, notebookKey: info.key }) as { chatId: string; agentId: string };
+        notebook.chatId = result.chatId;
+        notebook.agentId = result.agentId;
+        return result;
+      },
+      closeChat: async (chatId) => {
+        const notebook = [...this.notebooks.values()].find((candidate) => candidate.chatId === chatId);
+        await notebook?.runner.discardReviews();
+      },
+      reveal: async (tabId) => {
+        const notebook = this.find(tabId);
+        if (notebook) await vscode.window.showNotebookDocument(notebook.adapter.document, { preserveFocus: true, preview: false });
+      },
+      front: () => {
+        const document = vscode.window.activeNotebookEditor?.notebook;
+        return (document && this.notebooks.get(document)?.tabId) ?? null;
+      },
+    };
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -88,7 +124,6 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private activeChanged(): void {
-    if (!this.view) return;
     const document = vscode.window.activeNotebookEditor?.notebook;
     const supported = document?.notebookType === "jupyter-notebook";
     let notebook = supported ? this.notebooks.get(document) : undefined;
@@ -101,9 +136,9 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       });
       notebook = { tabId, adapter, runner, edit: Promise.resolve() };
       this.notebooks.set(document, notebook);
+      this.core.localChanged();
     }
-    this.activeTab = notebook?.tabId ?? null;
-    this.post({ event: "activeTab", params: this.activeTab });
+    this.core.follow(notebook?.tabId ?? null);
     if (document) this.refresh(document);
   }
 
@@ -115,7 +150,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.bridge.emit("notebook.detached", { tabId });
     void this.bridge.request("tab.closed", { tabId }).catch(() => {});
     adapter.dispose();
-    if (this.activeTab === tabId) this.activeChanged();
+    this.core.localChanged();
   }
 
   private attach(tabId: number, info: NotebookInfo): void { this.bridge.emit("notebook.attached", { tabId, info }); }
@@ -126,7 +161,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     const { tabId, adapter } = notebook;
     const info = adapter.info();
     this.attach(tabId, info);
-    if (tabId === this.activeTab) this.post({ event: "notebook", params: { tabId, info } });
+    if (tabId === this.core.activeTab) this.post({ event: "notebook", params: { tabId, info } });
   }
 
   private post(event: PanelEvent): void { void this.view?.webview.postMessage(event); }
@@ -148,8 +183,6 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private async handle(method: string, params: unknown): Promise<unknown> {
     switch (method) {
-      case "state.get": return this.bridge.snapshot();
-      case "activeTab.get": return this.activeTab;
       case "prefs.get": return this.context.globalState.get<Prefs>("prefs");
       case "prefs.set": return this.context.globalState.update("prefs", params);
       case "config.auto": return this.connect();
@@ -169,50 +202,22 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       case "clipboard.copy": return vscode.env.clipboard.writeText((params as { text: string }).text);
       case "link.open": {
         const target = (params as { url?: unknown })?.url;
-        return typeof target === "string" ? openChatLink(target, vscode.window.activeNotebookEditor?.notebook.uri) : false;
+        return typeof target === "string" ? openChatLink(target, this.documentUri()) : false;
       }
       case "image.resolve": {
         const target = (params as { target?: unknown })?.target;
         if (typeof target !== "string") return null;
-        return readChatImage(target, vscode.window.activeNotebookEditor?.notebook.uri);
-      }
-      case "tab.notebook": return this.find((params as { tabId: number }).tabId)?.adapter.info() ?? null;
-      case "notebook.focus": {
-        const { tabId, cellId } = params as { tabId: number; cellId: string };
-        return this.runOp(tabId, { op: "focus_cell", cellId });
-      }
-      case "notebook.insert": {
-        const { tabId, source, cellType } = params as { tabId: number; source: string; cellType: "code" | "markdown" };
-        const notebook = this.find(tabId);
-        if (!notebook) throw new Error("That notebook is no longer open in VS Code.");
-        const info = notebook.adapter.info();
-        const selected = info.activeCellId ? notebook.adapter.getCells({ cellIds: [info.activeCellId] })[0] : undefined;
-        const index = selected ? selected.index + 1 : info.cellCount;
-        const result = await this.runOp(tabId, { op: "insert_cell", index, source, cellType, review: false, byUser: true }) as { cellId: string };
-        await notebook.adapter.focusCell(result.cellId).catch(() => {});
-        return result;
-      }
-      case "chat.open": {
-        const { tabId, agentId } = params as { tabId: number; agentId: string };
-        const notebook = this.find(tabId);
-        if (!notebook) throw new Error("That notebook is no longer open in VS Code.");
-        if (notebook.agentId && notebook.agentId !== agentId) await notebook.runner.discardReviews();
-        const info = notebook.adapter.info();
-        const result = await this.bridge.request(method, { ...(params as object), platform: info.platform, notebookKey: info.key }) as { chatId: string; agentId: string };
-        notebook.chatId = result.chatId;
-        notebook.agentId = result.agentId;
-        return result;
-      }
-      case "chat.close": {
-        const { chatId } = params as { chatId: string };
-        const notebook = [...this.notebooks.values()].find((candidate) => candidate.chatId === chatId);
-        await notebook?.runner.discardReviews();
-        return this.bridge.request(method, params);
+        return readChatImage(target, this.documentUri());
       }
       default:
-        if (!bridgeMethods.has(method)) throw new Error(`Unknown panel request: ${method}`);
-        return this.bridge.request(method, params);
+        return this.core.handle(method, params);
     }
+  }
+
+  /** The VS Code notebook the chat is about, for links relative to it (none for a Chrome tab). */
+  private documentUri(): vscode.Uri | undefined {
+    const tabId = this.core.activeTab;
+    return tabId === null ? undefined : this.find(tabId)?.adapter.document.uri;
   }
 
   dispose(): void {
@@ -232,7 +237,7 @@ function panelHtml(webview: vscode.Webview, assets: vscode.Uri): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; style-src-attr 'unsafe-inline'; font-src ${webview.cspSource}; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${asset("katex.min.css")}">
-<link rel="stylesheet" href="${asset("sidepanel.css")}">
+<link rel="stylesheet" href="${asset("chat.css")}">
 <link rel="stylesheet" href="${asset("theme.css")}">
 <title>Agent in Notebook</title>
 </head><body><div id="root"></div><script type="module" nonce="${nonce}" src="${asset("webview.js")}"></script></body></html>`;

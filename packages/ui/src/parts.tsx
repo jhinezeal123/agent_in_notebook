@@ -1,7 +1,7 @@
 import { memo } from "preact/compat";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { chatImageDataUrl, diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
-import { externalChatUrl } from "../shared/chat-links.js";
+import { externalChatUrl } from "./chat-links.js";
 import { chatImageSource } from "./images.js";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
 import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
@@ -80,7 +80,7 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
     >
       {blocks.map((b, i) => (
         // An unchanged block keeps the same HTML string, so Preact leaves its DOM alone.
-        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b, host.kind === "vscode") }} />
+        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b, true) }} />
       ))}
     </div>
   );

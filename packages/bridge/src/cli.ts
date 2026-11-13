@@ -95,7 +95,7 @@ async function main() {
       const r = (await native()).installNativeHost(self, flagValues(rest, "--extension-id"));
       console.log(`Registered for ${r.browsers.join(", ")} (${r.manifest}).`);
       console.log(`Allowed extension IDs: ${r.extensionIds.join(", ")}`);
-      console.log("Open the extension's side panel: it starts the bridge and pairs by itself.");
+      console.log("Open a Colab or Kaggle notebook in Chrome: the extension starts the bridge and pairs by itself.");
       console.log(`Moved this folder or changed Node? Run "ainb install" again.`);
       return;
     }

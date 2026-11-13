@@ -1,15 +1,18 @@
 # Agent in Notebook
 
-Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex, Gemini CLI, OpenCode, hoặc bất kỳ agent nào nói [ACP](https://agentclientprotocol.com)) và **notebook** trong VS Code hoặc trình duyệt (Google Colab, Kaggle, Jupyter).
+Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex, Gemini CLI, OpenCode, hoặc bất kỳ agent nào nói [ACP](https://agentclientprotocol.com)) và **notebook** Google Colab, Kaggle, Jupyter. Bạn chat với agent trong **VS Code**; notebook mở trong VS Code hoặc trong tab Chrome; agent làm việc ngay trên máy notebook chạy (VM của Colab/Kaggle).
 
 ```
-┌─ Chrome extension ──────────────────┐        ┌─ Bridge (máy bạn, 127.0.0.1) ─────────┐
-│ page script: đọc/sửa/chạy cell      │  WS +  │ chạy agent qua ACP (mỗi chat 1 agent) │
-│   Colab (API nội bộ + diff inline)  │ token  │ MCP server "notebook" cấp tool cho    │
-│   Kaggle / Jupyter (JupyterLab 4)   │◄──────►│   agent: Bash, Read, Edit… trên VM    │
-│ side panel: chat, chọn agent/mode,  │        │ kiểm tra mode trên MỌI lời gọi tool   │
-│   duyệt diff → Apply / Reject       │        │                                       │
-└─────────────────────────────────────┘        └───────────────────────────────────────┘
+┌─ VS Code ───────────────────────┐        ┌─ Bridge (máy bạn, 127.0.0.1) ─────────┐
+│ sidebar chat: chọn notebook,    │  WS +  │ chạy agent qua ACP (mỗi chat 1 agent) │
+│   agent, mode; duyệt diff       │ token  │ MCP server "notebook" cấp tool cho    │
+│ notebook mở trong VS Code       │◄──────►│   agent: Bash, Read, Edit… trên máy   │
+└─────────────────────────────────┘        │   của notebook                        │
+┌─ Chrome extension (không giao diện) ┐    │ kiểm tra mode trên MỌI lời gọi tool   │
+│ page script: đọc/sửa/chạy cell      │◄──►│                                       │
+│   Colab (API nội bộ + diff inline)  │    └───────────────────────────────────────┘
+│   Kaggle / Jupyter (JupyterLab 4)   │
+└─────────────────────────────────────┘
 ```
 
 ## Tính năng
@@ -21,14 +24,15 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 | **Autonomous** | Toàn quyền: sửa và chạy từng cell hoặc cả notebook, đọc output, interrupt kernel, dùng terminal và sửa file trên máy của notebook, chạy code trên kernel mà không tạo cell. |
 | **Review** (bật/tắt, dùng chung với mọi mode) | Mỗi thay đổi hiện thành diff để bạn **Apply** hoặc **Reject**. Đang ở Autonomous thì việc chạy cell, lệnh shell hay đoạn code cũng phải được bạn cho phép (hộp xác nhận hiện đúng lệnh sẽ chạy). |
 
-- Trên Colab, diff hiện bằng giao diện **Accept / Reject có sẵn của Colab** ngay trong cell, đồng thời hiện trong side panel. Bấm ở đâu cũng được.
+- Trên Colab, diff hiện bằng giao diện **Accept / Reject có sẵn của Colab** ngay trong cell, đồng thời hiện trong chat ở VS Code. Bấm ở đâu cũng được.
 - Trên Kaggle/Jupyter, extension chèn thẻ diff vào ngay trên cell.
 - Đổi mode giữa chừng có hiệu lực ngay từ lời gọi tool tiếp theo của agent.
 - Đổi agent giữa cuộc trò chuyện được: agent mới nhận tóm tắt cuộc trò chuyện. Agent bị crash sẽ được khởi động lại kèm tóm tắt.
 - Mỗi notebook có cuộc trò chuyện riêng, được lưu lại: reload tab, đóng tab rồi mở lại, hay khởi động lại bridge đều thấy lại lịch sử (agent nhận tóm tắt). Mở notebook khác trong cùng tab thì chat của notebook cũ được lưu và đóng lại. Nút **＋ (New chat)** xóa lịch sử đã lưu của notebook đó.
+- Sidebar có một ô chọn notebook khi đang mở nhiều notebook (trong VS Code và trong các tab Chrome). Chat tự theo notebook bạn vừa đưa lên trước: chuyển sang một tab Colab trong Chrome, hay mở một notebook trong VS Code.
 - **Hoàn tác theo lượt**: dưới mỗi câu trả lời có sửa notebook có dòng "N notebook changes · Undo". Bấm Undo (rồi xác nhận) để đưa notebook về như trước lượt đó: cell bị sửa lấy lại nội dung cũ, cell agent thêm bị xóa, cell agent xóa được chèn lại đúng chỗ, cell bị di chuyển về vị trí cũ. Cell nào bạn (hoặc một lượt sau) đã sửa thì được giữ nguyên và được liệt kê ra. Review được chấp nhận cũng tính vào lượt đã đề xuất nó. Lần gửi tin tiếp theo, agent được báo là thay đổi đã bị hoàn tác. Hoàn tác được cả sau khi khởi động lại bridge, vì nhật ký được lưu cùng lịch sử chat.
 - Trang notebook reload khi một thay đổi đang chờ duyệt thì thay đổi đó được đánh dấu **Discarded** (không áp dụng) và agent được báo để đọc lại notebook.
-- Chọn model, effort, mode riêng của từng agent ngay trong side panel (lấy từ agent qua ACP).
+- Chọn model, effort, mode riêng của từng agent ngay trong sidebar (lấy từ agent qua ACP).
 - Giao diện chat (một số ý tưởng tham khảo từ [T3 Code](https://github.com/pingdotgg/t3code)): các tool call liền nhau gom thành một dòng tóm tắt ("Read ×3 · Edited · Ran ×2"), bấm để xem từng lệnh; khối code có nút **Copy** và **Insert as cell** (chèn thành cell mới ngay dưới cell đang chọn); câu hỏi xin quyền được ghim phía trên ô nhập; đồng hồ thời gian chạy; dòng tóm tắt khi agent đang suy nghĩ; ↑/↓ trong ô nhập trống để gọi lại tin nhắn cũ; nút **↓ New messages** khi bạn đang cuộn lên.
 - **Agent làm việc ngay trên máy của notebook** (VM của Colab/Kaggle), như trên máy của chính nó: bridge cấp bộ tool quen thuộc `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, tất cả chạy trên VM, đường dẫn tương đối tính từ thư mục làm việc của notebook (`/content` trên Colab, `/kaggle/working` trên Kaggle). Với Claude Code, các tool Bash/Read/Edit… gốc trên máy bạn bị tắt hẳn để agent không nhầm hai máy; agent khác được dặn trong luật làm việc và bị "Notebook only" chặn.
 - **Notebook là một file `.ipynb` thật** nằm trong thư mục làm việc (ví dụ `/content/Untitled0.ipynb`), luôn khớp với notebook trên trình duyệt theo cả hai chiều:
@@ -38,15 +42,20 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
   - Bạn sửa cell hay chạy ra output mới thì file được ghi lại trước lần kế tiếp agent đụng tới máy. Cell bạn đang sửa mà agent cũng sửa thì giữ bản của bạn.
   - Output và `execution_count` trong file chỉ để đọc: chúng đến từ việc chạy cell.
   - Nếu chỗ đó đã có file không do bridge ghi (ví dụ chính file notebook của một Jupyter server), file của agent đổi tên thành `<tên>.agent.ipynb` và file kia được để yên.
-  - Trong VS Code, file notebook là chính file của bạn và do VS Code lưu. Bridge không ghi bản sao nào: `Read`, `Edit`, `NotebookEdit`, `Write` trên đường dẫn của nó đi thẳng vào editor, còn lệnh trong terminal chỉ thấy bản đã Save và không được sửa file đó.
+  - Giao diện ở VS Code cũng vậy: file nằm trên máy của kernel (ví dụ `/content/<tên>.ipynb` trên VM Colab khi chọn kernel Colab trong VS Code) và khớp với Notebook Editor của VS Code. Nếu kernel chạy ngay trên máy bạn, trong thư mục của notebook, thì file `.ipynb` của bạn được để yên và file của agent là `<tên>.agent.ipynb`.
   - Các tool sửa cell kiểu cũ (`list_cells`, `read_cells`, `edit_cell`, `update_cell`, `insert_cell`, `delete_cell`, `move_cell`) đã bỏ.
 - Agent **nhìn thấy biểu đồ**: output dạng PNG/JPEG (matplotlib, seaborn…) được gửi kèm kết quả `run_cells`, `wait_for_cells` và `Read` file notebook dưới dạng ảnh, tối đa 4 ảnh mỗi lần gọi. `Read` một file PNG/JPEG trên VM cũng trả về ảnh. Agent nào không đọc được ảnh thì chỉ nhận dòng ghi chú như trước.
-- **Tiết kiệm ngữ cảnh**: output dài được rút gọn trước khi tới agent. Thanh tiến trình (tqdm, Keras) chỉ giữ trạng thái cuối, dòng lặp lại được gộp, log được cắt theo dòng (giữ đầu và nhiều phần cuối hơn) và lỗi luôn giữ dòng `ValueError: …` cùng frame trong code của bạn. Một lần `run_all` gói trong khoảng 30k ký tự dù chạy bao nhiêu cell. Khi cần xem phần bị cắt, agent dùng tool `read_output` để tìm (regex) hoặc đọc theo trang. Ảnh dán trong markdown (data URI) hiện thành nhãn ngắn và được giữ nguyên khi agent sửa cell. Outline notebook chỉ gửi lại khi nó thay đổi. Khi agent tự nén context (ví dụ Claude Code auto-compact hoặc `/compact`), luật làm việc với notebook được gửi lại ở tin nhắn kế tiếp. Side panel hiện mức đầy context (ví dụ `53k/200k`) nếu agent báo qua ACP.
+- **Tiết kiệm ngữ cảnh**: output dài được rút gọn trước khi tới agent. Thanh tiến trình (tqdm, Keras) chỉ giữ trạng thái cuối, dòng lặp lại được gộp, log được cắt theo dòng (giữ đầu và nhiều phần cuối hơn) và lỗi luôn giữ dòng `ValueError: …` cùng frame trong code của bạn. Một lần `run_all` gói trong khoảng 30k ký tự dù chạy bao nhiêu cell. Khi cần xem phần bị cắt, agent dùng tool `read_output` để tìm (regex) hoặc đọc theo trang. Ảnh dán trong markdown (data URI) hiện thành nhãn ngắn và được giữ nguyên khi agent sửa cell. Outline notebook chỉ gửi lại khi nó thay đổi. Khi agent tự nén context (ví dụ Claude Code auto-compact hoặc `/compact`), luật làm việc với notebook được gửi lại ở tin nhắn kế tiếp. Sidebar hiện mức đầy context (ví dụ `53k/200k`) nếu agent báo qua ACP.
 - **Terminal trên máy của notebook** (tool `Bash`, chỉ ở Autonomous): agent có terminal trên VM của Colab/Kaggle và dùng như terminal trên máy mình. Mỗi phiên là một bash interactive thật trong pseudo-terminal: `cd`, biến môi trường, venv đã kích hoạt còn nguyên giữa các lệnh; phiên sống qua lúc restart kernel; mở nhiều phiên theo tên để chạy song song (server ở phiên này, lệnh ở phiên kia). Lệnh chạy tới khi xong, không giới hạn thời gian: nếu chưa xong khi lượt gọi tool hết giờ, agent nhận output tới lúc đó rồi đợi tiếp (`shell_wait`), gõ trả lời (`shell_input`, ví dụ `y` cho prompt y/N) hoặc bấm Ctrl+C (`shell_interrupt`). Agent đọc đúng những gì màn hình terminal hiển thị: thanh tiến trình ở trạng thái cuối, dòng vẽ lại được vẽ lại, chương trình toàn màn hình (less, vim, htop) hiện thành màn hình của nó. Output của job chạy nền in ra giữa các lệnh cũng được báo. Muốn xem phiên của agent trong terminal của Colab/Kaggle: `tail -f /tmp/ainb-shell-$(id -u)/main/out`.
 - **Chạy code không cần cell** (chỉ ở Autonomous): `run_code` chạy code trong namespace của notebook (xem `df.shape`, cấu hình model…) mà không thêm cell và không đổi lịch sử thực thi. Code chạy tới khi xong như một cell; chạy lâu thì agent nhận run id để đợi tiếp (`wait_for_code`).
-- **Cell đang chạy không chặn agent** (Kaggle, Jupyter): bridge chạm tới VM qua một terminal của chính Jupyter server, không qua kernel. Trong lúc bạn train một cell cả tiếng, agent vẫn đọc log, sửa file, gõ lệnh như thường. Trang mở một terminal ẩn trên server (thấy được trong danh sách Running terminals) và đóng nó khi bạn đóng tab; nếu không đóng được thì nó tự kết thúc sau 15 phút không dùng. Terminal của agent bắt đầu ở thư mục làm việc của kernel và nhận PATH của kernel, nên `python`, `pip` trong đó là của notebook. Nhờ đường này, notebook dùng kernel R/Julia cũng có terminal (máy chủ Jupyter luôn có Python).
-- Giới hạn trên Colab: Colab không cho mượn terminal của server theo cách trên, nên bridge vẫn đi qua kernel. Khi kernel đang chạy một cell thì tạm thời không đọc được terminal, không đọc/ghi được file trên VM và file notebook trên VM không được cập nhật. Lệnh trong terminal không bị ảnh hưởng, cell chạy xong là làm tiếp được. Notebook thì vẫn đọc và sửa được qua đường dẫn file của nó, vì phần đó đi thẳng vào trình duyệt; chưa kết nối runtime cũng vậy. Colab có một terminal riêng (websocket `/colab/tty`, không qua kernel) nhưng chưa được dùng: cần dò nó trên một runtime thật. Server không có terminal (hoặc chạy Windows) thì bridge cũng dùng kernel như vậy; terminal cần máy Linux/macOS.
-- **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên side panel để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
+- **Cell đang chạy không chặn agent** (notebook Kaggle, Jupyter mở trong Chrome): bridge chạm tới VM qua một terminal của chính Jupyter server, không qua kernel. Trong lúc bạn train một cell cả tiếng, agent vẫn đọc log, sửa file, gõ lệnh như thường. Trang mở một terminal ẩn trên server (thấy được trong danh sách Running terminals) và đóng nó khi bạn đóng tab; nếu không đóng được thì nó tự kết thúc sau 15 phút không dùng. Terminal của agent bắt đầu ở thư mục làm việc của kernel và nhận PATH của kernel, nên `python`, `pip` trong đó là của notebook. Nhờ đường này, notebook dùng kernel R/Julia cũng có terminal (máy chủ Jupyter luôn có Python).
+- **Giới hạn trên Colab: mỗi lúc chỉ một việc.** Colab không cho mượn terminal của server, nên terminal và file trên máy Colab đi qua kernel. Khi một cell đang chạy:
+  - agent vẫn đọc và sửa notebook được (phần này đi thẳng vào trang Colab, kể cả khi chưa kết nối runtime);
+  - terminal và file trên máy Colab phải chờ cell chạy xong; lệnh đã chạy trong terminal vẫn chạy tiếp, chỉ là agent chưa xem được;
+  - agent được báo trước giới hạn này và được báo lại khi gặp phải.
+
+  So sánh: trên **Kaggle** (và Jupyter), notebook và terminal làm song song được cả khi cell đang chạy. Colab sẽ làm được như vậy qua SSH chính thức của Colab khi dùng gói trả phí (xem [docs/du-dinh-colab.md](docs/du-dinh-colab.md)). Server không có terminal (hoặc chạy Windows), và notebook mở trong VS Code, cũng đi qua kernel như Colab; terminal cần máy Linux/macOS.
+- **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên sidebar để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
 
 ## Định dạng trong chat
 
@@ -56,29 +65,32 @@ Dùng `![Mô tả](https://example.com/plot.png)` để hiện ảnh ngay trong 
 
 Trong VS Code, link Markdown như `[Xem dòng 12](./src/main.py:12)` mở file ở dòng tương ứng trong workspace. Nếu cửa sổ không mở workspace, đường dẫn được giới hạn trong thư mục của notebook. Link web mở bằng trình duyệt.
 
-## Dùng trong VS Code
+## Cài đặt
 
-Extension **Agent in Notebook** mở giao diện chat ở sidebar cạnh Notebook Editor của VS Code. Agent đọc, sửa và chạy cell trên tài liệu `.ipynb` đang mở. Sidebar theo notebook đang chọn và hiển thị diff để **Apply / Reject**. Lịch sử chat được lưu theo đường dẫn notebook.
-
-**Chạy thử từ mã nguồn** với VS Code 1.105 trở lên. Từ thư mục repo:
+Cần Node ≥ 20, pnpm, VS Code ≥ 1.105, và Chrome ≥ 116 nếu dùng notebook trên web.
 
 ```sh
 pnpm install
 pnpm build
-pnpm bridge
 ```
 
-Mở terminal khác trong cùng thư mục, sau đó chạy:
+**1. Bridge**
+
+```sh
+pnpm bridge            # = node packages/bridge/dist/cli.js serve
+```
+
+Bridge in ra **pairing token** và ghi nó vào `~/.agent-in-notebook/config.json`; VS Code đọc file này nên thường không cần dán token. In lại token: `pnpm ainb token`. Đổi token: thêm `--reset`.
+
+**2. VS Code: nơi bạn chat**
+
+Chạy thử từ mã nguồn, trong một terminal khác ở thư mục repo:
 
 ```sh
 code --extensionDevelopmentPath="${PWD}/packages/vscode"
 ```
 
-Trong cửa sổ **Extension Development Host**, mở một file `.ipynb` bằng Notebook Editor. Bấm **Agent in Notebook** trên Activity Bar hoặc chạy **Agent in Notebook: Open Chat** từ Command Palette. Chọn agent rồi gửi tin. Sidebar đọc port và pairing token từ cấu hình bridge trên cùng máy. Nếu bridge dùng port khác, chọn **Enter pairing token** để nhập port và token.
-
-Để chạy cell, cài **Jupyter** trong VS Code và chọn kernel ở **Select Kernel**. Muốn dùng GPU/TPU của Colab, cài thêm extension **Colab** của Google và chọn kernel Colab. `run_code` và các tool terminal của notebook dùng API kernel của Jupyter. Chạy một cell để khởi động kernel và cấp quyền kernel cho Agent in Notebook khi Jupyter hỏi. Với Kaggle, tải `.ipynb` về để mở trong VS Code và chọn kernel có sẵn ở đó. Runtime Kaggle đang chạy trong tab web chỉ được kết nối qua bản Chrome bên dưới.
-
-Nếu muốn cài vào VS Code đang dùng hằng ngày, đóng gói từ repo đã build:
+Hoặc cài vào VS Code đang dùng hằng ngày:
 
 ```sh
 cd packages/vscode
@@ -86,42 +98,26 @@ pnpm dlx @vscode/vsce@4.1.1 package --no-dependencies --skip-license
 code --install-extension agent-in-notebook-vscode-0.1.0.vsix
 ```
 
-Lưu notebook bằng thao tác Save của VS Code. Undo theo lượt trong sidebar chỉ hoàn tác cell còn khớp với bản agent sửa. Các cell cũ chưa có ID trong `.ipynb` có ID tạm trong phiên mở tài liệu, nên hoàn tác các cell đó cần thực hiện trước khi đóng notebook.
+Bấm **Agent in Notebook** trên Activity Bar (hoặc **Agent in Notebook: Open Chat** trong Command Palette). Nếu bridge dùng port khác, chọn **Enter pairing token** để nhập port và token.
 
-## Cài đặt bản Chrome
+**3. Chrome: notebook Colab/Kaggle trên web**
 
-Cần Node ≥ 20, pnpm và Chrome ≥ 116.
-
-```sh
-pnpm install
-pnpm build
-```
-
-**1. Nạp extension**
-
-`chrome://extensions` → bật *Developer mode* → *Load unpacked* → chọn `packages/extension/dist`. ID của extension cố định (`mkdjlgboacefhokakjlobfailhipgklf`, nhờ trường `key` trong manifest). Nếu bạn đã nạp bản cũ hơn (chưa có `key`), hãy gỡ nó ra rồi nạp lại.
-
-**2. Đăng ký bridge với trình duyệt (một lần)**
+`chrome://extensions` → bật *Developer mode* → *Load unpacked* → chọn `packages/extension/dist`. ID của extension cố định (`mkdjlgboacefhokakjlobfailhipgklf`, nhờ trường `key` trong manifest). Sau đó đăng ký bridge với trình duyệt một lần:
 
 ```sh
 pnpm ainb install      # = node packages/bridge/dist/cli.js install
 ```
 
-Lệnh này đăng ký bridge làm *native messaging host* cho Chrome, Chromium, Edge và Brave. Trên Windows nó ghi khóa registry trong `HKCU`, không cần quyền admin. Từ đó, khi bạn mở side panel, extension tự bật bridge nếu bridge chưa chạy và tự ghép nối, không cần mở terminal hay dán token. Nếu bạn chuyển thư mục project hoặc đổi bản Node, hãy chạy lại `install`. Gỡ đăng ký bằng `pnpm ainb uninstall`.
+Lệnh này đăng ký bridge làm *native messaging host* cho Chrome, Chromium, Edge và Brave (trên Windows: khóa registry trong `HKCU`, không cần quyền admin). Extension Chrome không có giao diện chat: khi bạn mở một notebook Colab hoặc Kaggle, nó tự bật bridge nếu bridge chưa chạy, tự ghép nối, và notebook hiện ra trong ô chọn notebook của sidebar VS Code. Biểu tượng của extension có dấu **!** khi chưa nối được bridge; bấm vào biểu tượng để thử lại (di chuột lên để xem lý do). Nếu bạn chuyển thư mục project hoặc đổi bản Node, hãy chạy lại `install`. Gỡ đăng ký bằng `pnpm ainb uninstall`.
 
-Bridge được bật theo cách này sẽ chạy nền và ghi log vào `~/.agent-in-notebook/bridge.log`. Các lệnh đi kèm: `pnpm ainb status`, `pnpm ainb stop`. Sau `stop`, extension không tự bật lại bridge cho tới khi bạn bấm **Start the bridge** hoặc mở lại side panel.
+Bridge được bật theo cách này chạy nền và ghi log vào `~/.agent-in-notebook/bridge.log`. Các lệnh đi kèm: `pnpm ainb status`, `pnpm ainb stop`. Sau `stop`, extension không tự bật lại bridge cho tới khi bạn mở (hoặc reload) một notebook, hay bấm vào biểu tượng của extension.
 
-Vẫn có thể chạy bridge bằng tay như trước, chẳng hạn để xem log trực tiếp hoặc khi bridge chạy trong WSL:
+**4. Dùng**
 
-```sh
-pnpm bridge            # = node packages/bridge/dist/cli.js serve
-```
+- Notebook trên web: mở notebook Colab hoặc Kaggle trong Chrome (ở chế độ chỉnh sửa), rồi chat ở sidebar VS Code. Nếu notebook đã mở từ trước khi cài extension, hãy reload tab một lần.
+- Notebook trong VS Code: mở file `.ipynb` bằng Notebook Editor. Để chạy cell, cài **Jupyter** trong VS Code và chọn kernel ở **Select Kernel**; muốn dùng GPU/TPU của Colab, cài thêm extension **Colab** của Google và chọn kernel Colab. Chạy một cell để khởi động kernel và cấp quyền kernel cho Agent in Notebook khi Jupyter hỏi. Lưu notebook bằng Save của VS Code. Các cell cũ chưa có ID trong `.ipynb` có ID tạm trong phiên mở tài liệu, nên hoàn tác theo lượt với các cell đó cần làm trước khi đóng notebook.
 
-Bridge in ra **pairing token**; dán token đó vào mục *Connect with a pairing token instead* trên side panel. In lại token: `pnpm ainb token`. Đổi token: thêm `--reset`.
-
-**3. Dùng**
-
-Mở một notebook Colab hoặc Kaggle (ở chế độ chỉnh sửa), bấm icon extension để mở side panel, chọn agent, chọn mode, rồi chat. Nếu notebook đã mở từ trước khi cài extension, hãy reload tab một lần.
+Dù notebook mở ở đâu, agent vẫn làm việc trên máy của notebook (VM Colab/Kaggle, server Jupyter, hay máy bạn với kernel local), với terminal, file và file notebook ở đó.
 
 ### Agent
 
@@ -134,7 +130,7 @@ Mở một notebook Colab hoặc Kaggle (ở chế độ chỉnh sửa), bấm i
 
 ### Thêm agent ACP
 
-Bạn có thể thêm, sửa, xóa và **Test connection** ngay trong side panel qua **Manage agents**. Chỉ cần nhập launch command; tên có thể để trống. Ví dụ: `dsh --profile acp` (DeepSeek Harness) hoặc `claude-fp-acp` (launcher Claude FP đã cài trên máy). Lệnh chạy trên máy đang chạy bridge và dùng lại đăng nhập của agent. Đường dẫn hoặc tham số có khoảng trắng cần đặt trong dấu nháy.
+Bạn có thể thêm, sửa, xóa và **Test connection** ngay trong sidebar qua **Manage agents**. Chỉ cần nhập launch command; tên có thể để trống. Ví dụ: `dsh --profile acp` (DeepSeek Harness) hoặc `claude-fp-acp` (launcher Claude FP đã cài trên máy). Lệnh chạy trên máy đang chạy bridge và dùng lại đăng nhập của agent. Đường dẫn hoặc tham số có khoảng trắng cần đặt trong dấu nháy.
 
 Khi chọn agent, extension mở session ACP để tải các lựa chọn model/effort **trước tin nhắn đầu tiên**, chưa gửi prompt đến model. Chọn model xong rồi gửi tin; nút Send sẽ chờ việc đổi model hoàn tất.
 

@@ -1,6 +1,8 @@
 // End-to-end in a real browser: Chromium with the built extension, the built
 // bridge, the scripted fake agent, and real notebooks (public Colab page; a
-// local Jupyter Notebook 7, which is what Kaggle embeds).
+// local Jupyter Notebook 7, which is what Kaggle embeds). The chat is the
+// real chat UI with VS Code's host logic for Chrome tabs (panel-harness.ts),
+// in a page of its own, as the VS Code sidebar would show it.
 //
 //   E2E=1 [AINB_E2E_JUPYTER=<path to jupyter executable>] pnpm --filter @ainb/extension exec vitest run test/e2e.test.ts
 //
@@ -21,6 +23,7 @@ import { join, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from "vitest";
 import { formatLaunchCommand } from "@ainb/protocol";
+import { openPanel as openChatPanel, pickNotebook } from "./panel-harness.js";
 
 const RUN = !!process.env.E2E;
 const JUPYTER = process.env.AINB_E2E_JUPYTER;
@@ -48,7 +51,6 @@ const COLAB = "https://colab.research.google.com/github/googlecolab/colabtools/b
 let bridge: ChildProcess | null = null;
 let jupyter: ChildProcess | null = null;
 let ctx: BrowserContext;
-let extId: string;
 
 async function waitHttp(url: string, ms: number) {
   const end = Date.now() + ms;
@@ -101,8 +103,7 @@ beforeAll(async () => {
     viewport: { width: 1400, height: 1000 },
   });
   const sw = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent("serviceworker"));
-  extId = new URL(sw.url()).host;
-  // Pair by hand with this test's bridge, before any panel opens: a native host
+  // Pair by hand with this test's bridge, before any notebook opens: a native host
   // registered on this machine (`ainb install`) would start and pair with the user's own.
   await sw.evaluate(([port, token]) => chrome.storage.local.set({ config: { port, token, source: "manual" } }), [PORT, TOKEN] as const);
 }, 120_000);
@@ -117,28 +118,12 @@ afterAll(async () => {
   }
 });
 
-async function tabIdOf(page: Page): Promise<number> {
-  const sw = ctx.serviceWorkers()[0]!;
-  const url = page.url();
-  return sw.evaluate(async (u) => {
-    const tabs = await chrome.tabs.query({});
-    return tabs.find((t) => t.url === u)!.id!;
-  }, url);
-}
-
-async function openPanel(notebookPage: Page): Promise<Page> {
-  const tabId = await tabIdOf(notebookPage);
-  const panel = await ctx.newPage();
-  await panel.goto(`chrome-extension://${extId}/sidepanel.html?tab=${tabId}`);
-  // Either the setup screen or, once paired, the main view.
+/** The chat panel, about the notebook titled `title` that is open in a Chrome tab. */
+async function openPanel(title: string): Promise<Page> {
+  const panel = await openChatPanel(ctx, PORT, TOKEN);
   await panel.locator(".setup, .app").first().waitFor({ timeout: 30_000 });
-  if (await panel.locator(".setup").count()) {
-    // No native host in this browser: pair by hand.
-    await panel.getByText("Connect with a pairing token instead").click();
-    await panel.getByPlaceholder("from the bridge's console").fill(TOKEN);
-    await panel.getByLabel("Port").fill(String(PORT));
-    await panel.getByRole("button", { name: "Connect" }).click();
-  }
+  await panel.locator(".app").waitFor({ timeout: 30_000 });
+  await pickNotebook(panel, title);
   await panel.getByLabel("Agent").selectOption("fake");
   return panel;
 }
@@ -166,7 +151,7 @@ describe.skipIf(!RUN)("Colab", () => {
     nb = await ctx.newPage();
     await nb.goto(COLAB, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await nb.waitForFunction(() => (window as any).colab?.global?.notebook?.cells?.length > 0, null, { timeout: 120_000 });
-    panel = await openPanel(nb);
+    panel = await openPanel("colab-github-demo.ipynb");
     await expect.poll(() => panel.locator(".top-title").textContent(), { timeout: 60_000 }).toContain("Colab");
     await expect.poll(() => panel.locator(".top-title").textContent()).toContain("colab-github-demo.ipynb");
   }, 300_000);
@@ -209,7 +194,7 @@ describe.skipIf(!RUN)("Colab", () => {
     expect(texts).toContain("print('from the panel')");
   }, 120_000);
 
-  it("undoes the agent's changes to the notebook from the side panel", async () => {
+  it("undoes the agent's changes to the notebook from the chat", async () => {
     dumpOnFailure("undo");
     const texts = () => nb.evaluate(() => (window as any).colab.global.notebook.cells.map((c: any) => c.getText()));
     const before = await texts();
@@ -230,13 +215,13 @@ describe.skipIf(!RUN)("Colab", () => {
     await expect.poll(() => changes.textContent()).toContain("undone");
   }, 120_000);
 
-  it("shows a change in Colab's inline diff and applies it from the side panel", async () => {
+  it("shows a change in Colab's inline diff and applies it from the chat", async () => {
     await panel.getByLabel("Review").check();
     const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells[2].getId());
     await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: cellId, new_source: "print('reviewed')" } }]));
     // Colab's own Accept / Reject UI appears in the cell...
     await nb.locator("colab-inline-cell-diff").waitFor({ timeout: 30_000 });
-    // ...and the same review appears in the side panel.
+    // ...and the same review appears in the chat.
     const card = panel.locator(".card.review.pending");
     await card.waitFor({ timeout: 30_000 });
     expect(await card.locator(".row.a").first().textContent()).toContain("print('reviewed')");
@@ -273,7 +258,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
   it("attaches, edits, runs, and reviews with the inline card", async () => {
     nb = await ctx.newPage();
     await nb.goto(`${JUPYTER_BASE}/notebooks/e2e.ipynb?token=e2e`, { waitUntil: "domcontentloaded" });
-    panel = await openPanel(nb);
+    panel = await openPanel("e2e.ipynb");
     await expect.poll(() => panel.locator(".top-title").textContent(), { timeout: 60_000 }).toContain("e2e.ipynb");
     const model = panel.getByLabel("Model", { exact: true });
     await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);

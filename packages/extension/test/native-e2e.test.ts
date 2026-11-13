@@ -1,5 +1,5 @@
-// Pairing through native messaging in a real browser: `ainb install`, then the
-// side panel starts the bridge and connects with no token typed in.
+// Pairing through native messaging in a real browser: `ainb install`, then
+// opening a notebook starts the bridge and connects with no token typed in.
 //
 // It registers the native host for this user's browsers (on Windows: HKCU
 // registry keys) and removes the registration afterwards, so it only runs when asked:
@@ -65,7 +65,16 @@ function saveRegistration(): () => void {
 
 let restoreRegistration = () => {};
 let ctx: BrowserContext;
-let panel: Page;
+let nb: Page;
+const COLAB = "https://colab.research.google.com/github/googlecolab/colabtools/blob/main/notebooks/colab-github-demo.ipynb";
+/** The browser extension is connected to the bridge. */
+const paired = async () => {
+  try {
+    return ((await (await fetch(`http://127.0.0.1:${PORT}/health`)).json()) as { extension: boolean }).extension;
+  } catch {
+    return false;
+  }
+};
 
 beforeAll(async () => {
   if (!RUN) return;
@@ -96,22 +105,19 @@ describe.skipIf(!RUN)("native messaging", () => {
     expect(new URL(sw.url()).host).toBe("mkdjlgboacefhokakjlobfailhipgklf");
   });
 
-  it("starts the bridge and pairs when the panel opens", async () => {
+  it("starts the bridge and pairs when a notebook opens", async () => {
     expect(await running()).toBe(false);
-    panel = await ctx.newPage();
-    await panel.goto("chrome-extension://mkdjlgboacefhokakjlobfailhipgklf/sidepanel.html");
-    // Connected: the panel shows its main view (no notebook in this tab).
-    await panel.getByText("No notebook in this tab").waitFor({ timeout: 45_000 });
-    expect(await running()).toBe(true);
-  });
+    nb = await ctx.newPage();
+    await nb.goto(COLAB, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    await expect.poll(paired, { timeout: 60_000 }).toBe(true);
+  }, 120_000);
 
-  it("stays stopped after `ainb stop` until the user starts it again", async () => {
+  it("stays stopped after `ainb stop` until a notebook is opened again", async () => {
     expect(ainb("stop").stdout).toContain("Stopped.");
-    await panel.getByText("The bridge was stopped.").waitFor({ timeout: 15_000 });
-    await panel.waitForTimeout(4000);
+    await expect.poll(running, { timeout: 15_000 }).toBe(false);
+    await nb.waitForTimeout(4000);
     expect(await running()).toBe(false);
-    await panel.getByRole("button", { name: "Start the bridge" }).click();
-    await panel.getByText("No notebook in this tab").waitFor({ timeout: 45_000 });
-    expect(await running()).toBe(true);
-  });
+    await nb.reload({ waitUntil: "domcontentloaded", timeout: 120_000 });
+    await expect.poll(paired, { timeout: 60_000 }).toBe(true);
+  }, 180_000);
 });

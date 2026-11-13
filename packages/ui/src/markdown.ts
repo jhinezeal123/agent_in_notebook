@@ -4,7 +4,7 @@
 
 import DOMPurify from "dompurify";
 import { Marked, Renderer } from "marked";
-import { chatFileLink, externalChatUrl } from "../shared/chat-links.js";
+import { chatFileLink, externalChatUrl } from "./chat-links.js";
 import { decorateMarkdownImages } from "./images.js";
 import { escapeHtml, mathExtensions, typesetMath } from "./math.js";
 

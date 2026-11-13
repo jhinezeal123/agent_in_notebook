@@ -1,6 +1,8 @@
 # Dự định: Colab tới máy không qua kernel
 
-Trạng thái (13/11/2026): **hoãn**, chờ dùng Colab trả phí. Hiện Colab vẫn đi qua kernel.
+Trạng thái (14/11/2026): **hoãn**, chờ dùng Colab trả phí. Hiện Colab vẫn đi qua kernel: notebook thì luôn sửa được, còn terminal và file trên máy phải chờ khi một cell đang chạy (Kaggle thì làm song song được).
+
+Khi có gói trả phí: cài extension **Colab** của Google trong VS Code ([googlecolab/colab-vscode](https://github.com/googlecolab/colab-vscode)) và làm SSH theo kế hoạch dưới đây, cùng một lượt. (Đã cân nhắc đi qua hệ file `colab://` của extension đó với gói miễn phí; user chọn chưa làm.)
 
 ## Hiện tại
 

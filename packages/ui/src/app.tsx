@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { EXTENSION_ID, SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
-import { DEFAULT_PREFS, type BridgeState, type Prefs } from "../shared/panel-messages.js";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
-import { copyText, Message, PendingPrompt, type PartActions } from "./parts.js";
+import { Message, PendingPrompt, type PartActions } from "./parts.js";
 import { AgentManager } from "./agent-manager.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
 export function App() {
   const client = usePanelHost();
-  const inVSCode = client.kind === "vscode";
   const [bridge, setBridge] = useState<BridgeState | null>(null);
   const [tabId, setTabId] = useState<number | null>(null);
   useEffect(() => client.watchTab(setTabId), [client]);
   const [notebook, setNotebook] = useState<NotebookInfo | null>(null);
+  const [choices, setChoices] = useState<NotebookChoice[]>([]);
   const [chat, setChat] = useState<ChatSnapshot | null>(null);
   const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS);
   const [error, setError] = useState<string | null>(null);
@@ -31,8 +31,10 @@ export function App() {
   useEffect(() => {
     void client.getPrefs().then((prefs) => prefs && setPrefsState({ ...DEFAULT_PREFS, ...prefs }), () => {}).finally(() => setPrefsReady(true));
     void client.request<BridgeState>("state.get").then(setBridge, (e: Error) => setError(e.message));
+    void client.request<NotebookChoice[]>("notebooks.list").then(setChoices, () => {});
     return client.on((e) => {
       if (e.event === "state") setBridge({ ...e.params });
+      else if (e.event === "notebooks") setChoices(e.params);
       else if (e.event === "notebook") {
         if (e.params.tabId === tabRef.current) setNotebook(e.params.info);
       } else if (e.event === "bridge") {
@@ -161,7 +163,7 @@ export function App() {
   );
 
   if (!bridge) return <div class="center muted">{error ?? "Loading…"}</div>;
-  if (!connected) return inVSCode ? <VSCodeSetup bridge={bridge} /> : <Setup bridge={bridge} />;
+  if (!connected) return <Setup bridge={bridge} />;
 
   const agents = bridge.agents;
   const running = live?.status === "running";
@@ -175,12 +177,23 @@ export function App() {
       <header class="top">
         <span class={`dot ${notebook ? "ok" : "off"}`} aria-hidden="true" />
         <div class="top-title">
-          {notebook ? (
+          {choices.length > 1 ? (
+            <select
+              class="notebook-pick"
+              aria-label="Notebook"
+              value={tabId ?? ""}
+              onChange={(e) => void run(client.request("notebooks.select", { tabId: Number((e.target as HTMLSelectElement).value) }))}
+            >
+              {tabId === null && <option value="">Choose a notebook</option>}
+              {choices.map((c) => <option key={c.tabId} value={c.tabId}>{choiceLabel(c)}</option>)}
+            </select>
+          ) : notebook ? (
             <>
               <strong>{PLATFORM[notebook.platform]}</strong> · <span title={notebook.title}>{notebook.title}</span>
+              {choices[0]?.place === "chrome" && <span class="muted"> · Chrome</span>}
             </>
           ) : (
-            <span class="muted">{inVSCode ? "No active notebook" : "No notebook in this tab"}</span>
+            <span class="muted">No notebook open</span>
           )}
         </div>
         {notebook && <span class={`kernel k-${notebook.kernel}`} title="Notebook kernel">kernel: {notebook.kernel}</span>}
@@ -200,10 +213,8 @@ export function App() {
 
       {!notebook ? (
         <div class="center muted pad">
-          {inVSCode ? <p>Open an <code>.ipynb</code> file in the Notebook Editor to chat with an agent about it.</p> : <>
-            <p>Open a notebook on Colab or Kaggle (or a local Jupyter started with app exposure) to chat with an agent about it.</p>
-            <p class="small">If the notebook is open, reload its tab once after installing the extension.</p>
-          </>}
+          <p>Open a notebook on Colab or Kaggle in Chrome (with the Agent in Notebook extension), or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
+          <p class="small">The agent works on the machine the notebook runs on.</p>
           <button class="secondary" onClick={() => setManagingAgents(true)}>Manage agents</button>
         </div>
       ) : (
@@ -498,7 +509,7 @@ function AgentOptions({ chat, busy, onSet }: { chat: ChatSnapshot; busy: boolean
   );
 }
 
-function VSCodeSetup({ bridge }: { bridge: BridgeState }) {
+function Setup({ bridge }: { bridge: BridgeState }) {
   const client = usePanelHost();
   const [error, setError] = useState<string>();
   const busy = bridge.conn === "connecting";
@@ -520,84 +531,6 @@ function VSCodeSetup({ bridge }: { bridge: BridgeState }) {
   );
 }
 
-function Setup({ bridge }: { bridge: BridgeState }) {
-  const client = usePanelHost();
-  const [port, setPort] = useState(String(bridge.config.port));
-  const [token, setToken] = useState(bridge.config.source === "manual" ? bridge.config.token : "");
-  const [saving, setSaving] = useState(false);
-  const manual = bridge.config.source === "manual";
-  const native = bridge.native?.status;
-  const needsInstall = native === "missing" || native === "forbidden";
-  const busy = bridge.conn === "connecting";
-  // The ID is fixed by the manifest's key; a copy loaded without it needs its own entry.
-  const command = `ainb install${bridge.extensionId !== EXTENSION_ID ? ` --extension-id ${bridge.extensionId}` : ""}`;
-  const auto = () => void client.request("config.auto", {}).catch(() => {});
-  // Before installing, "paste the token" is not the next step; installing is.
-  const status = needsInstall && !manual && bridge.conn === "unpaired" ? null : busy ? null : bridge.error ?? (bridge.conn === "unpaired" ? "Not paired yet." : "Not connected.");
-  return (
-    <div class="setup pad">
-      <h1>Connect to the bridge</h1>
-      <p>The agents run on your computer through a small local bridge.</p>
-      {!manual &&
-        (needsInstall ? (
-          <>
-            <p>
-              {native === "forbidden"
-                ? "The bridge is set up for another copy of this extension. Run this once in a terminal:"
-                : "Set it up once: run this in a terminal, then come back here. The panel then starts the bridge by itself."}
-            </p>
-            <div class="cmd">
-              <code>{command}</code>
-              <button class="linkish" onClick={(e) => void copyText(client, command, e.currentTarget)}>
-                Copy
-              </button>
-            </div>
-            <p class="muted small">
-              From the project folder: <code>pnpm ainb {command.slice(5)}</code>
-            </p>
-            <button class="primary" disabled={busy} onClick={auto}>
-              {busy ? "Checking…" : "Check again"}
-            </button>
-          </>
-        ) : (
-          <button class="primary" disabled={busy} onClick={auto}>
-            {busy ? "Starting the bridge…" : bridge.conn === "replaced" ? "Connect here" : "Start the bridge"}
-          </button>
-        ))}
-      {status && <p class={`status ${bridge.conn}`}>{status}</p>}
-      {bridge.native?.log && <pre class="setup-log">{bridge.native.log}</pre>}
-      <details class="manual" open={manual}>
-        <summary>Connect with a pairing token instead</summary>
-        <p class="muted small">
-          For a bridge started by hand (<code>ainb serve</code> prints the token), for example in WSL or on another port.
-        </p>
-        <label class="field">
-          Pairing token
-          <input type="password" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} placeholder="from the bridge's console" autocomplete="off" />
-        </label>
-        <label class="field">
-          Port
-          <input inputMode="numeric" value={port} onInput={(e) => setPort((e.target as HTMLInputElement).value)} />
-        </label>
-        <div class="row-actions">
-          <button
-            class={manual ? "primary" : "secondary"}
-            disabled={saving || !token.trim()}
-            onClick={async () => {
-              setSaving(true);
-              await client.request("config.set", { port: Number(port), token }).catch(() => {});
-              setSaving(false);
-            }}
-          >
-            {manual && busy ? "Connecting…" : manual && bridge.conn === "replaced" ? "Connect here" : "Connect"}
-          </button>
-          {manual && (
-            <button class="linkish" onClick={auto}>
-              Set up automatically instead
-            </button>
-          )}
-        </div>
-      </details>
-    </div>
-  );
+function choiceLabel(c: NotebookChoice): string {
+  return `${PLATFORM[c.platform]} · ${c.title}${c.place === "chrome" ? " (Chrome)" : ""}`;
 }

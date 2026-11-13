@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { BRIDGE_DEFAULT_PORT, RpcPeer, WIRE_VERSION, type AgentInfo, type Envelope, type ExtensionMethods } from "@ainb/protocol";
-import type { BridgeConfig, BridgeState, PanelEvent } from "../../extension/src/shared/panel-messages.js";
+import { BRIDGE_DEFAULT_PORT, RpcPeer, WIRE_VERSION, type AgentInfo, type BridgeEvents, type Envelope, type ExtensionMethods } from "@ainb/protocol";
+import type { BridgeConfig, BridgeState, PanelEvent } from "../../ui/src/panel-messages.js";
 
 export class BridgeLink {
   private socket?: WebSocket;
@@ -12,13 +12,15 @@ export class BridgeLink {
   private retry?: ReturnType<typeof setTimeout>;
   private config?: BridgeConfig;
   private state: BridgeState = {
-    conn: "disconnected", agents: [], config: { port: BRIDGE_DEFAULT_PORT, token: "" }, extensionId: "",
+    conn: "disconnected", agents: [], config: { port: BRIDGE_DEFAULT_PORT, token: "" },
   };
 
   constructor(
     private readonly version: string,
     private readonly publish: (event: PanelEvent) => void,
     private readonly runOp: (params: ExtensionMethods["notebook.op"]["params"]) => Promise<unknown>,
+    /** Notebooks in Chrome tabs: one appeared, changed or went (info null), or the user brought one to the front. */
+    private readonly onBrowser: (event: { notebook: BridgeEvents["browser.notebook"] } | { focused: number }) => void,
   ) {}
 
   snapshot(): BridgeState { return this.state; }
@@ -62,6 +64,12 @@ export class BridgeLink {
     });
     rpc.on("agents.changed", ({ agents }: { agents: AgentInfo[] }) => {
       if (this.rpc === rpc) this.setState({ agents });
+    });
+    rpc.on("browser.notebook", (params: BridgeEvents["browser.notebook"]) => {
+      if (this.rpc === rpc) this.onBrowser({ notebook: params });
+    });
+    rpc.on("browser.focused", ({ tabId }: BridgeEvents["browser.focused"]) => {
+      if (this.rpc === rpc) this.onBrowser({ focused: tabId });
     });
     for (const method of ["chat.snapshot", "chat.patch", "chat.status", "chat.usage"]) {
       rpc.on(method, (params: unknown) => {

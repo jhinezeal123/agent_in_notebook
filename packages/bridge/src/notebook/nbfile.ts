@@ -43,6 +43,11 @@ export function machineExec(ctx: ToolContext): KernelExec {
   return (code, waitMs) => ctx.call({ op: "machine_exec", code, waitMs }, waitMs + 15_000);
 }
 
+/** Where the user sees the notebook: the agent works on its machine, wherever the editor is. */
+export function editorName(info: NotebookInfo): string {
+  return info.platform === "vscode" ? "VS Code" : "the browser";
+}
+
 export function reachable(info: NotebookInfo): boolean {
   return info.language === "python" || !!info.serverTerminals;
 }
@@ -105,14 +110,11 @@ export async function notebookPath(ctx: ToolContext, info: NotebookInfo): Promis
     m.last = null;
     if (old && reachable(info)) await removeFile(machineExec(ctx), old).catch(() => {});
   }
-  if (m.path && (m.claimed || !reachable(info) || (info.platform === "vscode" && m.places))) return m.path;
+  if (m.path && (m.claimed || !reachable(info))) return m.path;
   const dir = (await places(ctx, info)).cwd;
   const stem = name.replace(/\.ipynb$/i, "");
   const candidates = [name, `${stem}.agent.ipynb`, ...[2, 3, 4, 5].map((n) => `${stem}.agent-${n}.ipynb`)].map((n) => posix.join(dir, n));
-  // VS Code's kernel works in the notebook's own folder, and the file there is
-  // the user's, saved by VS Code: it is never claimed nor written, so the path
-  // only leads Read, Edit, NotebookEdit and Write to the editor.
-  if (reachable(info) && ctx.mirror.places && info.platform !== "vscode") {
+  if (reachable(info) && ctx.mirror.places) {
     try {
       m.path = await claim(machineExec(ctx), candidates);
       m.claimed = true;
@@ -219,7 +221,7 @@ async function pullLocked(ctx: ToolContext, info: NotebookInfo): Promise<string[
   const base = m.last.cells;
   m.last = { text, stat: st, cells };
   const report = await describeApplied(ctx, await applyCells(ctx, base, cells, { concurrent: true }), false);
-  const notes = report.noop ? [] : [`${where} changed on the machine; this reached the notebook in the browser:`, ...report.lines];
+  const notes = report.noop ? [] : [`${where} changed on the machine; this reached the notebook in ${editorName(info)}:`, ...report.lines];
   if (outputsTouched(base, cells)) notes.push("Outputs and execution counts in the notebook file come from running cells; changes to them were not applied.");
   return notes;
 }
@@ -274,7 +276,7 @@ export async function applyCells(ctx: ToolContext, base: NbCell[], target: NbCel
   const untouched = (id: string, what: string): CellInfo | null => {
     const e = live.get(id);
     if (!e) {
-      skipped.push(`${what}: cell ${id} is no longer in the notebook (removed in the browser).`);
+      skipped.push(`${what}: cell ${id} is no longer in the notebook (the user removed it).`);
       return null;
     }
     if (opts.concurrent && e.source !== baseById.get(id)!.source) {
