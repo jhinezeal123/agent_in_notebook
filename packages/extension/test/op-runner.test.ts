@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CellInfo, CellType, NotebookEvent, NotebookInfo, ReviewInfo, RunResult } from "@ainb/protocol";
-import { OpRunner, type NotebookAdapter } from "../src/page/adapter.js";
+import { OpRunner, OutputCollector, type Execution, type NotebookAdapter } from "../src/page/adapter.js";
 
 class MemoryAdapter implements NotebookAdapter {
   readonly platform = "jupyter" as const;
@@ -47,6 +47,16 @@ class MemoryAdapter implements NotebookAdapter {
     }
     const c = this.cells.find((x) => x.id === id)!;
     return c.source.startsWith("raise") ? { cellId: id, status: "error", outputs: [{ kind: "error", ename: "ValueError", evalue: "" }] } : { cellId: id, status: "ok", outputs: [] };
+  }
+  executed: string[] = [];
+  /** Code containing "slow" ends only when `finish` is called. */
+  finish: (r: { status: string; ename?: string; evalue?: string }) => void = () => {};
+  async startExecution(code: string): Promise<Execution> {
+    this.executed.push(code);
+    const collected = new OutputCollector();
+    collected.add({ output_type: "execute_result", data: { "text/plain": code } });
+    const reply = code.includes("slow") ? new Promise<{ status: string }>((r) => (this.finish = r)) : Promise.resolve({ status: "ok" });
+    return { reply, collected };
   }
   interrupt() {
     return false;
@@ -161,5 +171,58 @@ describe("OpRunner", () => {
     expect(changes().slice(4)).toEqual([{ kind: "delete", cellId: "b", cellType: "code", index: bIndex, before: "undo", after: "", reviewId: del.reviewId }]);
     const order = events.map((e) => e.type).filter((t) => t === "change_applied" || t === "review_closed");
     expect(order.slice(-3)).toEqual(["change_applied", "review_closed", "review_closed"]);
+  });
+});
+
+describe("running code without a cell", () => {
+  it("passes execute to the adapter and leaves the notebook alone", async () => {
+    const { adapter, runner, events } = setup();
+    expect(await runner.run({ op: "execute", code: "1 + 1", waitMs: 1000 })).toEqual({ status: "ok", outputs: [{ kind: "result", text: "1 + 1", mimes: undefined }] });
+    expect(adapter.executed).toEqual(["1 + 1"]);
+    expect(adapter.cells).toHaveLength(3);
+    expect(events).toEqual([]);
+  });
+
+  it("never stops code that outlasts the wait: it can be waited on again by id", async () => {
+    const { adapter, runner } = setup();
+    const first = (await runner.run({ op: "execute", code: "slow()", waitMs: 20 })) as { status: string; execId?: string; outputs: unknown[] };
+    expect(first.status).toBe("running");
+    expect(first.execId).toMatch(/^exec-\d+$/);
+    expect(first.outputs).toHaveLength(1);
+    expect(await runner.run({ op: "execute_wait", execId: first.execId!, waitMs: 20 })).toMatchObject({ status: "running", execId: first.execId });
+    adapter.finish({ status: "error", ename: "KeyboardInterrupt", evalue: "" });
+    expect(await runner.run({ op: "execute_wait", execId: first.execId!, waitMs: 1000 })).toEqual({
+      status: "error",
+      outputs: [{ kind: "result", text: "slow()", mimes: undefined }],
+      message: "KeyboardInterrupt: ",
+    });
+    // Collected: it is gone now.
+    await expect(runner.run({ op: "execute_wait", execId: first.execId!, waitMs: 10 })).rejects.toThrow(/No execution/);
+  });
+
+  it("collects outputs: joins stream chunks, applies clear_output, bounds what it keeps", () => {
+    const c = new OutputCollector();
+    c.add({ output_type: "stream", name: "stdout", text: "a\n" });
+    c.add({ output_type: "stream", name: "stdout", text: "b\n" });
+    c.add({ output_type: "stream", name: "stderr", text: "warn\n" });
+    c.add({ output_type: "execute_result", data: { "text/plain": "3" } });
+    expect(c.outputs).toEqual([
+      { kind: "stream", name: "stdout", text: "a\nb\n" },
+      { kind: "stream", name: "stderr", text: "warn\n" },
+      { kind: "result", text: "3", mimes: undefined },
+    ]);
+    c.clear(true);
+    expect(c.outputs).toHaveLength(3);
+    c.add({ output_type: "stream", name: "stdout", text: "fresh" });
+    expect(c.outputs).toEqual([{ kind: "stream", name: "stdout", text: "fresh" }]);
+    c.clear();
+    expect(c.outputs).toEqual([]);
+
+    const big = "x".repeat(99_999) + "\n";
+    for (let i = 0; i < 30; i++) c.add({ output_type: "stream", name: "stdout", text: big });
+    const text = c.outputs[0]!.text!;
+    expect(text.length).toBeLessThan(1_100_000);
+    expect(text).toMatch(/\n… \[\d+ characters omitted\] …\n/);
+    expect(text.endsWith(big)).toBe(true);
   });
 });

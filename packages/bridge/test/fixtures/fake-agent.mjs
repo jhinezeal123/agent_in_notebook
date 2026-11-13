@@ -1,6 +1,7 @@
 // A scripted ACP agent for tests. It connects to the MCP servers it is given,
 // like a real agent, and follows a script embedded in the prompt:
 //   SCRIPT: [{"tool":"list_cells","args":{}}, {"say":"hi"}, {"permission":"Run ls"}, {"sleep":200}]
+// A tool step can `capture` {name: regex} from its result; later args use it as {{name}}.
 // Every tool result is echoed back as a message chunk "RESULT <tool>: <text>".
 
 import { Readable, Writable } from "node:stream";
@@ -84,6 +85,7 @@ const app = agent({ name: "fake-agent" })
     const m = text.split("\n").at(-1).match(/SCRIPT: (\[.*\])/);
     const steps = m ? JSON.parse(m[1]) : [{ say: `echo: ${text.split("\n").at(-1)}` }];
     let n = 0;
+    const vars = {};
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
       if (step.say) await say(step.say);
@@ -119,8 +121,10 @@ const app = agent({ name: "fake-agent" })
           update: { sessionUpdate: "tool_call", toolCallId: id, title: `mcp__notebook__${step.tool}`, kind: "other", status: "in_progress", rawInput: step.args },
         });
         const mcp = s.mcp.find((c) => c.name === "notebook");
-        const r = await mcp.client.callTool({ name: step.tool, arguments: step.args ?? {} }, undefined, { timeout: 600_000 });
+        const args = JSON.parse(JSON.stringify(step.args ?? {}).replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? ""));
+        const r = await mcp.client.callTool({ name: step.tool, arguments: args }, undefined, { timeout: 600_000 });
         const out = r.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+        for (const [k, re] of Object.entries(step.capture ?? {})) vars[k] = out.match(new RegExp(re))?.[1];
         const images = r.content.filter((c) => c.type === "image");
         if (images.length) await say(`IMAGES ${images.length} ${images.map((i) => `${i.mimeType}:${i.data.length}`).join(",")}\n`);
         await client.notify("session/update", {

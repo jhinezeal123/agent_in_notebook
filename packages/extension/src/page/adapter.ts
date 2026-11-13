@@ -1,7 +1,20 @@
 // The contract every platform adapter implements. Adapters run in the page's
 // main world, next to the notebook app they drive.
 
-import { summarizeCell, type AppliedChange, type CellInfo, type CellType, type NotebookEvent, type NotebookInfo, type NotebookOp, type ReviewInfo, type RunResult } from "@ainb/protocol";
+import {
+  normalizeIpynbOutput,
+  summarizeCell,
+  type AppliedChange,
+  type CellInfo,
+  type CellOutput,
+  type CellType,
+  type ExecResult,
+  type NotebookEvent,
+  type NotebookInfo,
+  type NotebookOp,
+  type ReviewInfo,
+  type RunResult,
+} from "@ainb/protocol";
 
 export interface NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
@@ -15,6 +28,11 @@ export interface NotebookAdapter {
   moveCell(cellId: string, index: number): number | Promise<number>;
   /** Run one code cell; resolves when it finishes or `timeoutMs` passes (the cell keeps running). */
   runCell(cellId: string, timeoutMs: number): Promise<RunResult>;
+  /**
+   * Start running code on the kernel outside any cell, without storing it in
+   * the kernel's history. Throws when the kernel is busy or not connected.
+   */
+  startExecution(code: string): Promise<Execution>;
   interrupt(): boolean;
   focusCell(cellId: string): boolean;
   /**
@@ -28,6 +46,12 @@ export interface NotebookAdapter {
 
 export class OpError extends Error {}
 
+/** Code running on the kernel outside any cell: its reply, and the outputs so far. */
+export interface Execution {
+  reply: Promise<{ status?: string; ename?: string; evalue?: string }>;
+  collected: OutputCollector;
+}
+
 let reviewSeq = 0;
 
 /**
@@ -37,6 +61,7 @@ let reviewSeq = 0;
  */
 export class OpRunner {
   private reviews = new Map<string, { info: ReviewInfo; resolve(accept: boolean): void }>();
+  private readonly executions = new Executions();
 
   constructor(
     private readonly adapter: NotebookAdapter,
@@ -133,6 +158,10 @@ export class OpRunner {
         }
         return { results };
       }
+      case "execute":
+        return this.executions.wait(this.executions.add(await a.startExecution(op.code)), op.waitMs);
+      case "execute_wait":
+        return this.executions.wait(op.execId, op.waitMs);
       case "interrupt":
         return { interrupted: a.interrupt() };
       case "focus_cell":
@@ -187,4 +216,93 @@ export function within<T>(p: Promise<T>, ms: number): Promise<{ done: true; valu
     p.then((value) => ({ done: true as const, value })),
     new Promise<{ done: false }>((r) => setTimeout(() => r({ done: false }), Math.max(0, ms))),
   ]);
+}
+
+export const KERNEL_BUSY = "The kernel is busy running a cell, so this would wait behind it. Wait for the cell (wait_for_cells) or stop it (interrupt_kernel), then try again.";
+
+/** Text a stream may hold while collecting; past it the middle is dropped. */
+const STREAM_MAX = 1_000_000;
+const STREAM_HEAD = 200_000;
+
+/**
+ * Outputs of one `execute`, from raw nbformat-style output messages. Chunks of
+ * a stream join into one output; a command that prints without end cannot
+ * fill the page's memory.
+ */
+export class OutputCollector {
+  private list: CellOutput[] = [];
+  private clearOnNext = false;
+
+  add(raw: unknown): void {
+    const o = normalizeIpynbOutput(raw);
+    if (!o) return;
+    if (this.clearOnNext) {
+      this.list = [];
+      this.clearOnNext = false;
+    }
+    const last = this.list.at(-1);
+    if (o.kind === "stream" && last?.kind === "stream" && last.name === o.name) {
+      last.text = (last.text ?? "") + (o.text ?? "");
+      if (last.text.length > STREAM_MAX) {
+        const tail = last.text.slice(-(STREAM_MAX - STREAM_HEAD));
+        const dropped = last.text.length - STREAM_HEAD - tail.length;
+        last.text = `${last.text.slice(0, STREAM_HEAD)}\n… [${dropped} characters omitted] …\n${tail}`;
+      }
+      return;
+    }
+    this.list.push(o);
+  }
+
+  /** `wait`: clear when the next output arrives (clear_output(wait=True)). */
+  clear(wait = false): void {
+    if (wait) this.clearOnNext = true;
+    else this.list = [];
+  }
+
+  get outputs(): CellOutput[] {
+    return this.list;
+  }
+}
+
+/** How long a finished execution nobody asked about is kept. */
+const EXECUTION_KEEP_MS = 30 * 60_000;
+
+let execSeq = 0;
+
+/**
+ * Executions by id, so code that outlasts one wait can be waited on again.
+ * Nothing is interrupted: code runs until it ends, like a cell.
+ */
+export class Executions {
+  private readonly runs = new Map<string, { settled: Promise<ExecResult>; collected: OutputCollector }>();
+
+  add(e: Execution): string {
+    const execId = `exec-${++execSeq}`;
+    const settled = e.reply.then(
+      (r) => finalResult(r?.status === "ok" || r?.status === undefined, r, undefined, e.collected),
+      (err: Error) => finalResult(false, undefined, err, e.collected),
+    );
+    this.runs.set(execId, { settled, collected: e.collected });
+    // Dropped some time after it ends, if nobody comes back for it.
+    void settled.then(() => setTimeout(() => this.runs.delete(execId), EXECUTION_KEEP_MS));
+    return execId;
+  }
+
+  async wait(execId: string, waitMs: number): Promise<ExecResult> {
+    const run = this.runs.get(execId);
+    if (!run) throw new OpError(`No execution "${execId}" here (the page reloaded, or its result was already collected).`);
+    const r = await within(run.settled, waitMs);
+    if (!r.done) return { status: "running", outputs: [...run.collected.outputs], execId };
+    this.runs.delete(execId);
+    return r.value;
+  }
+}
+
+function finalResult(ok: boolean, rep: { status?: string; ename?: string; evalue?: string } | undefined, error: Error | undefined, collected: OutputCollector): ExecResult {
+  const outputs = collected.outputs;
+  if (ok) return { status: "ok", outputs };
+  // The error output usually came over iopub; say what failed only when it did not.
+  if (outputs.some((o) => o.kind === "error")) return { status: "error", outputs };
+  const what = rep?.ename ? `${rep.ename}: ${rep.evalue ?? ""}` : rep?.status ? `execution ${rep.status}` : (error?.message ?? "execution failed");
+  return { status: "error", outputs, message: what };
 }

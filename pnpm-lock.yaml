@@ -25,6 +25,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
+      '@xterm/headless':
+        specifier: ^6.0.0
+        version: 6.0.0
       cross-spawn:
         specifier: ^7.0.6
         version: 7.0.6
@@ -674,6 +677,9 @@ packages:
 
   '@vitest/spy@5.1.0':
     resolution: {integrity: sha512-2DPO5OMHWKrBngC+fCmTQqemNF0gidRhp3lxbBmRhW+M1XJrfgPpqNqWVevXtn2f2ufD5ZaR1B6B641aAlcX5A==}
+
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -1768,6 +1774,8 @@ snapshots:
       vite: 8.3.6(@types/node@26.6.6)(esbuild@0.28.2)
 
   '@vitest/spy@5.1.0': {}
+
+  '@xterm/headless@6.0.0': {}
 
   accepts@2.0.0:
     dependencies:

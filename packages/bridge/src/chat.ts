@@ -29,6 +29,8 @@ import {
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
 import { playbook, recap, turnContext } from "./instructions.js";
+import { RecentRuns } from "./notebook/exec.js";
+import { ShellSessions } from "./notebook/shell.js";
 import { callTool, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
 import { keyHash } from "./store.js";
 
@@ -112,6 +114,10 @@ export class Chat {
   private lastOutline = "";
   /** Tail of each lock's queue (see ToolContext.exclusive). */
   private locks = new Map<string, Promise<unknown>>();
+  /** Outputs of recent run_shell / run_code calls, for read_output. */
+  private runs = new RecentRuns();
+  /** Terminal sessions on the notebook machine; their shells live on there, this keeps the screens. */
+  private shells = new ShellSessions();
   /** Parts of each message as last sent to the extension, to send only what changed. */
   private sent = new Map<string, SentPart[]>();
 
@@ -531,10 +537,10 @@ export class Chat {
       targets: () => (this.settings.targetCellIds.length ? this.settings.targetCellIds : this.turnTargets),
       call: (op, timeoutMs) => this.call(op, timeoutMs),
       awaitReview: (id, ms) => this.awaitReview(id, ms),
-      confirmRun: async (summary) => {
+      confirmRun: async (summary, detail) => {
         const answer = await this.ask(
           summary,
-          "Review is on, so running code waits for your approval.",
+          detail ?? "Review is on, so running code waits for your approval.",
           [
             { id: "run", name: "Run", kind: "allow_once" },
             { id: "skip", name: "Don't run", kind: "reject_once" },
@@ -550,6 +556,8 @@ export class Chat {
       },
       images: this.acceptsImages(),
       exclusive: (lock, fn) => this.exclusive(lock, fn),
+      runs: this.runs,
+      shells: this.shells,
     };
   }
 
@@ -911,7 +919,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP server is registered as "notebook"; agents spell the tool name differently. */
 function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(list_cells|read_cells|read_output|update_cell|edit_cell|insert_cell|delete_cell|move_cell|run_cells|run_all|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
+  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(list_cells|read_cells|read_output|update_cell|edit_cell|insert_cell|delete_cell|move_cell|run_cells|run_all|run_shell|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && toolName.includes("notebook");
 }

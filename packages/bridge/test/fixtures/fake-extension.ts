@@ -14,6 +14,7 @@ import {
   type ChatMessage,
   type ChatSnapshot,
   type Envelope,
+  type ExecResult,
   type NotebookInfo,
   type NotebookOp,
   type ReviewInfo,
@@ -42,6 +43,17 @@ export class FakeNotebook {
   activeCellId: string | null = null;
   reviews = new Map<string, PendingReview>();
   ran: string[] = [];
+  /** Code run through the execute op by run_code (terminal calls go to `vm`). */
+  executed: { code: string; waitMs: number }[] = [];
+  /** A busy kernel refuses execute, like the real adapters. */
+  busy = false;
+  language = "python";
+  /** The machine behind the kernel, for the terminal tools. */
+  vm = new FakeVm();
+  /** What run_code's execute returns. */
+  execResult: (code: string) => ExecResult = () => ({ status: "ok", outputs: [{ kind: "result", text: "42" }] });
+  /** Results execute_wait hands out, by exec id. */
+  execWaits = new Map<string, ExecResult[]>();
   private nextId = 1;
   private exec = 0;
   onEvent: (e: unknown) => void = () => {};
@@ -59,8 +71,8 @@ export class FakeNotebook {
       cellCount: this.cells.length,
       activeCellId: this.activeCellId,
       selectedCellIds: this.activeCellId ? [this.activeCellId] : [],
-      kernel: "idle",
-      language: "python",
+      kernel: this.busy ? "busy" : "idle",
+      language: this.language,
     };
   }
 
@@ -191,6 +203,16 @@ export class FakeNotebook {
         }
         return { results };
       }
+      case "execute":
+        if (this.busy) throw new Error("The kernel is busy running a cell, so this would wait behind it.");
+        if (op.code.includes("_ainb_shell")) return this.vm.handle(op.code);
+        this.executed.push({ code: op.code, waitMs: op.waitMs });
+        return this.execResult(op.code);
+      case "execute_wait": {
+        const next = this.execWaits.get(op.execId)?.shift();
+        if (!next) throw new Error(`No execution "${op.execId}" here.`);
+        return next;
+      }
       case "interrupt":
         return { interrupted: false };
       case "focus_cell":
@@ -280,5 +302,142 @@ export class FakeExtension {
 
   close() {
     this.ws?.close();
+  }
+}
+
+const OSC = (s: string) => `\u001b]7770;${s}\u0007`;
+
+interface FakeShell {
+  log: string;
+  alive: boolean;
+  exit: number | null;
+  files: Map<string, string>;
+  /** Typed input not yet read by a line-reading program. */
+  line: string;
+  /** What the running command does with the next line typed, or with Ctrl+C. */
+  running?: { onLine?(line: string): void; onInterrupt(): void };
+}
+
+/**
+ * The notebook machine as the terminal tools see it: answers the kernel
+ * snippets the bridge sends (open, step, close) with a scripted bash. Commands:
+ * `echo X`, `fail`, `progress`, `forever` (until Ctrl+C), `ask` (a y/N prompt),
+ * `bg` (a background job that prints later, see `background`), `exit`.
+ */
+export class FakeVm {
+  shells = new Map<string, FakeShell>();
+  /** Commands as the shell received them. */
+  commands: string[] = [];
+  /** Kernel snippets seen, by operation. */
+  ops: string[] = [];
+
+  handle(code: string): ExecResult {
+    const body = JSON.parse(code.match(/^exec\((".*"), \{"__name__": "__ainb__"\}\)$/s)![1]!) as string;
+    const m = body.match(/_ainb_shell\(("[^"]*"), ("[^"]*"), _json\.loads\((".*")\)\)\n$/s)!;
+    const op = JSON.parse(m[1]!) as string;
+    const name = JSON.parse(m[2]!) as string;
+    const args = JSON.parse(JSON.parse(m[3]!)) as Record<string, any>;
+    this.ops.push(op);
+    let res: Record<string, unknown>;
+    if (op === "open") {
+      const sh = this.shells.get(name);
+      if (sh?.alive) res = { state: "alive", size: sh.log.length };
+      else {
+        this.shells.set(name, { log: "root@vm:/content# ", alive: true, exit: null, files: new Map(), line: "" });
+        res = { state: "started", size: 0 };
+      }
+    } else if (op === "close") {
+      this.shells.delete(name);
+      res = { closed: true };
+    } else {
+      const sh = this.shells.get(name);
+      if (!sh) res = { size: 0, data: "", alive: false, exit: null, exists: false };
+      else {
+        if (args.file && sh.alive) sh.files.set(args.file.name, args.file.text);
+        if (args.write && sh.alive) this.type(sh, Buffer.from(args.write, "base64").toString("utf8"));
+        const chunk = sh.log.slice(args.offset, args.offset + args.max);
+        res = { size: sh.log.length, data: Buffer.from(chunk, "latin1").toString("base64"), alive: sh.alive, exit: sh.exit, exists: true };
+      }
+    }
+    return { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb-shell ${JSON.stringify(res)}\n` }] };
+  }
+
+  /** Print from a background job of a session. */
+  background(name: string, text: string): void {
+    this.shells.get(name)!.log += text;
+  }
+
+  private type(sh: FakeShell, data: string): void {
+    for (const ch of data) {
+      if (ch === "\u0003") {
+        sh.line = "";
+        sh.running?.onInterrupt();
+        continue;
+      }
+      if (ch !== "\r") {
+        sh.line += ch;
+        continue;
+      }
+      const line = sh.line;
+      sh.line = "";
+      if (sh.running?.onLine) sh.running.onLine(line);
+      else if (!sh.running) this.shellLine(sh, line);
+    }
+  }
+
+  private prompt(sh: FakeShell, status: number): void {
+    sh.running = undefined;
+    sh.log += OSC(`prompt;${status}`);
+  }
+
+  private shellLine(sh: FakeShell, line: string): void {
+    if (line.includes("stty -echo")) {
+      sh.log += line + "\r\n" + OSC("ready") + OSC("prompt;0");
+      return;
+    }
+    const m = line.match(/\$\(< .+?\/(cmd-\w+)\)".*start;(\w+)/);
+    if (!m) throw new Error(`unexpected line typed into the shell: ${line}`);
+    const command = sh.files.get(m[1]!)!;
+    sh.files.delete(m[1]!);
+    this.commands.push(command);
+    sh.log += OSC(`start;${m[2]}`);
+    const [word, ...rest] = command.split(" ");
+    switch (word) {
+      case "echo":
+        sh.log += `${rest.join(" ")}\r\n`;
+        return this.prompt(sh, 0);
+      case "fail":
+        sh.log += "boom\r\n";
+        return this.prompt(sh, 1);
+      case "progress":
+        sh.log += "  0%|          | 0/100\r 50%|#####     | 50/100\r100%|##########| 100/100\r\nDone\r\n";
+        return this.prompt(sh, 0);
+      case "lines":
+        for (let i = 1; i <= Number(rest[0]); i++) sh.log += `line ${i}\r\n`;
+        return this.prompt(sh, 0);
+      case "forever":
+        sh.log += "working...\r\n";
+        sh.running = { onInterrupt: () => ((sh.log += "^C\r\n"), this.prompt(sh, 130)) };
+        return;
+      case "ask":
+        sh.log += "Continue? [y/N] ";
+        sh.running = {
+          onLine: (l) => {
+            // No echo on the machine's terminal: the answer and its Enter do not show up here.
+            sh.log += l === "y" ? "ok\r\n" : "Abort.\r\n";
+            this.prompt(sh, l === "y" ? 0 : 1);
+          },
+          onInterrupt: () => this.prompt(sh, 130),
+        };
+        return;
+      case "exit":
+        sh.alive = false;
+        sh.exit = Number(rest[0] ?? 0);
+        sh.log += "exit\r\n";
+        return;
+      default:
+        sh.log += `bash: ${word}: command not found\r\n`;
+        return this.prompt(sh, 127);
+    }
   }
 }

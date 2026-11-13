@@ -3,7 +3,7 @@
 // Local Jupyter works the same when started with expose_app_in_browser.
 
 import { normalizeIpynbOutputs, type CellInfo, type CellType, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
-import { OpError, within, type NotebookAdapter } from "./adapter.js";
+import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "./adapter.js";
 import { createReviewCard } from "./review-widget.js";
 
 type Any = any;
@@ -137,16 +137,7 @@ export class JupyterAdapter implements NotebookAdapter {
   async runCell(cellId: string, timeoutMs: number): Promise<RunResult> {
     const { cell, index } = this.find(cellId);
     if (cell.model.type !== "code") return { cellId, status: "skipped", outputs: [], message: "not a code cell" };
-    const ctx = this.panel.sessionContext;
-    // A kernel that is still starting has no session yet.
-    if (!ctx.session && ctx.ready) await within(Promise.resolve(ctx.ready), 20_000);
-    if (!ctx.session) {
-      throw new OpError(
-        this.platform === "kaggle"
-          ? "The Kaggle session is not running. Ask the user to start it (the power button), then try again."
-          : "No kernel is connected to this notebook.",
-      );
-    }
+    await this.readyKernel();
     const nb = this.panel.content;
     nb.activeCellIndex = index;
     nb.deselectAll?.();
@@ -161,6 +152,35 @@ export class JupyterAdapter implements NotebookAdapter {
     if (r.value) return { cellId, status: "error", executionCount: info?.executionCount, outputs, message: r.value.message };
     const failed = outputs.some((o) => o.kind === "error");
     return { cellId, status: failed ? "error" : "ok", executionCount: info?.executionCount, outputs };
+  }
+
+  /** The session's kernel, waiting a little for one that is still starting. */
+  private async readyKernel(): Promise<Any> {
+    const ctx = this.panel.sessionContext;
+    // A kernel that is still starting has no session yet.
+    if (!ctx.session && ctx.ready) await within(Promise.resolve(ctx.ready), 20_000);
+    const kernel = ctx.session?.kernel;
+    if (!kernel) {
+      throw new OpError(
+        this.platform === "kaggle"
+          ? "The Kaggle session is not running. Ask the user to start it (the power button), then try again."
+          : "No kernel is connected to this notebook.",
+      );
+    }
+    return kernel;
+  }
+
+  async startExecution(code: string): Promise<Execution> {
+    const kernel = await this.readyKernel();
+    if (kernel.status === "busy") throw new OpError(KERNEL_BUSY);
+    const collected = new OutputCollector();
+    const future = kernel.requestExecute({ code, silent: false, store_history: false, allow_stdin: false, stop_on_error: false }, true);
+    future.onIOPub = (msg: Any) => {
+      const type = msg?.header?.msg_type;
+      if (type === "clear_output") collected.clear(!!msg.content?.wait);
+      else if (type === "stream" || type === "error" || type === "execute_result" || type === "display_data") collected.add({ output_type: type, ...msg.content });
+    };
+    return { reply: (future.done as Promise<Any>).then((msg) => msg?.content ?? {}), collected };
   }
 
   interrupt(): boolean {

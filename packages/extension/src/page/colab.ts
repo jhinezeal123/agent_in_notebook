@@ -5,7 +5,7 @@
 // tool names) are used, and each lookup fails with a clear message.
 
 import { normalizeIpynbOutputs, type CellInfo, type CellType, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
-import { OpError, within, type NotebookAdapter } from "./adapter.js";
+import { KERNEL_BUSY, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "./adapter.js";
 
 type Any = any;
 
@@ -164,6 +164,52 @@ export class ColabAdapter implements NotebookAdapter {
     if (r.value) return { cellId, status: "error", executionCount: info?.executionCount, outputs, message: r.value.message };
     const failed = outputs.some((o) => o.kind === "error");
     return { cellId, status: failed ? "error" : "ok", executionCount: info?.executionCount, outputs };
+  }
+
+  async startExecution(code: string): Promise<Execution> {
+    const k = this.nb.getKernel?.() ?? this.nb.kernel;
+    if (typeof k?.execute !== "function") throw new OpError("Colab's kernel cannot run code in this version of Colab.");
+    if (k.isRunning?.() === false || k.isConnected?.() === false) {
+      throw new OpError("Colab is not connected to a runtime. Ask the user to connect it (the Connect button), then try again.");
+    }
+    if (k.isBusy?.()) throw new OpError(KERNEL_BUSY);
+    const collected = new OutputCollector();
+    // Colab calls these on whatever handler an execution carries; outputs arrive as nbformat dicts.
+    const handler = {
+      onOutput: (output: Any) => {
+        collected.add(output);
+        return true;
+      },
+      onClearOutput: (wait?: boolean) => {
+        collected.clear(!!wait);
+        return true;
+      },
+      supportsUserInput: () => false,
+      onUserInputRequest: () => {},
+      onColabRequest: () => null,
+      getCellId: () => "",
+      onCommOpen: () => {},
+      onCommMessage: () => {},
+      onCommClose: () => {},
+      onExecuteReply: () => {},
+      onExecuteInput: () => {},
+      onExecutionStarted: () => {},
+    };
+    let reply: Promise<Any>;
+    try {
+      reply = Promise.resolve(k.execute(code, handler, { silent: false, storeHistory: false }));
+    } catch (e) {
+      throw new OpError(`Colab could not run the code: ${(e as Error).message}`);
+    }
+    // A failed execution rejects with an error that carries the reply.
+    const asReply = reply.then(
+      (r: Any) => ({ status: r?.status ?? "ok", ename: r?.ename, evalue: r?.evalue }),
+      (e: Any) => {
+        if (e?.reply) return { status: e.reply.status ?? "error", ename: e.reply.ename, evalue: e.reply.evalue };
+        throw e;
+      },
+    );
+    return { reply: asReply, collected };
   }
 
   interrupt(): boolean {

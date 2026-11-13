@@ -57,6 +57,16 @@ export interface NotebookInfo {
   key?: string;
 }
 
+/** What running code on the kernel outside any cell produced (see the `execute` op). */
+export interface ExecResult {
+  /** `running`: still running when the wait ended; `execute_wait` with `execId` keeps waiting. */
+  status: "ok" | "error" | "running";
+  outputs: CellOutput[];
+  message?: string;
+  /** Set while running. */
+  execId?: string;
+}
+
 export interface RunResult {
   cellId: string;
   status: "ok" | "error" | "timeout" | "skipped";
@@ -109,6 +119,14 @@ export type NotebookOp =
   | { op: "delete_cell"; cellId: string; review: boolean; byUser?: boolean }
   | { op: "move_cell"; cellId: string; index: number; byUser?: boolean }
   | { op: "run_cells"; cellIds: string[]; timeoutMs: number; stopOnError: boolean }
+  /**
+   * Run code on the kernel without a cell: nothing is added to the notebook or
+   * its history. Refused while the kernel is busy (the code would wait behind
+   * the running cell). Code still running after `waitMs` keeps running; the
+   * result then carries an `execId` for `execute_wait`.
+   */
+  | { op: "execute"; code: string; waitMs: number }
+  | { op: "execute_wait"; execId: string; waitMs: number }
   | { op: "interrupt" }
   | { op: "focus_cell"; cellId: string }
   | { op: "resolve_review"; reviewId: string; accept: boolean };
@@ -121,6 +139,8 @@ export interface NotebookOpResults {
   delete_cell: { applied: boolean; reviewId?: string };
   move_cell: { index: number };
   run_cells: { results: RunResult[] };
+  execute: ExecResult;
+  execute_wait: ExecResult;
   interrupt: { interrupted: boolean };
   focus_cell: { focused: boolean };
   resolve_review: { resolved: boolean };
