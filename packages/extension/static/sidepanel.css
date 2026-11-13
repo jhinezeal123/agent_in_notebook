@@ -77,7 +77,15 @@ button.icon:hover { background: var(--bg-3); }
 .changes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; padding-top: 2px; border-top: 1px dashed var(--border); }
 .msg.agent:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
 
-.md { word-break: break-word; }
+.md { min-width: 0; overflow-wrap: anywhere; }
+.msg.user .md { white-space: normal; }
+.md:not(.can-insert) [data-code-act="insert"] { display: none; }
+.md .katex { overflow-wrap: normal; }
+.md .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.md .math-fallback { white-space: pre-wrap; font-family: var(--mono); }
+.md .md-table { overflow-x: auto; }
+.md blockquote { margin: 0 0 8px; padding: 0 10px; border-left: 2px solid var(--border); color: var(--muted); }
+.md img { max-width: 100%; height: auto; }
 .md-block + .md-block { margin-top: 8px; }
 .md-block > :first-child { margin-top: 0; }
 .md-block > :last-child { margin-bottom: 0; }
@@ -91,7 +99,8 @@ button.icon:hover { background: var(--bg-3); }
 .code-bar button:hover { background: var(--bg); color: var(--fg); }
 .md code { background: var(--bg-3); border-radius: 4px; padding: 0 3px; }
 .md pre code { background: none; padding: 0; }
-.md a { color: var(--accent); }
+.md a[href] { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md a[href]:hover { color: var(--fg); }
 .md table { border-collapse: collapse; }
 .md td, .md th { border: 1px solid var(--border); padding: 2px 6px; }
 

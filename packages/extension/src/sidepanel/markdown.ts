@@ -3,10 +3,12 @@
 // the block still growing is parsed again (idea from T3 Code's chat view).
 
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { Marked, Renderer } from "marked";
+import { chatFileLink, externalChatUrl } from "../shared/chat-links.js";
+import { escapeHtml, mathExtensions, typesetMath } from "./math.js";
 
 /** Syntax that ties blocks together (reference links, footnotes, raw HTML): render as one. */
-const DOCUMENT_WIDE = /^ {0,3}\[[^\]\n]+\]:|^ {0,3}<[A-Za-z!?/]|\[\^/m;
+const DOCUMENT_WIDE = /^ {0,3}(?:\[[^\]\n]+\]:|<[A-Za-z!?/]|\$\$|\\\[)|\[\^/m;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const LIST_ITEM = /^(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const INDENTED = /^[ \t]/;
@@ -49,17 +51,24 @@ export function splitMarkdownBlocks(text: string): string[] {
   return blocks;
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
-
-marked.use({
+const markdown = new Marked({
+  extensions: mathExtensions,
   gfm: true,
   breaks: true,
   renderer: {
+    link(token) {
+      if (chatFileLink(token.href)) {
+        return `<a data-file-link="${escapeHtml(token.href)}">${this.parser.parseInline(token.tokens)}</a>`;
+      }
+      return false;
+    },
+    table(token) {
+      return `<div class="md-table">${Renderer.prototype.table.call(this, token)}</div>`;
+    },
     // Code blocks get a small toolbar; the panel handles its buttons by delegation.
     code({ text, lang }) {
       const language = (lang ?? "").trim().split(/\s+/)[0] ?? "";
+      if (language.toLowerCase() === "math") return `<div data-tex="${escapeHtml(text)}" data-display-math="true">${escapeHtml(text)}</div>`;
       const cls = language ? ` class="language-${escapeHtml(language)}"` : "";
       return (
         `<div class="code" data-lang="${escapeHtml(language)}">` +
@@ -74,14 +83,42 @@ marked.use({
 
 const cache = new Map<string, string>();
 const CACHE_MAX = 400;
+const CACHE_ENTRY_MAX = 128_000;
 
-/** Sanitized HTML for one block, cached: a finished block is never parsed twice. */
-export function renderMarkdown(block: string): string {
-  const hit = cache.get(block);
+/** Sanitized HTML for one block, cached so completed blocks survive streaming updates. */
+export function renderMarkdown(block: string, localLinks = false): string {
+  const key = `${localLinks ? "file:" : "web:"}${block}`;
+  const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  const html = DOMPurify.sanitize(marked.parse(block, { async: false }) as string, { ADD_ATTR: ["target"] });
-  cache.set(block, html);
-  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+  const fragment = DOMPurify.sanitize(markdown.parse(block, { async: false }), {
+    RETURN_DOM_FRAGMENT: true,
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["style"],
+    FORBID_ATTR: ["style", "target", "download", "ping", "srcset"],
+  });
+  for (const anchor of fragment.querySelectorAll("a")) {
+    const href = anchor.getAttribute("href") ?? anchor.dataset.fileLink ?? "";
+    const url = externalChatUrl(href);
+    delete anchor.dataset.fileLink;
+    if (url) {
+      anchor.href = url;
+      anchor.rel = "noopener noreferrer";
+    } else if (localLinks && chatFileLink(href)) {
+      anchor.href = "#";
+      anchor.dataset.fileLink = href;
+      anchor.title = href;
+    } else {
+      anchor.removeAttribute("href");
+    }
+  }
+  typesetMath(fragment);
+  const template = document.createElement("template");
+  template.content.append(fragment);
+  const html = template.innerHTML;
+  if (html.length <= CACHE_ENTRY_MAX && block.length <= CACHE_ENTRY_MAX) {
+    cache.set(key, html);
+    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+  }
   return html;
 }
 

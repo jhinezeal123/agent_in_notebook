@@ -1,6 +1,7 @@
 import { memo } from "preact/compat";
 import { useMemo, useState } from "preact/hooks";
 import { diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
+import { externalChatUrl } from "../shared/chat-links.js";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
 import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
@@ -34,30 +35,29 @@ export async function copyText(host: PanelHost, text: string, button?: HTMLEleme
 export function Markdown({ text, actions }: { text: string; actions?: PartActions }) {
   const host = usePanelHost();
   const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
+  const openLink = (event: MouseEvent) => {
+    const anchor = (event.target as Element).closest("a[href]");
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+    event.preventDefault();
+    const target = anchor.dataset.fileLink ?? externalChatUrl(anchor.getAttribute("href") ?? "");
+    if (target) void host.openLink(target).catch(() => {});
+  };
   return (
     <div
-      class="md"
+      class={`md${actions ? " can-insert" : ""}`}
+      onAuxClick={(event) => { if (event.button === 1) openLink(event); }}
       onClick={(e) => {
-        const target = e.target as HTMLElement;
-        const act = target.closest<HTMLElement>("[data-code-act]");
-        if (act) {
-          const box = act.closest<HTMLElement>(".code");
-          const code = box?.querySelector("code")?.textContent ?? "";
-          if (act.dataset.codeAct === "copy") void copyText(host, code, act);
-          else if (act.dataset.codeAct === "insert") actions?.insertCell(code.replace(/\n$/, ""), /^(md|markdown)$/i.test(box?.dataset.lang ?? "") ? "markdown" : "code");
-          return;
-        }
-        // Links open in a new tab, never inside the panel.
-        const a = target.closest("a");
-        if (a?.href) {
-          e.preventDefault();
-          void host.openLink(a.href).catch(() => {});
-        }
+        const act = (e.target as Element).closest<HTMLElement>("[data-code-act]");
+        if (!act) return openLink(e);
+        const box = act.closest<HTMLElement>(".code");
+        const code = box?.querySelector("code")?.textContent ?? "";
+        if (act.dataset.codeAct === "copy") void copyText(host, code, act);
+        else if (act.dataset.codeAct === "insert") actions?.insertCell(code.replace(/\n$/, ""), /^(md|markdown)$/i.test(box?.dataset.lang ?? "") ? "markdown" : "code");
       }}
     >
       {blocks.map((b, i) => (
         // An unchanged block keeps the same HTML string, so Preact leaves its DOM alone.
-        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b) }} />
+        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b, host.kind === "vscode") }} />
       ))}
     </div>
   );
@@ -82,7 +82,7 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
   const host = usePanelHost();
   if (msg.role === "user") {
     const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
-    return <div class="msg user">{text}</div>;
+    return <div class="msg user"><Markdown text={text} /></div>;
   }
   if (!msg.parts.length) return null;
   const items = groupParts(msg.parts);

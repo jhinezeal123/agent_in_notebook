@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { OpRunner, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import type { PanelEvent, PanelRequest, PanelResponse, Prefs } from "../../extension/src/shared/panel-messages.js";
 import { BridgeLink } from "./bridge.js";
+import { openChatLink } from "./chat-links.js";
 import { VSCodeNotebook } from "./notebook.js";
 
 const bridgeMethods = new Set([
@@ -167,9 +168,8 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       }
       case "clipboard.copy": return vscode.env.clipboard.writeText((params as { text: string }).text);
       case "link.open": {
-        const uri = vscode.Uri.parse((params as { url: string }).url);
-        if (uri.scheme === "http" || uri.scheme === "https" || uri.scheme === "mailto") return vscode.env.openExternal(uri);
-        return false;
+        const target = (params as { url?: unknown })?.url;
+        return typeof target === "string" ? openChatLink(target, vscode.window.activeNotebookEditor?.notebook.uri) : false;
       }
       case "tab.notebook": return this.find((params as { tabId: number }).tabId)?.adapter.info() ?? null;
       case "notebook.focus": {
@@ -225,7 +225,8 @@ function panelHtml(webview: vscode.Webview, assets: vscode.Uri): string {
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; style-src-attr 'unsafe-inline'; font-src ${webview.cspSource}; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
+<link rel="stylesheet" href="${asset("katex.min.css")}">
 <link rel="stylesheet" href="${asset("sidepanel.css")}">
 <link rel="stylesheet" href="${asset("theme.css")}">
 <title>Agent in Notebook</title>

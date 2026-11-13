@@ -3,6 +3,7 @@
 
 import type { PanelEvent, PanelResponse, Prefs } from "../shared/panel-messages.js";
 
+import { externalChatUrl } from "../shared/chat-links.js";
 import type { PanelHost } from "./host.js";
 
 type Listener = (e: PanelEvent) => void;
@@ -88,7 +89,10 @@ export class PanelClient implements PanelHost {
 
   copy(text: string): Promise<void> { return navigator.clipboard.writeText(text); }
 
-  openLink(url: string): Promise<unknown> { return chrome.tabs.create({ url }); }
+  async openLink(target: string): Promise<unknown> {
+    const url = externalChatUrl(target);
+    if (url) return chrome.tabs.create({ url });
+  }
 
   on(listener: Listener): () => void {
     this.listeners.add(listener);

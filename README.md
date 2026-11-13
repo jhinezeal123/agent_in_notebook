@@ -37,6 +37,12 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 - Giới hạn của terminal: bridge đọc và ghi terminal thông qua kernel (gửi những đoạn Python ngắn), nên khi kernel đang chạy một cell thì tạm thời không đọc được output của terminal. Lệnh trong terminal không bị ảnh hưởng, cell chạy xong là đọc tiếp được. Cần kernel Python trên Linux/macOS (Colab, Kaggle đều vậy).
 - **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên side panel để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
 
+## Định dạng trong chat
+
+Tin nhắn hỗ trợ Markdown, bảng, checklist, code block và URL có thể bấm. Đặt công thức trong `$...$` hoặc `\(...\)` để hiện cùng dòng. Dùng `$$...$$`, `\[...\]` hoặc code block có nhãn `math` để hiện riêng một khối.
+
+Trong VS Code, link Markdown như `[Xem dòng 12](./src/main.py:12)` mở file ở dòng tương ứng trong workspace. Nếu cửa sổ không mở workspace, đường dẫn được giới hạn trong thư mục của notebook. Link web mở bằng trình duyệt.
+
 ## Dùng trong VS Code
 
 Extension **Agent in Notebook** mở giao diện chat ở sidebar cạnh Notebook Editor của VS Code. Agent đọc, sửa và chạy cell trên tài liệu `.ipynb` đang mở. Sidebar theo notebook đang chọn và hiển thị diff để **Apply / Reject**. Lịch sử chat được lưu theo đường dẫn notebook.
