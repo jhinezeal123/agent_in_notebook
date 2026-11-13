@@ -1,6 +1,6 @@
 // The research views: our own screens (packages/studio) on OpenResearch's own
 // client logic. This hosts them in VS Code: the "Research" side bar view
-// (notebooks, compute), the right side bar's Project view (the current
+// (the open notebooks), the right side bar's Project view (the current
 // project, its chats and its experiment tree), editor tabs (New
 // Chat, Settings, an experiment), and research chats in the chat panel. Their
 // OpenResearch requests go through OrxTunnel; what only VS Code or the bridge

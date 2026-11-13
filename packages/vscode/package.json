@@ -54,7 +54,7 @@
         {
           "type": "webview",
           "id": "ainb.research",
-          "name": "Research"
+          "name": "Notebooks"
         }
       ],
       "ainb-chat": [
@@ -150,6 +150,12 @@
         "title": "Settings",
         "category": "Agent in Notebook",
         "icon": "$(gear)"
+      },
+      {
+        "command": "ainb.openCompute",
+        "title": "Compute",
+        "category": "Agent in Notebook",
+        "icon": "$(server)"
       },
       {
         "command": "ainb.chooseOrx",
@@ -349,9 +355,14 @@
           "group": "navigation@1"
         },
         {
+          "command": "ainb.openCompute",
+          "when": "view == ainb.research",
+          "group": "navigation@2"
+        },
+        {
           "command": "ainb.openSettings",
           "when": "view == ainb.research || view == ainb.chat",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "ainb.open",

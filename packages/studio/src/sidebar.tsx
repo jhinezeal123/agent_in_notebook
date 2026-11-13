@@ -1,15 +1,12 @@
-// The Research side bar: the open notebooks and the compute machines. The
-// current project (its chats, experiments and artifacts) is in the right side
-// bar (project.tsx, artifacts.ts).
+// The Notebooks side bar view: the open notebooks; a click shows the chat about one.
+// The current project (its chats, experiments, code and artifacts) is in the
+// right side bar (project.tsx, folder-tree.ts); compute is in Settings, a
+// button on this view's title.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useWorkspace } from "@orx/workspace";
-import { TARGET_LABELS } from "@orx/computeTargets";
 import type { NotebookEntry, SelectedChat } from "./messages.js";
-import { ResearchGate } from "./root.js";
 import { hostRequest, onHostEvent } from "./tunnel.js";
-import { Icon, IconButton, errorText } from "./ui.js";
+import { Icon } from "./ui.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -46,61 +43,22 @@ export function Pane({ id, title, actions, children, open, onToggle }: { id: str
   );
 }
 
+/** The Notebooks view: the list right under the view's own title, as VS Code's views have it. */
 export function Sidebar() {
-  const [closed, setClosed] = useState<Record<string, boolean>>({});
-  const toggle = (id: string) => setClosed((c) => ({ ...c, [id]: !c[id] }));
   const notebooks = useNotebooks();
   const selected = useSelectedChat();
   return (
     <div className="sidebar">
-      <Pane id="notebooks" title="Notebooks" open={!closed.notebooks} onToggle={toggle}>
-        {notebooks.length ? notebooks.map((n) => {
-          const on = selected?.kind === "notebook" && selected.tabId === n.tabId;
-          return (
-            <div key={n.tabId} className={`item${on ? " sel" : ""}`} style={{ paddingLeft: 20 }} onClick={() => void hostRequest("chat.select", { kind: "notebook", tabId: n.tabId })}>
-              <Icon name="notebook" />
-              <span className="lbl">{n.title}</span>
-              <span className="tail dsc">{PLATFORM[n.platform]}{n.place === "chrome" ? " · Chrome" : ""}</span>
-            </div>
-          );
-        }) : <p className="empty">Open a notebook on Colab or Kaggle in Chrome, or an .ipynb file here, to chat about it.</p>}
-      </Pane>
-      <ResearchGate compact>
-        <ResearchPanes closed={closed} toggle={toggle} />
-      </ResearchGate>
-    </div>
-  );
-}
-
-function ResearchPanes({ closed, toggle }: { closed: Record<string, boolean>; toggle: (id: string) => void }) {
-  // Projects and their chats are in the right side bar (project.tsx), about the current project.
-  return (
-    <Pane id="compute" title="Compute" open={!closed.compute} onToggle={toggle}
-      actions={<IconButton icon="gear" title="Compute settings" onClick={() => void hostRequest("open", { view: "settings", section: "compute" })} />}>
-      <ComputeList />
-    </Pane>
-  );
-}
-
-
-function ComputeList() {
-  const { queries } = useWorkspace();
-  const compute = useQuery(queries.getComputeSettingsQuery());
-  if (compute.isError) return <p className="empty error">{errorText(compute.error)}</p>;
-  const targets = (compute.data?.targets ?? []).filter((t) => t.configured || t.id === compute.data?.defaultBackend);
-  return (
-    <>
-      {targets.map((t) => {
-        const isDefault = t.id === compute.data?.defaultBackend;
+      {notebooks.length ? notebooks.map((n) => {
+        const on = selected?.kind === "notebook" && selected.tabId === n.tabId;
         return (
-          <div key={t.id} className="item" style={{ paddingLeft: 20 }} onClick={() => void hostRequest("open", { view: "settings", section: "compute" })} title={t.summary}>
-            <span className="dot" style={{ background: t.enabled ? "var(--st-done)" : "var(--st-muted)" }} />
-            <span className="lbl">{TARGET_LABELS[t.id]?.() ?? t.id}</span>
-            <span className="tail dsc">{isDefault ? "Default" : t.summary}</span>
+          <div key={n.tabId} className={`item${on ? " sel" : ""}`} style={{ paddingLeft: 12 }} onClick={() => void hostRequest("chat.select", { kind: "notebook", tabId: n.tabId })}>
+            <Icon name="notebook" />
+            <span className="lbl">{n.title}</span>
+            <span className="tail dsc">{PLATFORM[n.platform]}{n.place === "chrome" ? " · Chrome" : ""}</span>
           </div>
         );
-      })}
-      {compute.isSuccess && !targets.length && <p className="empty">No machine set up for background runs. <a href="#" onClick={(e) => { e.preventDefault(); void hostRequest("open", { view: "settings", section: "compute" }); }}>Set one up</a>.</p>}
-    </>
+      }) : <p className="empty">Open a notebook on Colab or Kaggle in Chrome, or an .ipynb file here, to chat about it.</p>}
+    </div>
   );
 }

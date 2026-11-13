@@ -31,6 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ainb.open", () => vscode.commands.executeCommand("ainb.chat.focus")),
     vscode.commands.registerCommand("ainb.newChat", () => studio.open({ view: "newchat" })),
     vscode.commands.registerCommand("ainb.openSettings", () => studio.open({ view: "settings" })),
+    vscode.commands.registerCommand("ainb.openCompute", () => studio.open({ view: "settings", section: "compute" })),
     vscode.commands.registerCommand("ainb.chooseOrx", () => studio.chooseOrx()),
     vscode.commands.registerCommand("ainb.clearChat", () => panel.clearChat()),
     vscode.commands.registerCommand("ainb.stopBridge", () => panel.stopBridge()),
