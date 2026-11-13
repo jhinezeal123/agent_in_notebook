@@ -1,28 +1,74 @@
 {
   "name": "agent-in-notebook-vscode",
   "displayName": "Agent in Notebook",
-  "description": "Use your ACP coding agent with the active Jupyter notebook in VS Code.",
+  "description": "Chat with your ACP coding agent about a notebook open in VS Code, or on Colab or Kaggle in Chrome.",
   "publisher": "jhinezeal123",
   "version": "0.1.0",
   "private": true,
-  "engines": { "vscode": "^1.105.0" },
+  "engines": {
+    "vscode": "^1.105.0"
+  },
   "main": "./dist/extension.cjs",
-  "extensionKind": ["workspace"],
-  "categories": ["Notebooks"],
-  "repository": { "type": "git", "url": "https://github.com/jhinezeal123/agent_in_notebook" },
-  "capabilities": { "untrustedWorkspaces": { "supported": false } },
+  "activationEvents": [
+    "onFileSystem:ainb-chrome"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Notebooks"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jhinezeal123/agent_in_notebook"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
   "contributes": {
     "viewsContainers": {
-      "activitybar": [{ "id": "ainb", "title": "Agent in Notebook", "icon": "notebook.svg" }]
+      "activitybar": [
+        {
+          "id": "ainb",
+          "title": "Agent in Notebook",
+          "icon": "notebook.svg"
+        }
+      ]
     },
     "views": {
-      "ainb": [{ "type": "webview", "id": "ainb.chat", "name": "Notebook Agent" }]
+      "ainb": [
+        {
+          "type": "webview",
+          "id": "ainb.chat",
+          "name": "Notebook Agent"
+        }
+      ]
     },
-    "commands": [{ "command": "ainb.open", "title": "Agent in Notebook: Open Chat" }]
+    "commands": [
+      {
+        "command": "ainb.open",
+        "title": "Agent in Notebook: Open Chat"
+      }
+    ],
+    "notebooks": [
+      {
+        "type": "ainb-chrome-notebook",
+        "displayName": "Notebook in Chrome (Colab / Kaggle)",
+        "selector": [
+          {
+            "filenamePattern": "*.ainb"
+          }
+        ],
+        "priority": "default"
+      }
+    ]
   },
   "scripts": {
     "build": "node build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ainb/protocol": "workspace:*",
@@ -34,6 +80,7 @@
     "@types/vscode": "1.105.0",
     "@types/ws": "^8.18.2",
     "esbuild": "0.28.2",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
   }
 }

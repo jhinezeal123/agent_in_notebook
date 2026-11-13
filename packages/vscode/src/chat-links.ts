@@ -2,7 +2,7 @@ import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { chatImageDataUrl, MAX_CHAT_IMAGE_BASE64 } from "@ainb/protocol";
 import * as vscode from "vscode";
-import { chatFileLink, externalChatUrl } from "../../extension/src/shared/chat-links.js";
+import { chatFileLink, externalChatUrl } from "../../ui/src/chat-links.js";
 
 function contains(root: string, path: string): boolean {
   const child = relative(root, path);

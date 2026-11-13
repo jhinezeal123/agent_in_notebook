@@ -227,3 +227,15 @@ describe("run_code", () => {
     expect(busy.text).toMatch(/kernel is busy/);
   });
 });
+
+describe("playbook", () => {
+  it("tells the agent up front that on Colab the machine waits for a running cell, and not on Kaggle", async () => {
+    const { playbook } = await import("../src/instructions.js");
+    const nb = new FakeNotebook([]);
+    const note = "while a cell runs they wait for it";
+    expect(playbook(nb.info())).toContain(note);
+    nb.platform = "kaggle";
+    nb.serverTerminals = true;
+    expect(playbook(nb.info())).not.toContain(note);
+  });
+});

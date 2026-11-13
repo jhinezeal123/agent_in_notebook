@@ -7,7 +7,7 @@ import type { ChatSettings } from "./modes.js";
 import type { NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
-export const WIRE_VERSION = 2;
+export const WIRE_VERSION = 3;
 
 // ---------------------------------------------------------------- native messaging
 
@@ -17,10 +17,11 @@ export const NATIVE_HOST = "com.agent_in_notebook.bridge";
 export const EXTENSION_ID = "mkdjlgboacefhokakjlobfailhipgklf";
 
 /** One request to the native host: start the bridge if needed and say how to reach it. */
-export type NativeRequest = { type: "connect" };
+/** `start: false`: only report a running bridge (the browser); otherwise start it if needed (VS Code). */
+export type NativeRequest = { type: "connect"; start?: boolean };
 export type NativeReply =
   | { ok: true; port: number; token: string; version: string; started: boolean }
-  | { ok: false; error: string; log?: string };
+  | { ok: false; error: string; log?: string; notRunning?: boolean };
 
 export type Envelope =
   | { kind: "req"; id: number; method: string; params: unknown }
@@ -191,8 +192,13 @@ export interface BridgeMethods {
   "agents.remove": { params: { id: string }; result: { removed: boolean } };
   "agents.test": { params: { launchCommand: string }; result: { name: string; options: AgentOption[] } };
   "chat.open": {
-    /** With a notebookKey the chat is saved and restored per notebook. */
-    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string };
+    /**
+     * With a notebookKey the chat is saved and restored per notebook. `tabId`
+     * is the editor's id for the notebook; `browserTab`, when given, puts the
+     * notebook in that Chrome tab: the chat stays with the editor, its
+     * notebook operations go to the browser extension.
+     */
+    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string; browserTab?: number };
     result: ChatSnapshot;
   };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };
@@ -206,6 +212,39 @@ export interface BridgeMethods {
   /** Revert the notebook changes of one agent turn, newest first, skipping cells edited since. */
   "chat.undo": { params: { chatId: string; messageId: string }; result: UndoResult };
   "tab.closed": { params: { tabId: number }; result: { ok: true } };
+  /** The notebooks open in Chrome tabs, for the editor's notebook picker. */
+  "browser.notebooks": { params: Record<string, never>; result: { notebooks: BrowserNotebook[] } };
+  /**
+   * What the user does to a notebook in a Chrome tab from the editor (the
+   * chat's "Insert as cell", or the notebook mirrored in VS Code): read it,
+   * change it, run it. The agent's operations go through its chat instead.
+   */
+  "browser.op": { params: { tabId: number; op: BrowserOp }; result: unknown };
+}
+
+export interface BrowserNotebook {
+  tabId: number;
+  info: NotebookInfo;
+}
+
+/** The notebook operations the user may run on a Chrome tab from the editor: no review, and not journaled as the agent's. */
+export type BrowserOp =
+  | Extract<NotebookOp, { op: "info" | "get_cells" | "focus_cell" | "run_cells" | "interrupt" }>
+  | (Extract<NotebookOp, { op: "insert_cell" | "update_cell" | "delete_cell" }> & { review: false; byUser: true })
+  | (Extract<NotebookOp, { op: "move_cell" }> & { byUser: true });
+
+export function isBrowserOp(op: unknown): op is BrowserOp {
+  const o = op as { op?: unknown; review?: unknown; byUser?: unknown } | null;
+  switch (o?.op) {
+    case "info": case "get_cells": case "focus_cell": case "run_cells": case "interrupt":
+      return true;
+    case "insert_cell": case "update_cell": case "delete_cell":
+      return o.review === false && o.byUser === true;
+    case "move_cell":
+      return o.byUser === true;
+    default:
+      return false;
+  }
 }
 
 export interface UndoResult {
@@ -226,6 +265,10 @@ export interface BridgeEvents {
   "chat.usage": { chatId: string; tabId: number; usage: ChatUsage };
   "chat.status": { chatId: string; tabId: number; status: ChatStatus; error?: string };
   "agents.changed": { agents: AgentInfo[] };
+  /** A notebook in a Chrome tab appeared, changed, or (info null) went away. */
+  "browser.notebook": { tabId: number; info: NotebookInfo | null };
+  /** The user brought a Chrome tab holding a notebook to the front. */
+  "browser.focused": { tabId: number };
   ping: { t: number };
 }
 
@@ -234,6 +277,8 @@ export interface ExtensionEvents {
   "notebook.event": { tabId: number; event: NotebookEvent };
   "notebook.attached": { tabId: number; info: NotebookInfo };
   "notebook.detached": { tabId: number };
+  /** The browser: the user brought this notebook's tab to the front. */
+  "notebook.focused": { tabId: number };
 }
 
 export type MethodName<M> = keyof M & string;

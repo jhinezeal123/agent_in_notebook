@@ -1,11 +1,11 @@
 import { build } from "esbuild";
 import { copyFileSync, mkdirSync, rmSync } from "node:fs";
 
-import { copyMathAssets } from "../extension/math-assets.mjs";
+import { copyMathAssets } from "../ui/math-assets.mjs";
 
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist");
-copyFileSync("../extension/static/sidepanel.css", "dist/sidepanel.css");
+copyFileSync("../ui/chat.css", "dist/chat.css");
 copyFileSync("src/theme.css", "dist/theme.css");
 copyMathAssets("dist");
 

@@ -1,13 +1,10 @@
 import { context, build } from "esbuild";
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 
-import { copyMathAssets } from "./math-assets.mjs";
-
 const watch = process.argv.includes("--watch");
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist", { recursive: true });
 cpSync("static", "dist", { recursive: true });
-copyMathAssets("dist");
 
 const common = {
   bundle: true,
@@ -20,9 +17,8 @@ const common = {
 };
 
 const entries = [
-  // The service worker and the side panel are ES modules; content scripts are classic scripts.
+  // The service worker is an ES module; content scripts are classic scripts.
   { entryPoints: ["src/background/background.ts"], outfile: "dist/background.js", format: "esm" },
-  { entryPoints: ["src/sidepanel/main.tsx"], outfile: "dist/sidepanel.js", format: "esm" },
   { entryPoints: ["src/content/content.ts"], outfile: "dist/content.js", format: "iife" },
   { entryPoints: ["src/page/main.ts"], outfile: "dist/page.js", format: "iife" },
 ];

@@ -1,13 +1,32 @@
 # Kiến trúc
 
-Bốn package TypeScript trong một pnpm workspace:
+Năm package TypeScript trong một pnpm workspace:
 
 | Package | Chạy ở đâu | Vai trò |
 |---|---|---|
-| `protocol` | cả hai phía | Kiểu dữ liệu notebook, giao thức WS, `RpcPeer`, policy của mode (`decide`), diff theo dòng, chuẩn hóa output ipynb, `NotebookAdapter` và `OpRunner` |
+| `protocol` | mọi phía | Kiểu dữ liệu notebook, giao thức WS, `RpcPeer`, policy của mode (`decide`), diff theo dòng, chuẩn hóa output ipynb, `NotebookAdapter` và `OpRunner` |
 | `bridge` | Node, trên máy user | Server WS/HTTP, quản lý chat, chạy agent qua ACP, tool notebook (MCP) |
-| `extension` | Chrome MV3 và webview VS Code | Adapter notebook trong trang, content script, service worker, giao diện chat Preact dùng chung |
-| `vscode` | VS Code Extension Host và webview | Adapter Notebook Editor, quản lý notebook đang mở và chuyển tiếp request của sidebar tới bridge |
+| `ui` | webview VS Code | Giao diện chat Preact: transcript, Markdown/LaTeX, review, chọn notebook, agent và mode |
+| `vscode` | VS Code Extension Host | Nơi duy nhất có chat. Adapter Notebook Editor, `PanelCore` (notebook nào đang được chat, notebook trong tab Chrome), chuyển request của sidebar tới bridge |
+| `extension` | Chrome MV3, không giao diện | Adapter notebook trong trang Colab/Kaggle/Jupyter, content script, service worker nối với bridge |
+
+## Giao diện ở VS Code, notebook ở đâu cũng được
+
+Chat chỉ có ở VS Code. Notebook có thể mở trong VS Code hoặc trong một tab Chrome; agent luôn làm việc trên máy của notebook.
+
+```
+VS Code ──/vscode──► bridge ◄──/ext── extension Chrome (không giao diện)
+ sidebar (ui)          chats: theo id của editor     tab Colab/Kaggle/Jupyter
+ PanelCore             đích của mỗi chat:             page script: OpRunner → adapter
+ notebook VS Code        {vscode, tabId}  hoặc
+                         {browser, tabId Chrome}
+```
+
+- **Bridge** (`server.ts`) giữ chat theo id mà editor dùng cho notebook, cùng **đích** của chat. `chat.open` có `browserTab` thì đích là tab Chrome đó: `notebook.op` của agent đi tới extension Chrome, còn snapshot/patch của chat đi về VS Code. Extension Chrome không có phương thức chat nào; nó chỉ báo notebook (`notebook.attached/detached/event`, `tab.closed`) và `notebook.focused` khi user đưa tab lên trước.
+- Bridge giữ danh sách notebook trong tab Chrome và báo VS Code (`browser.notebook`, `browser.focused`; `browser.notebooks` để lấy cả danh sách). VS Code tự làm một số việc trên tab Chrome qua `browser.op` (`isBrowserOp` trong protocol): đọc (`info`, `get_cells`), `focus_cell`, `run_cells`, `interrupt`, và sửa cell **của user** (`insert_cell`, `update_cell`, `delete_cell` với `review: false, byUser: true`; `move_cell` với `byUser: true`). Mọi thao tác của agent vẫn đi qua chat, với mode và review.
+- Bản sao notebook Chrome trong VS Code (`vscode/src/mirror.ts`): một FileSystemProvider scheme `ainb-chrome` (`/<tabId>/<tên> (Colab).ainb`) đọc cell qua `get_cells`, một serializer kiểu `ainb-chrome-notebook` giữ id cell của trình duyệt trong metadata, và một NotebookController chạy cell bằng `run_cells` (chờ ngắn, phần còn lại theo dõi bằng poll). Mỗi giây VS Code đọc lại cell: thứ tự khác thì dựng lại cả notebook, nguồn khác thì chỉ thay cell mà user không đang sửa (văn bản còn bằng bản đã biết). Chiều ngược lại, chữ user gõ được gửi bằng `update_cell` sau 400 ms, còn thêm, xóa, di chuyển được `planPush` (`mirror-sync.ts`) biến thành các bước gửi theo thứ tự. Mọi lần gửi đi qua một hàng đợi; xong thì gọi `save()` (ghi file là no-op) để tài liệu không còn dấu chưa lưu. Tab Chrome đóng thì bản sao ngừng theo.
+- **PanelCore** (`vscode/src/panel-core.ts`, không phụ thuộc API của VS Code) chọn notebook cho chat: notebook trong VS Code có id dương, notebook trong tab Chrome có id là id của tab, đổi dấu. Chat theo notebook vừa được đưa lên trước (editor notebook trong VS Code, hay tab Chrome); chuyển sang một editor không phải notebook thì giữ nguyên. Test trên trình duyệt (`extension/test/panel-harness.ts`) chạy đúng giao diện `ui` với `PanelCore` này trong một trang riêng.
+- VS Code ngắt kết nối thì mọi chat đóng (chúng là của VS Code). Extension Chrome kết nối lại (service worker khởi động lại) thì chat về tab Chrome vẫn còn, và tab được báo lại sau `hello`.
 
 ## Luồng một tool call
 
@@ -19,10 +38,11 @@ agent ──MCP stdio──► `ainb mcp` (relay không trạng thái)
                        │ 1. kiểm tra mode (protocol/modes.ts: decide)
                        │ 2. gửi NotebookOp
                        ▼  WS "notebook.op" {tabId, op}
-                    service worker ──chrome.tabs.sendMessage(frameId)──► content script
+                    tab Chrome: service worker ──chrome.tabs.sendMessage(frameId)──► content script
                                                                           │ window.postMessage
                                                                           ▼
                                                      page script (MAIN world): OpRunner → adapter
+                    notebook VS Code: Extension Host ──► OpRunner → VSCodeNotebook
 ```
 
 - **Vì sao relay stdio:** stdio là transport MCP duy nhất mà mọi agent ACP bắt buộc phải hỗ trợ. Relay không giữ trạng thái gì; bridge nhận ra chat nhờ token.
@@ -35,7 +55,7 @@ orx có lớp `Harness` riêng cho từng agent (khoảng 30k dòng Rust) vì m�
 
 Những gì giữ lại từ thiết kế orx:
 
-- Transcript của bridge là bản ghi gốc; session riêng của agent chỉ là ngữ cảnh. Message được phát nguyên cả bản (gom mỗi 80ms), side panel thay thế thay vì ghép delta.
+- Transcript của bridge là bản ghi gốc; session riêng của agent chỉ là ngữ cảnh. Message được phát nguyên cả bản (gom mỗi 80ms), giao diện thay thế thay vì ghép delta.
 - Playbook đi theo turn đầu của session. Một khối `<notebook-context>` ngắn (mode, cell đích, outline) đi theo mọi turn, nên đổi mode không cần restart agent.
 - Khi đổi agent hoặc agent crash: agent mới nhận một bản tóm tắt có giới hạn (`instructions.ts: recap`).
 - Yêu cầu xin quyền không bao giờ tự cho phép: Stop, đóng chat hay agent chết đều trả `cancelled`.
@@ -43,31 +63,35 @@ Những gì giữ lại từ thiết kế orx:
 
 ## Adapter notebook
 
-**Colab** (`extension/src/page/colab.ts`). `colab.global.notebook` cung cấp cell (`getId/getType/getText/setText`, `getModel().toJson()` cho output) và `colabMcpToolsService.tools`, bộ tool agent Colab dùng cho Gemini, tìm theo `toolName` vì tên này không bị minify. Review dùng `cell.showInlineDiffTo(text)`: hàm này trả Promise\<boolean\> theo lựa chọn của user, và `getInlineDiff().accept()/reject()` để side panel quyết thay.
+**Colab** (`extension/src/page/colab.ts`). `colab.global.notebook` cung cấp cell (`getId/getType/getText/setText`, `getModel().toJson()` cho output) và `colabMcpToolsService.tools`, bộ tool agent Colab dùng cho Gemini, tìm theo `toolName` vì tên này không bị minify. Review dùng `cell.showInlineDiffTo(text)`: hàm này trả Promise\<boolean\> theo lựa chọn của user, và `getInlineDiff().accept()/reject()` để chat quyết thay.
 
 **Kaggle / Jupyter** (`jupyter.ts`). Editor của Kaggle là Jupyter Notebook 7 (JupyterLab 4) trong iframe, config có `exposeAppInBrowser: true`, nên có `window.jupyterapp`. Adapter sửa cell qua `sharedModel` (`setSource/insertCell/deleteCell/moveCell`) và chạy cell bằng lệnh `notebook:run-cell`, lệnh này resolve khi cell chạy xong. Trạng thái đang chạy đọc từ prompt `[*]` vì bản 4.0 chưa có `executionState`. Review dùng thẻ diff riêng (`review-widget.ts`, shadow DOM).
 
-**VS Code** (`vscode/src/notebook.ts`). Dùng `WorkspaceEdit` cho nội dung cell, `NotebookEdit` cho thêm/xóa cell và lệnh Notebook Editor để di chuyển hoặc chạy cell. `OpRunner` ghi thay đổi theo cell ID. Sidebar duyệt diff, chỉ tạo cell đề xuất khi người dùng bấm Apply. Thực thi ngoài cell dùng `kernels.getKernel(uri)` và `executeCode` của extension Jupyter. Adapter này không có `machineExec`, nên `machine_exec` (terminal, file) đi qua kernel. Kernel của VS Code làm việc trong thư mục của notebook, nơi file `.ipynb` là của user và do VS Code lưu: bridge không nhận và không ghi file đó (`notebookPath` bỏ qua `claim` với `vscode`), nên `syncOut`/`syncIn` không làm gì; đường dẫn của nó chỉ để Read/Edit/NotebookEdit/Write đi thẳng vào editor.
+**VS Code** (`vscode/src/notebook.ts`). Dùng `WorkspaceEdit` cho nội dung cell, `NotebookEdit` cho thêm/xóa cell và lệnh Notebook Editor để di chuyển hoặc chạy cell. `OpRunner` ghi thay đổi theo cell ID. Sidebar duyệt diff, chỉ tạo cell đề xuất khi người dùng bấm Apply. Thực thi ngoài cell dùng `kernels.getKernel(uri)` và `executeCode` của extension Jupyter. VS Code chỉ thay chỗ của giao diện: bridge đối xử với nó như một trình duyệt, agent vẫn làm việc trên máy của kernel (VM Colab qua kernel Colab, server Jupyter từ xa…) và file notebook được mirror ở đó, đồng bộ với Notebook Editor như với trang web. Adapter này không có `machineExec`, nên `machine_exec` (terminal, file) đi qua kernel. Kernel chạy ngay trên máy user, trong thư mục của notebook, thì file `.ipynb` ở đó là của user: theo luật chung, bridge không ghi đè mà dùng `<tên>.agent.ipynb`.
 
-VS Code webview chỉ trao đổi message với Extension Host. Host kết nối WebSocket `/vscode` trên loopback và giữ token bên ngoài webview. Bridge quản lý phiên Chrome và VS Code riêng để cùng chạy được trên một bridge. VS Code giữ một tab ID cho mỗi notebook đang mở và dùng URI của tài liệu làm khóa lưu chat.
+VS Code webview chỉ trao đổi message với Extension Host. Host kết nối WebSocket `/vscode` trên loopback và giữ token bên ngoài webview. VS Code giữ một id cho mỗi notebook đang mở và dùng URI của tài liệu làm khóa lưu chat; notebook trong tab Chrome giữ khóa do service worker tính.
 
 ## Chuẩn bị agent và quản lý launch command
 
-Side panel mở session ACP ngay khi notebook và agent đã được chọn. `session/new` cung cấp model/effort qua config options trước khi gửi prompt; thay đổi option được áp dụng xong trước khi bật Send. Mỗi tab vẫn dùng một session chat, kể cả lúc transcript còn trống.
+Sidebar mở session ACP ngay khi notebook và agent đã được chọn. `session/new` cung cấp model/effort qua config options trước khi gửi prompt; thay đổi option được áp dụng xong trước khi bật Send. Mỗi tab vẫn dùng một session chat, kể cả lúc transcript còn trống.
 
-`agents.save`, `agents.remove` và `agents.test` chạy qua liên kết extension đã pairing. Launch command được tách thành executable và argv, không chạy qua shell. Agent tùy chỉnh được lưu nguyên các trường cấu hình đang có trong `agents.json`; các lần lưu cập nhật file bằng rename và phát `agents.changed` để side panel cập nhật ngay. Test connection tạo session tạm, từ chối yêu cầu quyền, đọc options rồi dừng agent; không gửi prompt. Sửa/xóa agent đang chạy bị từ chối; session idle được đóng và transcript được giữ để mở lại bằng cấu hình mới.
+`agents.save`, `agents.remove` và `agents.test` chạy qua liên kết của VS Code đã pairing. Launch command được tách thành executable và argv, không chạy qua shell. Agent tùy chỉnh được lưu nguyên các trường cấu hình đang có trong `agents.json`; các lần lưu cập nhật file bằng rename và phát `agents.changed` để sidebar cập nhật ngay. Test connection tạo session tạm, từ chối yêu cầu quyền, đọc options rồi dừng agent; không gửi prompt. Sửa/xóa agent đang chạy bị từ chối; session idle được đóng và transcript được giữ để mở lại bằng cấu hình mới.
 
 ## Ghép nối qua native messaging
 
 `ainb install` (`bridge/src/native-host.ts`) viết một launcher (`.cmd` trên Windows, `.sh` trên macOS/Linux) gọi đúng bản Node và `cli.js native-host`, rồi đăng ký manifest `com.agent_in_notebook.bridge` cho từng trình duyệt: khóa registry `HKCU\…\NativeMessagingHosts` trên Windows, thư mục `NativeMessagingHosts` trong thư mục dữ liệu của trình duyệt trên macOS/Linux. Manifest chỉ cho phép extension có ID cố định (`EXTENSION_ID`, suy ra từ `key` trong manifest), cộng thêm các ID truyền qua `--extension-id`. Trên macOS/Linux, launcher giữ PATH lúc cài, vì trình duyệt mở từ giao diện đồ họa có PATH tối thiểu và sẽ không tìm thấy agent.
 
-Service worker gọi `sendNativeMessage({type: "connect"})` trước khi mở WebSocket, nhưng chỉ khi có side panel đang mở (mở panel là user muốn dùng; trình duyệt khởi động thì không) và config không phải `manual`. Host đọc `config.json`, kiểm tra `/health`, nếu bridge chưa chạy thì khởi động `serve --log bridge.log` và chờ tối đa 15 giây, rồi trả port và token. Trên Windows bridge được khởi động qua `Start-Process`, vì Node cho tiến trình con thừa kế mọi handle inheritable của cha, kể cả pipe của trình duyệt, và bridge sẽ giữ chúng suốt đời mình. Host được bundle thành chunk riêng (esbuild `splitting`), nên không phải nạp SDK MCP/ACP, vốn mất vài giây.
+Service worker gọi `sendNativeMessage({type: "connect", start: false})` khi chưa biết token (hoặc token bị từ chối, hoặc user bấm biểu tượng), chỉ khi có notebook đang mở trong một tab và config không phải `manual`. Service worker khởi động lại thì hỏi các tab có thể chứa notebook (`discoverAll`) để báo lại cho bridge. Host đọc `config.json` và kiểm tra `/health`. Với yêu cầu của VS Code (không có `start: false`), nếu bridge chưa chạy thì host khởi động `serve --background --log bridge.log`, chờ tối đa 15 giây, rồi trả port và token. Trên Windows bridge được khởi động qua `Start-Process`, vì Node cho tiến trình con thừa kế mọi handle inheritable của cha, kể cả pipe của trình duyệt, và bridge sẽ giữ chúng suốt đời mình. Host được bundle thành chunk riêng (esbuild `splitting`), nên không phải nạp SDK MCP/ACP, vốn mất vài giây.
 
-Khi tắt có chủ đích (Ctrl+C, `ainb stop` → `POST /shutdown`), bridge đóng WebSocket với mã 4001; extension khi đó không tự kết nối lại hay bật lại bridge. Token bị từ chối thì extension hỏi lại host một lần, phòng trường hợp token đã bị reset. Token nhập tay (`config.set`) được đánh dấu `manual` để host không ghi đè, dùng cho bridge chạy trong WSL hoặc trên port khác.
+VS Code dùng chính launcher đó (`vscode/src/start-bridge.ts`): Extension Host chạy `<AINB_HOME>/native-host/ainb-native-host.cmd|.sh`, gửi một yêu cầu `connect` có khung độ dài như trình duyệt, nhận port và token, rồi đóng stdin để host thoát. Nhờ vậy plugin không cần bản bridge riêng và dùng đúng Node, CLI mà user đã `install`. Chưa có launcher thì plugin chỉ đọc `config.json` để nối vào một bridge đang chạy và nhắc chạy `ainb install`. Plugin chỉ bật bridge khi sidebar mở hoặc user bấm **Start the bridge**; sau mã 4001 (bridge bị dừng có chủ đích) nó không tự bật lại. Nút **⏻** trong sidebar gọi `POST /shutdown` với token.
+
+Bridge là của VS Code. Host bật nó bằng `serve --background`, và bridge như vậy tự dừng khi không có VS Code nào nối vào trong 30 giây (`stopWithoutEditorMs`): VS Code đóng thì bridge đi theo, còn Reload Window nối lại kịp. Trình duyệt hỏi host bằng `{type:"connect", start:false}`: host chỉ trả port và token khi bridge đang chạy, không thì trả `notRunning`, và không bật bridge. Bridge chạy tay (`ainb serve`, `pnpm bridge`) không tự dừng.
+
+Khi tắt có chủ đích (VS Code đóng, nút **⏻**, Ctrl+C, `ainb stop` → `POST /shutdown`), bridge đóng WebSocket với mã 4001. Extension Chrome khi đó chờ: nó thử nối lại bằng WebSocket với port và token đã biết (lùi dần tới 10 giây, cộng alarm 30 giây khi service worker ngủ), nên khi VS Code bật bridge lại thì notebook trong Chrome tự quay lại. Nó chỉ hỏi host khi chưa biết token. Lúc chờ, biểu tượng không có dấu **!**. Token bị từ chối thì extension hỏi lại host một lần, phòng trường hợp token đã bị reset. Config ghi tay vào `chrome.storage.local` (test, devtools) được đánh dấu `manual` để host không ghi đè. Extension không có giao diện: trạng thái kết nối hiện ở badge và tooltip của biểu tượng.
 
 ## Chat theo notebook
 
-Mỗi notebook có một khóa ổn định (`protocol/identity.ts: notebookKey`), do service worker tính từ URL cấp cao nhất của tab (iframe Kaggle không biết mình là notebook nào) và, với Jupyter, đường dẫn tài liệu. Side panel gửi khóa này trong `chat.open`; bridge giữ chat sống theo tab nhưng lưu transcript theo khóa (`bridge/src/store.ts`, ghi gộp mỗi giây và khi đóng chat). `chat.open` khôi phục transcript đã lưu và agent nhận tóm tắt như sau khi crash; những gì còn đang chờ trong bản lưu (prompt, review, tool) được chốt thành cancelled/discarded/failed. `notebook.attached` mang khóa khác khóa của chat thì chat bị lưu và đóng, để agent cũ không sửa nhầm notebook mới. `notebook.detached` chốt các review đang chờ thành `discarded`, vì trang đã mất chúng.
+Mỗi notebook có một khóa ổn định (`protocol/identity.ts: notebookKey`), do service worker tính từ URL cấp cao nhất của tab (iframe Kaggle không biết mình là notebook nào) và, với Jupyter, đường dẫn tài liệu. Sidebar gửi khóa này trong `chat.open`; bridge giữ chat sống theo tab nhưng lưu transcript theo khóa (`bridge/src/store.ts`, ghi gộp mỗi giây và khi đóng chat). `chat.open` khôi phục transcript đã lưu và agent nhận tóm tắt như sau khi crash; những gì còn đang chờ trong bản lưu (prompt, review, tool) được chốt thành cancelled/discarded/failed. `notebook.attached` mang khóa khác khóa của chat thì chat bị lưu và đóng, để agent cũ không sửa nhầm notebook mới. `notebook.detached` chốt các review đang chờ thành `discarded`, vì trang đã mất chúng.
 
 Kết quả đọc notebook (`Read` file notebook, `wait_for_cells`) có ngân sách tổng khoảng 60k ký tự; phần còn lại được nêu tên kèm `offset` để agent đọc tiếp (xem thêm mục Ngữ cảnh của agent).
 
@@ -87,7 +111,7 @@ Mọi thứ tool trả về nằm lại trong context của agent cho tới hế
 - **Data URI** trong source (ảnh dán vào markdown) thành nhãn `[[ainb:data-N …]]` (`hideDataUris`). `Edit` so khớp trên văn bản agent đã thấy, và mọi thay đổi notebook qua `Edit`/`NotebookEdit`/`Write` đặt lại payload theo nhãn của cell cùng id (`restoreDataUris`) trước khi ghi.
 - **Outline mỗi lượt** đọc `get_cells` với `summary: true`: trang chỉ gửi dòng đầu và số dòng của mỗi cell. Nếu outline giống lượt trước (cùng session), `<notebook-context>` chỉ ghi "unchanged".
 - **Nén context**: playbook chỉ đi theo lượt đầu của session, nên khi agent tự nén context nó có thể mất luật. Bridge khai báo capability `session.compaction` khi `initialize`; agent hỗ trợ (Claude Code) gửi `compaction_update`, và khi status là `completed` thì lượt kế tiếp mang lại playbook cùng outline đầy đủ, kèm một notice trong transcript. Với agent không báo, `usage_update` tụt dưới 60% lần báo trước (từ ít nhất 20k token) cũng được coi là đã nén. Session mới xóa số liệu cũ để không bị nhầm.
-- **Usage**: `usage_update` của ACP được lưu trong chat (`ChatSnapshot.usage`) và phát qua `chat.usage`; side panel hiện mức đầy context.
+- **Usage**: `usage_update` của ACP được lưu trong chat (`ChatSnapshot.usage`) và phát qua `chat.usage`; sidebar hiện mức đầy context.
 
 ## Chạy code ngoài cell
 
@@ -134,7 +158,7 @@ Agent làm việc trên VM như trên máy của chính nó. MCP server `noteboo
 
 ## Stream và lưu transcript
 
-Bridge không gửi lại nguyên tin nhắn mỗi 80ms mà gửi `chat.patch` (`MessagePatch`): text/thought tăng bằng `{i, at, append}`, part khác được thay cả khi JSON của nó đổi. `at` neo vị trí nối nên áp một patch hai lần không nhân đôi text (snapshot có thể đã chứa phần đó). `applyMessagePatch` trả `null` khi patch không khớp (mất sự kiện) và side panel tải lại chat bằng `chat.get`. Hết lượt, bộ nhớ "đã gửi" bị xóa, nên thay đổi muộn (review được duyệt) đi dưới dạng part đầy đủ. Ở side panel, `Message` được memo hóa, mỗi patch chỉ render lại tin nhắn đổi.
+Bridge không gửi lại nguyên tin nhắn mỗi 80ms mà gửi `chat.patch` (`MessagePatch`): text/thought tăng bằng `{i, at, append}`, part khác được thay cả khi JSON của nó đổi. `at` neo vị trí nối nên áp một patch hai lần không nhân đôi text (snapshot có thể đã chứa phần đó). `applyMessagePatch` trả `null` khi patch không khớp (mất sự kiện) và giao diện tải lại chat bằng `chat.get`. Hết lượt, bộ nhớ "đã gửi" bị xóa, nên thay đổi muộn (review được duyệt) đi dưới dạng part đầy đủ. Trong giao diện, `Message` được memo hóa, mỗi patch chỉ render lại tin nhắn đổi.
 
 Transcript được lưu sau 2 giây yên lặng, bất đồng bộ (`ChatStore.saveAsync`); lúc đóng chat thì lưu đồng bộ. Mỗi lần lưu tăng "thế hệ" của khóa; bản ghi nền thấy có thế hệ mới hơn (lần lưu sau, lưu đồng bộ, hay `remove`) thì bỏ, nên không ghi đè dữ liệu mới hay làm sống lại transcript đã xóa.
 

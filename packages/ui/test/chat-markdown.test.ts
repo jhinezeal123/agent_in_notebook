@@ -1,8 +1,8 @@
 import { build } from "esbuild";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chatFileLink, externalChatUrl } from "../src/shared/chat-links.js";
-import { splitMarkdownBlocks } from "../src/sidepanel/markdown.js";
+import { chatFileLink, externalChatUrl } from "../src/chat-links.js";
+import { splitMarkdownBlocks } from "../src/markdown.js";
 
 describe("chat links", () => {
   it("recognizes file destinations and keeps one-based positions", () => {
@@ -33,7 +33,7 @@ declare global {
   interface Window { renderChatMarkdown: (source: string, localLinks?: boolean) => string }
 }
 
-// Install the browser with `pnpm --filter @ainb/extension exec playwright install chromium --only-shell`.
+// Install the browser with `pnpm --filter @ainb/ui exec playwright install chromium --only-shell`.
 describe.skipIf(!process.env.E2E_MARKDOWN)("chat renderer in Chromium", () => {
   let browser: Browser;
   let page: Page;
@@ -41,7 +41,7 @@ describe.skipIf(!process.env.E2E_MARKDOWN)("chat renderer in Chromium", () => {
     const { outputFiles } = await build({
       stdin: {
         resolveDir: process.cwd(),
-        contents: 'import { renderMarkdown } from "./src/sidepanel/markdown.ts"; window.renderChatMarkdown = renderMarkdown;',
+        contents: 'import { renderMarkdown } from "./src/markdown.ts"; window.renderChatMarkdown = renderMarkdown;',
       },
       bundle: true,
       write: false,

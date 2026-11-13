@@ -1,5 +1,5 @@
 import { chatImageDataUrl } from "@ainb/protocol";
-import { chatFileLink, externalChatUrl } from "../shared/chat-links.js";
+import { chatFileLink, externalChatUrl } from "./chat-links.js";
 
 /** Accept only HTTPS images or embedded raster data. */
 export function chatImageSource(source: string): string | undefined {

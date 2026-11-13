@@ -50,6 +50,7 @@ code, pre { font-family: var(--mono); font-size: 12px; }
 /* header */
 .top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
 .top-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notebook-pick { width: 100%; max-width: 100%; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dot.ok { background: var(--ok); }
 .dot.off { background: var(--muted); }

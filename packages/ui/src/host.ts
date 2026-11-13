@@ -1,9 +1,8 @@
 import { createContext } from "preact";
 import { useContext } from "preact/hooks";
-import type { PanelEvent, Prefs } from "../shared/panel-messages.js";
+import type { PanelEvent, Prefs } from "./panel-messages.js";
 
 export interface PanelHost {
-  readonly kind: "browser" | "vscode";
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
   on(listener: (e: PanelEvent) => void): () => void;
   watchTab(listener: (id: number | null) => void): () => void;

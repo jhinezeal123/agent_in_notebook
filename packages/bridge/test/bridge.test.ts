@@ -75,30 +75,71 @@ describe("pairing", () => {
   it("requires a token on the VS Code endpoint and rejects browser origins there", async () => {
     const ext = new FakeExtension(new FakeNotebook([]));
     await expect(ext.connect(port, TOKEN, "https://example.com", "vscode")).rejects.toThrow(/403/);
-    await expect(ext.connect(port, TOKEN, null)).rejects.toThrow(/403/);
+    await expect(ext.connect(port, TOKEN, null, "ext")).rejects.toThrow(/403/);
     await expect(ext.connect(port, "wrong-token", null, "vscode")).rejects.toThrow(/Pairing token/);
     ext.close();
   });
 
-  it("routes VS Code and browser chats with the same tab ID to their own notebook", async () => {
-    const browser = await setup([{ type: "code", source: "browser_value = 1" }]);
-    const editor = new FakeExtension(new FakeNotebook([{ type: "code", source: "editor_value = 2" }]), browser.ext.tabId);
+  it("stops when started in the background and VS Code has been gone for a while", async () => {
+    let stops = 0;
+    const background = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {}, onShutdown: () => stops++, stopWithoutEditorMs: 1500 });
+    const bgPort = await background.listen();
+    const editor = new FakeExtension(new FakeNotebook([{ type: "code", source: "x = 1" }]));
+    const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "y = 2" }]));
     try {
-      await editor.connect(port, TOKEN, null, "vscode");
-      const snap = await editor.request<ChatSnapshot>("chat.open", {
-        tabId: editor.tabId, agentId: "fake", settings: { scope: "write", review: false, targetCellIds: [] },
-        platform: "vscode", notebookKey: "vscode:file:///sample.ipynb",
-      });
-      await editor.waitFor(() => editor.statuses.includes("idle"), 30_000, "editor agent start");
+      await editor.connect(bgPort, TOKEN);
+      // A browser alone does not keep it running; VS Code does.
+      await browser.connect(bgPort, TOKEN, "chrome-extension://abcdef");
+      await new Promise((r) => setTimeout(r, 2500));
+      expect(stops).toBe(0);
+      editor.close();
+      await expect.poll(() => stops, { timeout: 5000 }).toBe(1);
+    } finally {
+      browser.close();
+      await background.close();
+    }
+  }, 15_000);
+
+  it("lets the editor chat about a notebook in a Chrome tab, beside its own notebook with the same tab ID", async () => {
+    const tab = 5;
+    const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "browser_value = 1" }]), tab);
+    const editor = new FakeExtension(new FakeNotebook([{ type: "code", source: "editor_value = 2" }]), tab);
+    const settings = { scope: "write", review: false, targetCellIds: [] };
+    try {
+      await editor.connect(port, TOKEN);
+      const announced = new Promise((resolve) => editor.rpc.on("browser.notebook", resolve));
+      await browser.connect(port, TOKEN, "chrome-extension://abcdef");
+      browser.rpc.emit("notebook.attached", { tabId: tab, info: browser.notebook.info() });
+      expect(await announced).toMatchObject({ tabId: tab, info: { title: "test.ipynb" } });
+      expect((await editor.request<{ notebooks: unknown[] }>("browser.notebooks", {})).notebooks).toEqual([{ tabId: tab, info: expect.objectContaining({ title: "test.ipynb" }) }]);
+      expect(await editor.request("browser.op", { tabId: tab, op: { op: "info" } })).toMatchObject({ title: "test.ipynb" });
+      // The user's own edits and runs are allowed; anything the agent alone does, or a reviewed change, is not.
+      await expect(editor.request("browser.op", { tabId: tab, op: { op: "delete_cell", cellId: "c1", review: true } })).rejects.toThrow(/not available/);
+      await expect(editor.request("browser.op", { tabId: tab, op: { op: "execute", code: "1", waitMs: 1000 } })).rejects.toThrow(/not available/);
+      await editor.request("browser.op", { tabId: tab, op: { op: "update_cell", cellId: "c1", source: "browser_value = 1  # user", review: false, byUser: true } });
+      expect(browser.notebook.cells[0]!.source).toBe("browser_value = 1  # user");
+      await editor.request("browser.op", { tabId: tab, op: { op: "update_cell", cellId: "c1", source: "browser_value = 1", review: false, byUser: true } });
+      // The browser extension serves notebooks only: it has no chats.
+      await expect(browser.request("chat.get", { tabId: tab })).rejects.toThrow();
+
+      const onTab = await editor.request<ChatSnapshot>("chat.open", { tabId: -tab, browserTab: tab, agentId: "fake", settings, platform: "colab" });
+      const own = await editor.request<ChatSnapshot>("chat.open", { tabId: tab, agentId: "fake", settings, platform: "vscode" });
+      await editor.waitFor(() => editor.statuses.filter((s) => s === "idle").length >= 2, 30_000, "both agents start");
       const prompt = script([{ tool: "Read", args: { file_path: "test.ipynb" } }]);
-      const [inBrowser, inEditor] = await Promise.all([turn(browser.ext, browser.chatId, prompt), turn(editor, snap.chatId, prompt)]);
-      expect(inBrowser).toContain("browser_value = 1");
-      expect(inBrowser).not.toContain("editor_value");
+      const inTab = await turn(editor, onTab.chatId, prompt);
+      expect(inTab).toContain("browser_value = 1");
+      expect(inTab).not.toContain("editor_value");
+      const inEditor = (await turn(editor, own.chatId, prompt)).slice(inTab.length);
       expect(inEditor).toContain("editor_value = 2");
-      await expect(editor.request("chat.send", { chatId: browser.chatId, text: "other client" })).rejects.toThrow(/no longer exists/);
+      expect(inEditor).not.toContain("browser_value");
+
+      // The tab closes: the chat about it goes, the editor's own stays.
+      await browser.request("tab.closed", { tabId: tab });
+      await expect(editor.request("chat.send", { chatId: onTab.chatId, text: "gone" })).rejects.toThrow(/no longer exists/);
+      expect((await editor.request<ChatSnapshot | null>("chat.get", { tabId: tab }))?.chatId).toBe(own.chatId);
     } finally {
       editor.close();
-      browser.ext.close();
+      browser.close();
     }
   }, 60_000);
 
@@ -160,7 +201,7 @@ describe("chat with a notebook", () => {
       settings: { scope: "write", review: false, targetCellIds: [] },
       platform: "colab",
     });
-    // No wait for "idle": the side panel opens the chat and sends at once.
+    // No wait for "idle": the chat UI opens the chat and sends at once.
     await ext.request("chat.send", { chatId: snap.chatId, text: "first words" });
     await ext.waitFor(() => ext.agentText().includes("echo: first words"), 30_000, "reply");
     expect(ext.agentText()).not.toContain("not running");
@@ -384,7 +425,7 @@ describe("review", () => {
     expect(nb.cells[0]!.source).toBe("x = 1");
     await ext.waitFor(() => ext.statuses.slice(before).includes("idle"), 20_000, "turn end");
 
-    // The user decides from the side panel; the page applies it.
+    // The user decides from the chat; the page applies it.
     const res = await ext.request<{ resolved: boolean }>("chat.review", { chatId, reviewId: review.review.reviewId, accept: true });
     expect(res.resolved).toBe(true);
     expect(nb.cells[0]!.source).toBe("x = 5");
@@ -750,19 +791,28 @@ describe("agent lifecycle", () => {
     ext.close();
   });
 
-  it("keeps chats across an extension reconnect and reports a missing notebook as a tool error", async () => {
-    const { ext, chatId } = await setup([{ type: "code", source: "a" }]);
+  it("keeps a chat on a Chrome tab across a browser reconnect and reports a missing notebook as a tool error", async () => {
+    const tab = 11;
+    const editor = new FakeExtension(new FakeNotebook([]), 1);
+    const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "a" }]), tab);
+    await editor.connect(port, TOKEN);
+    await browser.connect(port, TOKEN, "chrome-extension://abcdef");
+    browser.rpc.emit("notebook.attached", { tabId: tab, info: browser.notebook.info() });
+    const { chatId } = await editor.request<ChatSnapshot>("chat.open", {
+      tabId: -tab, browserTab: tab, agentId: "fake", settings: { scope: "write", review: false, targetCellIds: [] }, platform: "colab",
+    });
+    await editor.waitFor(() => editor.statuses.includes("idle"), 30_000, "agent start");
     // The service worker restarts: a new connection replaces the old one.
+    const gone = new Promise((resolve) => editor.rpc.on("browser.notebook", (p: { info: unknown }) => p.info === null && resolve(p)));
     const again = new FakeExtension(new FakeNotebook([]), 999);
-    await again.connect(port, TOKEN);
-    await ext.waitFor(() => ext.ws.readyState === ext.ws.CLOSED, 5_000, "old socket closed");
-    const snap = await again.request<ChatSnapshot | null>("chat.get", { tabId: ext.tabId });
-    expect(snap?.chatId).toBe(chatId);
+    await again.connect(port, TOKEN, "chrome-extension://abcdef");
+    await browser.waitFor(() => browser.ws.readyState === browser.ws.CLOSED, 5_000, "old socket closed");
+    await gone;
+    expect((await editor.request<ChatSnapshot | null>("chat.get", { tabId: -tab }))?.chatId).toBe(chatId);
     // The reconnected extension has no notebook in that tab any more.
-    const before = again.statuses.length;
-    await again.request("chat.send", { chatId, text: script([{ tool: "notebook_info", args: {} }]) });
-    await again.waitFor(() => again.statuses.slice(before).includes("idle"), 20_000, "turn end");
-    expect(again.agentText()).toContain("RESULT notebook_info (error): notebook_info failed: no notebook in that tab");
+    const text = await turn(editor, chatId, script([{ tool: "notebook_info", args: {} }]));
+    expect(text).toContain("RESULT notebook_info (error): notebook_info failed: no notebook in that tab");
     again.close();
+    editor.close();
   });
 });

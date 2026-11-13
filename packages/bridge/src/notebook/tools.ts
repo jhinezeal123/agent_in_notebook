@@ -4,7 +4,7 @@
 // notebook itself as an .ipynb file in the working directory, kept in step
 // with the editor in the browser (see nbfile.ts). Running cells stays with the
 // notebook tools. Each call is checked against the chat's mode at the moment
-// it runs, so switching mode in the side panel takes effect on the agent's
+// it runs, so switching mode in the chat takes effect on the agent's
 // very next tool call.
 
 import { z } from "zod";
@@ -34,7 +34,7 @@ import {
 import { RecentRuns } from "./exec.js";
 import { asCellInfo, editCells, EditError, fromCellInfo, NotebookFormatError, parseIpynb, replaceInCells, writeIpynb, type CellEdit, type NbCell } from "./ipynb.js";
 import { KernelBusy, Unreachable, VmError, type KernelExec } from "./kernel.js";
-import { applyCells, describeApplied, machineExec, notebookPath, places, reachable, reviewLine, syncIn, syncOut, type NotebookMirror } from "./nbfile.js";
+import { applyCells, describeApplied, editorName, machineExec, notebookPath, places, reachable, reviewLine, syncIn, syncOut, type NotebookMirror } from "./nbfile.js";
 import { SCROLLBACK, SESSION_NAME, type Report, type ShellSession, type ShellSessions, type ShellStart } from "./shell.js";
 import { FileTooBig, glob, grep, readFile, readLines, resolvePath, writeFile, type Stat } from "./vmfs.js";
 
@@ -260,7 +260,7 @@ export const TOOLS = [
     description:
       "Read a file on the notebook's machine, with line numbers (offset: first line, 1-based; limit: number of lines; default the first 2000). " +
       "An .ipynb file is shown as its cells with their outputs (offset and limit then count cells, from 0), and the notebook file itself " +
-      "comes straight from the browser, so it is current even while a cell runs. PNG and JPEG files are shown as images.",
+      "comes straight from the user's editor, so it is current even while a cell runs. PNG and JPEG files are shown as images.",
     schema: z.object({
       file_path: pathArg,
       offset: z.number().int().min(0).optional(),
@@ -272,7 +272,7 @@ export const TOOLS = [
       const path = await resolve(ctx, info, a.file_path);
       if (path === (await notebookPath(ctx, info))) {
         const { cells } = await ctx.call({ op: "get_cells", includeOutputs: true });
-        const head = `${path}: the notebook open in the browser, ${cells.length} cell${cells.length === 1 ? "" : "s"}, shown as cells.`;
+        const head = `${path}: the notebook open in ${editorName(info)}, ${cells.length} cell${cells.length === 1 ? "" : "s"}, shown as cells.`;
         return readCells(ctx, head, cells, a.offset, a.limit);
       }
       const exec = machine(ctx, info);
@@ -300,7 +300,7 @@ export const TOOLS = [
     name: "Write",
     description:
       "Write a file on the notebook's machine, replacing it (parent directories are made). Writing the notebook file (.ipynb JSON) replaces the " +
-      "notebook in the browser: cells are matched by id, so keep the ids of cells you keep; cells without an id are added. Outputs come from running cells and are not written.",
+      "notebook in the user's editor: cells are matched by id, so keep the ids of cells you keep; cells without an id are added. Outputs come from running cells and are not written.",
     schema: z.object({ file_path: pathArg, content: z.string() }),
     async run(ctx, a) {
       const info = await ctx.call({ op: "info" });
@@ -326,7 +326,7 @@ export const TOOLS = [
     description:
       "Replace exact text in a file on the notebook's machine. old_string must occur exactly once unless replace_all is true. " +
       "In an .ipynb file (the notebook file included), the text is matched inside the cells as Read shows them, without line numbers; " +
-      "an edit to the notebook file changes the notebook in the browser.",
+      "an edit to the notebook file changes the notebook in the user's editor.",
     schema: z.object({
       file_path: pathArg,
       old_string: z.string().min(1),
@@ -354,7 +354,7 @@ export const TOOLS = [
   tool({
     name: "NotebookEdit",
     description:
-      "Change the cells of an .ipynb file on the notebook's machine; on the notebook file, this changes the notebook in the browser. " +
+      "Change the cells of an .ipynb file on the notebook's machine; on the notebook file, this changes the notebook in the user's editor. " +
       'edit_mode "replace" (default) sets a cell\'s source (and type, if given); "insert" adds a cell after cell_id (at the top without one); ' +
       '"delete" removes a cell; "move" moves a cell to index (0-based).',
     schema: z.object({
@@ -434,7 +434,7 @@ export const TOOLS = [
       "then use shell_wait, shell_input (to answer a prompt) or shell_interrupt (Ctrl+C). " +
       "Use more sessions, by name, to run things side by side (a server in one, commands in another). " +
       "You see what the terminal shows (progress bars in their final state). The notebook's Python variables are not visible here; run_code sees them. " +
-      "The notebook's file is in the working directory: commands may read or change it, and changes reach the notebook in the browser.",
+      "The notebook's file is in the working directory: commands may read or change it, and changes reach the notebook in the user's editor.",
     schema: z.object({
       command: z.string().min(1).describe("What to type at the prompt; may span several lines."),
       session: sessionArg,

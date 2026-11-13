@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Part } from "@ainb/protocol";
-import { splitMarkdownBlocks, thoughtLine } from "../src/sidepanel/markdown.js";
-import { groupParts, summarizeTools, type ToolPart } from "../src/sidepanel/transcript.js";
+import { splitMarkdownBlocks, thoughtLine } from "../src/markdown.js";
+import { groupParts, summarizeTools, type ToolPart } from "../src/transcript.js";
 
 describe("splitMarkdownBlocks", () => {
   it("cuts at blank lines between blocks and joins back to the same text", () => {
