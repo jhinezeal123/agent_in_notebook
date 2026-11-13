@@ -51,6 +51,7 @@ try {
     { tool: "list_cells", args: {}, quiet: true },
     { tool: "read_cells", args: { start_index: 0, end_index: 2 }, quiet: true },
     { tool: "notebook_info", args: {}, quiet: true },
+    { tool: "insert_cell", args: { cell_type: "markdown", source: "## Load the data", index: 1 }, quiet: true },
     { say: "\n\nHere is a cell you could add:\n\n```python\nimport pandas as pd\ndf = pd.read_csv('data.csv')\ndf.head()\n```\n\nI also want to check your installed packages." },
     { permission: "Run shell: pip list" },
     { say: "\n\nDone." },
@@ -70,6 +71,12 @@ try {
   await panel.locator(".group-head").first().click();
   await panel.waitForTimeout(200);
   await panel.screenshot({ path: `test/debug/shot-chat-open${suffix}.png` });
+  // Finish the turn: its notebook change can then be undone from the transcript.
+  await panel.locator(".card.prompt.dock").getByRole("button", { name: "Allow" }).click();
+  await panel.locator(".changes").waitFor({ timeout: 30_000 });
+  await panel.locator(".changes").getByRole("button", { name: "Undo" }).click();
+  await panel.waitForTimeout(200);
+  await panel.screenshot({ path: `test/debug/shot-chat-undo${suffix}.png` });
   console.log("screenshots written");
 } finally {
   await ctx.close();

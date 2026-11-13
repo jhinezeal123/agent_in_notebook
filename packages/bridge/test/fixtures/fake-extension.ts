@@ -3,6 +3,7 @@
 import WebSocket from "ws";
 import {
   RpcPeer,
+  type AppliedChange,
   WIRE_VERSION,
   type CellInfo,
   type CellOutput,
@@ -27,6 +28,7 @@ interface Cell {
 
 interface PendingReview {
   info: ReviewInfo;
+  index: number;
   apply(): void;
   revert(): void;
 }
@@ -76,10 +78,16 @@ export class FakeNotebook {
     return c;
   }
 
+  /** Like the page's OpRunner: report each change applied for the agent. */
+  private journal(change: AppliedChange, byUser?: boolean) {
+    if (!byUser) this.onEvent({ type: "change_applied", change });
+  }
+
   private openReview(info: Omit<ReviewInfo, "reviewId">, apply: () => void, revert: () => void): string {
     const reviewId = `r${this.reviews.size + 1}-${Date.now() % 10000}`;
     const review = { ...info, reviewId };
-    this.reviews.set(reviewId, { info: review, apply, revert });
+    const index = this.cells.findIndex((c) => c.id === info.cellId);
+    this.reviews.set(reviewId, { info: review, index, apply, revert });
     this.onEvent({ type: "review_opened", review });
     return reviewId;
   }
@@ -88,8 +96,11 @@ export class FakeNotebook {
     const r = this.reviews.get(reviewId);
     if (!r) return false;
     this.reviews.delete(reviewId);
-    if (accept) r.apply();
-    else r.revert();
+    if (accept) {
+      r.apply();
+      const { kind, cellId, cellType, before, after } = r.info;
+      this.journal({ kind, cellId, cellType, index: r.index, before, after, reviewId });
+    } else r.revert();
     this.onEvent({ type: "review_closed", reviewId, accepted: accept });
     return true;
   }
@@ -108,6 +119,7 @@ export class FakeNotebook {
         const c = this.find(op.cellId);
         if (c.source === op.source) return { applied: false };
         if (!op.review) {
+          this.journal({ kind: "update", cellId: c.id, cellType: c.type, index: this.cells.indexOf(c), before: c.source, after: op.source }, op.byUser);
           c.source = op.source;
           return { applied: true };
         }
@@ -122,7 +134,10 @@ export class FakeNotebook {
       case "insert_cell": {
         const cell: Cell = { id: `c${this.nextId++}`, type: op.cellType, source: op.source, outputs: [], executionCount: null };
         this.cells.splice(Math.min(op.index, this.cells.length), 0, cell);
-        if (!op.review) return { applied: true, cellId: cell.id };
+        if (!op.review) {
+          this.journal({ kind: "insert", cellId: cell.id, cellType: cell.type, index: this.cells.indexOf(cell), before: "", after: op.source }, op.byUser);
+          return { applied: true, cellId: cell.id };
+        }
         const reviewId = this.openReview(
           { cellId: cell.id, kind: "insert", cellType: cell.type, before: "", after: op.source },
           () => {},
@@ -133,6 +148,7 @@ export class FakeNotebook {
       case "delete_cell": {
         const c = this.find(op.cellId);
         if (!op.review) {
+          this.journal({ kind: "delete", cellId: c.id, cellType: c.type, index: this.cells.indexOf(c), before: c.source, after: "" }, op.byUser);
           this.cells = this.cells.filter((x) => x !== c);
           return { applied: true };
         }
@@ -145,9 +161,11 @@ export class FakeNotebook {
       }
       case "move_cell": {
         const c = this.find(op.cellId);
+        const from = this.cells.indexOf(c);
         this.cells = this.cells.filter((x) => x !== c);
         const index = Math.min(op.index, this.cells.length);
         this.cells.splice(index, 0, c);
+        if (index !== from) this.journal({ kind: "move", cellId: c.id, cellType: c.type, index: from, toIndex: index, before: "", after: "" }, op.byUser);
         return { index };
       }
       case "run_cells": {

@@ -163,6 +163,10 @@ export function App() {
       review: (reviewId, accept) => live && void run(client.request("chat.review", { chatId: live.chatId, reviewId, accept })),
       focusCell: (cellId) => tabId !== null && void run(client.request("notebook.focus", { tabId, cellId })),
       insertCell: (source, cellType) => tabId !== null && void run(client.request("notebook.insert", { tabId, source, cellType })),
+      // The transcript shows the outcome (a notice on the message); errors show in the banner.
+      undo: async (messageId) => {
+        if (live) await run(client.request("chat.undo", { chatId: live.chatId, messageId }));
+      },
     }),
     [live?.chatId, tabId],
   );

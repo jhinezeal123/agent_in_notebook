@@ -1,7 +1,7 @@
 // The contract every platform adapter implements. Adapters run in the page's
 // main world, next to the notebook app they drive.
 
-import type { CellInfo, CellType, NotebookEvent, NotebookInfo, NotebookOp, ReviewInfo, RunResult } from "@ainb/protocol";
+import type { AppliedChange, CellInfo, CellType, NotebookEvent, NotebookInfo, NotebookOp, ReviewInfo, RunResult } from "@ainb/protocol";
 
 export interface NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
@@ -30,7 +30,11 @@ export class OpError extends Error {}
 
 let reviewSeq = 0;
 
-/** Runs NotebookOps against an adapter and owns the pending reviews. */
+/**
+ * Runs NotebookOps against an adapter and owns the pending reviews. Every
+ * change it applies for the agent is reported as `change_applied`, with what
+ * the cell held before, so the user can undo it later.
+ */
 export class OpRunner {
   private reviews = new Map<string, { info: ReviewInfo; resolve(accept: boolean): void }>();
 
@@ -64,7 +68,11 @@ export class OpRunner {
         const [cell] = a.getCells({ cellIds: [op.cellId] });
         if (!cell) throw new OpError(`No cell with id "${op.cellId}".`);
         if (cell.source === op.source) return { applied: false };
-        if (!op.review) return { applied: a.setSource(op.cellId, op.source) };
+        if (!op.review) {
+          const applied = a.setSource(op.cellId, op.source);
+          if (applied && !op.byUser) this.journal({ kind: "update", cellId: cell.id, cellType: cell.type, index: cell.index, before: cell.source, after: op.source });
+          return { applied };
+        }
         const reviewId = this.open({ cellId: cell.id, kind: "update", cellType: cell.type, before: cell.source, after: op.source });
         return { applied: false, reviewId };
       }
@@ -72,6 +80,7 @@ export class OpRunner {
         const index = Math.max(0, Math.min(op.index, a.info().cellCount));
         if (!op.review) {
           const cellId = await a.insertCell(index, op.cellType, op.source);
+          if (!op.byUser) this.journal({ kind: "insert", cellId, cellType: op.cellType, index, before: "", after: op.source });
           return { applied: true, cellId };
         }
         // The cell exists while it is reviewed; rejecting removes it again.
@@ -85,13 +94,20 @@ export class OpRunner {
         if (!cell) throw new OpError(`No cell with id "${op.cellId}".`);
         if (!op.review) {
           a.deleteCell(op.cellId);
+          if (!op.byUser) this.journal({ kind: "delete", cellId: cell.id, cellType: cell.type, index: cell.index, before: cell.source, after: "" });
           return { applied: true };
         }
         const reviewId = this.open({ cellId: cell.id, kind: "delete", cellType: cell.type, before: cell.source, after: "" });
         return { applied: false, reviewId };
       }
-      case "move_cell":
-        return { index: await a.moveCell(op.cellId, op.index) };
+      case "move_cell": {
+        const [cell] = a.getCells({ cellIds: [op.cellId] });
+        const index = await a.moveCell(op.cellId, op.index);
+        if (cell && index !== cell.index && !op.byUser) {
+          this.journal({ kind: "move", cellId: cell.id, cellType: cell.type, index: cell.index, toIndex: index, before: "", after: "" });
+        }
+        return { index };
+      }
       case "run_cells": {
         const deadline = Date.now() + op.timeoutMs;
         const results: RunResult[] = [];
@@ -136,14 +152,24 @@ export class OpRunner {
     }
   }
 
+  private journal(change: AppliedChange): void {
+    this.emit({ type: "change_applied", change });
+  }
+
   private open(partial: Omit<ReviewInfo, "reviewId">): string {
     const info: ReviewInfo = { ...partial, reviewId: `rv${Date.now().toString(36)}${(++reviewSeq).toString(36)}` };
+    // Where the cell sits now, for putting a deleted cell back on undo.
+    const index = this.adapter.getCells({ cellIds: [info.cellId] })[0]?.index ?? 0;
     const shown = this.adapter.showReview(info);
     this.reviews.set(info.reviewId, { info, resolve: shown.resolve });
     this.emit({ type: "review_opened", review: info });
     shown.decided.then(
       (accepted) => {
         this.reviews.delete(info.reviewId);
+        if (accepted) {
+          // The change is recorded before the review closes, so whoever waits on the review sees it.
+          this.journal({ kind: info.kind, cellId: info.cellId, cellType: info.cellType, index, before: info.before, after: info.after, reviewId: info.reviewId });
+        }
         this.emit({ type: "review_closed", reviewId: info.reviewId, accepted });
       },
       () => {

@@ -276,7 +276,7 @@ async function insertFromPanel(tabId: number, source: string, cellType: "code" |
     const { cells } = (await runOp(tabId, { op: "get_cells", cellIds: [info.activeCellId] })) as { cells: { index: number }[] };
     if (cells[0]) index = cells[0].index + 1;
   }
-  const res = (await runOp(tabId, { op: "insert_cell", index, cellType, source, review: false })) as { cellId: string | null };
+  const res = (await runOp(tabId, { op: "insert_cell", index, cellType, source, review: false, byUser: true })) as { cellId: string | null };
   if (res.cellId) await runOp(tabId, { op: "focus_cell", cellId: res.cellId }).catch(() => {});
   return { cellId: res.cellId };
 }

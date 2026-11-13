@@ -74,18 +74,37 @@ export interface ReviewInfo {
 }
 
 /**
+ * A change that was applied to the notebook on the agent's behalf (directly,
+ * or when the user accepted its review), recorded so the user can undo it.
+ * `index` is the cell's position before the change; a move also has `toIndex`.
+ */
+export interface AppliedChange {
+  kind: "update" | "insert" | "delete" | "move";
+  cellId: string;
+  cellType: CellType;
+  index: number;
+  toIndex?: number;
+  before: string;
+  after: string;
+  /** Set when the change was applied by accepting this review. */
+  reviewId?: string;
+}
+
+/**
  * Operations the bridge asks the page to perform. Every mutating op carries
  * `review`: when true, the page shows the change for approval and answers at
  * once with a `reviewId` and `applied: false`; the decision arrives later as a
- * `review_closed` event.
+ * `review_closed` event. Mutating ops are journaled as `change_applied`
+ * events unless `byUser` marks them as the user's own (an undo, a cell
+ * inserted from the side panel).
  */
 export type NotebookOp =
   | { op: "info" }
   | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean }
-  | { op: "update_cell"; cellId: string; source: string; review: boolean }
-  | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean }
-  | { op: "delete_cell"; cellId: string; review: boolean }
-  | { op: "move_cell"; cellId: string; index: number }
+  | { op: "update_cell"; cellId: string; source: string; review: boolean; byUser?: boolean }
+  | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean; byUser?: boolean }
+  | { op: "delete_cell"; cellId: string; review: boolean; byUser?: boolean }
+  | { op: "move_cell"; cellId: string; index: number; byUser?: boolean }
   | { op: "run_cells"; cellIds: string[]; timeoutMs: number; stopOnError: boolean }
   | { op: "interrupt" }
   | { op: "focus_cell"; cellId: string }
@@ -111,4 +130,5 @@ export type NotebookOpOf<N extends NotebookOpName> = Extract<NotebookOp, { op: N
 export type NotebookEvent =
   | { type: "review_opened"; review: ReviewInfo }
   | { type: "review_closed"; reviewId: string; accepted: boolean }
-  | { type: "selection_changed"; activeCellId: string | null; selectedCellIds: string[] };
+  | { type: "selection_changed"; activeCellId: string | null; selectedCellIds: string[] }
+  | { type: "change_applied"; change: AppliedChange };

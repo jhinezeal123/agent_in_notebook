@@ -85,6 +85,8 @@ export interface ChatMessage {
   role: "user" | "agent" | "system";
   parts: Part[];
   createdAt: number;
+  /** Notebook changes the agent applied in this turn; the bridge keeps their content for undo. */
+  changes?: { count: number; undone?: boolean };
 }
 
 export type ChatStatus = "starting" | "idle" | "running" | "error" | "closed";
@@ -126,7 +128,15 @@ export interface BridgeMethods {
   "chat.option": { params: { chatId: string; optionId: string; value: string | boolean }; result: ChatSnapshot };
   "chat.answer": { params: { chatId: string; promptId: string; optionId: string }; result: { answered: boolean } };
   "chat.review": { params: { chatId: string; reviewId: string; accept: boolean }; result: { resolved: boolean } };
+  /** Revert the notebook changes of one agent turn, newest first, skipping cells edited since. */
+  "chat.undo": { params: { chatId: string; messageId: string }; result: UndoResult };
   "tab.closed": { params: { tabId: number }; result: { ok: true } };
+}
+
+export interface UndoResult {
+  undone: number;
+  /** One line per change left alone, with the reason. */
+  skipped: string[];
 }
 
 /** Requests the bridge sends to the extension. */

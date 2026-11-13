@@ -531,6 +531,98 @@ describe("plots and notebook-only mode", () => {
   });
 });
 
+describe("undo", () => {
+  /** The agent message that recorded notebook changes, newest first. */
+  const changedMessage = (ext: FakeExtension) => [...ext.messages.values()].filter((m) => m.role === "agent" && m.changes?.count).at(-1)!;
+
+  it("reverts a turn's changes newest first, and tells the agent next turn", async () => {
+    const { nb, ext, chatId } = await setup([
+      { type: "code", source: "x = 1" },
+      { type: "code", source: "y = 2" },
+      { type: "markdown", source: "# notes" },
+    ]);
+    await turn(
+      ext,
+      chatId,
+      script([
+        { tool: "update_cell", args: { cell_id: "c1", source: "x = 10" }, quiet: true },
+        { tool: "insert_cell", args: { cell_type: "code", source: "new = True", after_cell_id: "c1" }, quiet: true },
+        { tool: "update_cell", args: { cell_id: "c3", source: "# edited notes" }, quiet: true },
+        { tool: "delete_cell", args: { cell_id: "c3" }, quiet: true },
+        { tool: "move_cell", args: { cell_id: "c2", index: 0 }, quiet: true },
+        { tool: "update_cell", args: { cell_id: "c1", source: "x = 11" }, quiet: true },
+      ]),
+    );
+    expect(nb.cells.map((c) => c.source)).toEqual(["y = 2", "x = 11", "new = True"]);
+    const msg = changedMessage(ext);
+    expect(msg.changes).toEqual({ count: 6 });
+
+    const res = await ext.request<{ undone: number; skipped: string[] }>("chat.undo", { chatId, messageId: msg.id });
+    expect(res).toEqual({ undone: 6, skipped: [] });
+    // Same sources, same order; the deleted cell is back (with a new id).
+    expect(nb.cells.map((c) => c.source)).toEqual(["x = 1", "y = 2", "# notes"]);
+    expect(nb.cells.map((c) => c.type)).toEqual(["code", "code", "markdown"]);
+    await ext.waitFor(() => !!changedMessage(ext).changes?.undone, 5_000, "undone flag");
+    expect(ext.parts().some((p) => p.type === "notice" && p.text === "Undid 6 changes.")).toBe(true);
+    // Undo is not journaled itself, and cannot run twice.
+    expect(changedMessage(ext).changes).toEqual({ count: 6, undone: true });
+    await expect(ext.request("chat.undo", { chatId, messageId: msg.id })).rejects.toThrow(/already undone/);
+
+    const text = await turn(ext, chatId, "what now");
+    expect(text).toContain("[saw undo note]");
+    expect((await turn(ext, chatId, "and now")).match(/\[saw undo note\]/g)).toHaveLength(1);
+    ext.close();
+  });
+
+  it("never overwrites a cell the user edited since", async () => {
+    const { nb, ext, chatId } = await setup([{ type: "code", source: "a = 1" }]);
+    await turn(
+      ext,
+      chatId,
+      script([
+        { tool: "update_cell", args: { cell_id: "c1", source: "a = 2" }, quiet: true },
+        { tool: "insert_cell", args: { cell_type: "code", source: "b = 1" }, quiet: true },
+      ]),
+    );
+    nb.cells[0]!.source = "a = 2  # my edit";
+    const res = await ext.request<{ undone: number; skipped: string[] }>("chat.undo", { chatId, messageId: changedMessage(ext).id });
+    expect(res.undone).toBe(1);
+    expect(res.skipped).toEqual(["change to cell c1: edited since, so it was kept"]);
+    expect(nb.cells.map((c) => c.source)).toEqual(["a = 2  # my edit"]);
+    ext.close();
+  });
+
+  it("undoes accepted reviews, and still can after the chat is restored", async () => {
+    const key = `colab:/drive/undo-${Date.now()}`;
+    const nb = new FakeNotebook([{ type: "code", source: "v = 1" }]);
+    const ext = new FakeExtension(nb, nextTab++);
+    await ext.connect(port, TOKEN);
+    const open = () =>
+      ext.request<ChatSnapshot>("chat.open", {
+        tabId: ext.tabId,
+        agentId: "fake",
+        settings: { scope: "write", review: true, targetCellIds: [] },
+        platform: "colab",
+        notebookKey: key,
+      });
+    const snap = await open();
+    await ext.waitFor(() => ext.statuses.includes("idle"), 30_000, "agent start");
+    ext.autoReview = true;
+    await turn(ext, snap.chatId, script([{ tool: "update_cell", args: { cell_id: "c1", source: "v = 2" } }]));
+    expect(nb.cells[0]!.source).toBe("v = 2");
+
+    // Close the tab's chat (saved), then open it again: the journal comes back too.
+    await ext.request("tab.closed", { tabId: ext.tabId });
+    const restored = await open();
+    const msg = restored.messages.filter((m) => m.changes?.count).at(-1)!;
+    expect(msg.changes).toEqual({ count: 1 });
+    const res = await ext.request<{ undone: number }>("chat.undo", { chatId: restored.chatId, messageId: msg.id });
+    expect(res.undone).toBe(1);
+    expect(nb.cells[0]!.source).toBe("v = 1");
+    ext.close();
+  });
+});
+
 describe("agent lifecycle", () => {
   it("relays the agent's own permission requests", async () => {
     const { ext, chatId } = await setup([], { notebookOnly: false });

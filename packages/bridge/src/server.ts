@@ -12,6 +12,7 @@ import {
   DEFAULT_SETTINGS,
   RpcPeer,
   WIRE_VERSION,
+  type AppliedChange,
   type BridgeMethods,
   type ChatMessage,
   type ChatSettings,
@@ -208,20 +209,25 @@ export class Bridge {
         const existing = this.chats.get(p.tabId);
         if (existing && existing.spec.id === p.agentId && existing.notebookKey === key && existing.status !== "closed") return existing.snapshot();
         let carried: ChatMessage[] = [];
+        let journal: Record<string, AppliedChange[]> | undefined;
         let note: string | undefined;
         if (existing) {
           this.dropChat(existing);
           // Same notebook, other agent: hand the conversation over.
-          if (existing.notebookKey === key) carried = existing.messages;
+          if (existing.notebookKey === key) {
+            carried = existing.messages;
+            journal = existing.journalEntries();
+          }
         }
         if (!carried.length && key) {
           const stored = this.store.load(key);
           if (stored?.messages.length) {
             carried = stored.messages;
+            journal = stored.journal;
             note = `Restored the earlier conversation about this notebook. ${spec.name} starts a new session and gets a summary of it.`;
           }
         }
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(), { notebookKey: key, carried, note });
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(), { notebookKey: key, carried, note, journal });
         this.chats.set(p.tabId, chat);
         this.byToken.set(chat.mcpToken, chat);
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
@@ -267,6 +273,7 @@ export class Bridge {
     );
     rpc.handle("chat.answer", guard<"chat.answer">((p) => ({ answered: this.chatById(p.chatId).answer(p.promptId, p.optionId) })));
     rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(p.chatId).resolveReview(p.reviewId, p.accept) })));
+    rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(p.chatId).undo(String(p.messageId))));
     rpc.handle(
       "tab.closed",
       guard<"tab.closed">((p) => {
@@ -319,7 +326,7 @@ export class Bridge {
       persist: (chat) => {
         if (!chat.notebookKey || !chat.messages.length) return;
         try {
-          this.store.save({ key: chat.notebookKey, agentId: chat.spec.id, title: chat.notebook?.title, messages: chat.messages });
+          this.store.save({ key: chat.notebookKey, agentId: chat.spec.id, title: chat.notebook?.title, messages: chat.messages, journal: chat.journalEntries() });
         } catch (e) {
           this.log(`Could not save the chat transcript: ${(e as Error).message}`);
         }

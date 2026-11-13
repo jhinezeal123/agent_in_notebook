@@ -8,6 +8,7 @@ import type { McpServer, RequestPermissionRequest, RequestPermissionResponse, Se
 import {
   capText,
   type AgentOption,
+  type AppliedChange,
   type CellInfo,
   type ChatMessage,
   type ChatSettings,
@@ -20,6 +21,7 @@ import {
   type NotebookOpResults,
   type Part,
   type ReviewInfo,
+  type UndoResult,
 } from "@ainb/protocol";
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
@@ -45,6 +47,8 @@ export interface ChatOptions {
   carried?: ChatMessage[];
   /** System notice explaining where the carried transcript came from. */
   note?: string;
+  /** Undo journal of the carried transcript, by message id. */
+  journal?: Record<string, AppliedChange[]>;
 }
 
 const TOOL_DETAIL_MAX = 4000;
@@ -86,6 +90,10 @@ export class Chat {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set when the user starts over: the transcript must not be saved again. */
   private forgotten = false;
+  /** Notebook changes applied for the agent, by the agent message whose turn made them. */
+  private journal = new Map<string, AppliedChange[]>();
+  /** Undos the agent has not been told about yet. */
+  private undoNotes: string[] = [];
 
   constructor(
     readonly tabId: number,
@@ -95,7 +103,10 @@ export class Chat {
     opts: ChatOptions = {},
   ) {
     this.notebookKey = opts.notebookKey;
+    for (const [id, changes] of Object.entries(opts.journal ?? {})) if (Array.isArray(changes) && changes.length) this.journal.set(id, changes);
     const carried = opts.carried ?? [];
+    // Offer undo only where the journal to do it is still at hand.
+    for (const m of carried) if (m.changes && !this.journal.has(m.id)) delete m.changes;
     if (carried.length) {
       this.messages = carried;
       this.pendingRecap = recap(carried);
@@ -276,6 +287,10 @@ export class Chat {
     const blocks: string[] = [];
     if (this.sessionFresh) blocks.push(playbook(this.notebook));
     if (this.pendingRecap) blocks.push(this.pendingRecap);
+    if (this.undoNotes.length) {
+      blocks.push(`<undo-note>\n${this.undoNotes.join("\n")}\n</undo-note>`);
+      this.undoNotes = [];
+    }
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets));
     blocks.push(text);
     return blocks.join("\n\n");
@@ -553,6 +568,16 @@ export class Chat {
       case "review_closed":
         this.closeReview(event.reviewId, event.accepted ? "accepted" : "rejected");
         return;
+      case "change_applied": {
+        // A reviewed change belongs to the turn that proposed it, even if accepted later.
+        const msg = (event.change.reviewId && this.messageWithReview(event.change.reviewId)) || this.current || this.lastAgentMessage();
+        const changes = this.journal.get(msg.id) ?? [];
+        changes.push(event.change);
+        this.journal.set(msg.id, changes);
+        msg.changes = { count: changes.length };
+        this.touch(msg);
+        return;
+      }
       case "selection_changed":
         if (this.notebook) {
           this.notebook = { ...this.notebook, activeCellId: event.activeCellId, selectedCellIds: event.selectedCellIds };
@@ -593,6 +618,83 @@ export class Chat {
       if (this.reviews.size <= REVIEWS_KEPT) break;
       if (state.outcome !== "pending") this.reviews.delete(id);
     }
+  }
+
+  private messageWithReview(reviewId: string): ChatMessage | undefined {
+    return this.messages.find((m) => m.parts.some((p) => p.type === "review" && p.review.reviewId === reviewId));
+  }
+
+  /** The undo journal, for saving with the transcript. */
+  journalEntries(): Record<string, AppliedChange[]> {
+    return Object.fromEntries(this.journal);
+  }
+
+  /**
+   * Revert the changes of one agent turn, newest first. A cell the user (or a
+   * later turn) changed since is left alone, so undo never overwrites newer work.
+   */
+  async undo(messageId: string): Promise<UndoResult> {
+    if (this.current) throw new Error("Wait for the agent's turn to finish (or stop it) before undoing.");
+    const msg = this.messages.find((m) => m.id === messageId);
+    const changes = this.journal.get(messageId);
+    if (!msg || !changes?.length) throw new Error("There are no notebook changes to undo for this message.");
+    if (msg.changes?.undone) throw new Error("These changes were already undone.");
+    if (msg.parts.some((p) => p.type === "review" && p.status === "pending")) throw new Error("Accept or reject the changes still awaiting review first.");
+    if (this.undoing) throw new Error("An undo is already in progress.");
+    this.undoing = true;
+    try {
+      return await this.undoChanges(msg, changes);
+    } finally {
+      this.undoing = false;
+    }
+  }
+
+  private undoing = false;
+
+  private async undoChanges(msg: ChatMessage, changes: AppliedChange[]): Promise<UndoResult> {
+    // A deleted cell comes back with a new id; earlier changes to it follow the new one.
+    const ids = new Map<string, string>();
+    let undone = 0;
+    const skipped: string[] = [];
+    for (const c of [...changes].reverse()) {
+      const id = ids.get(c.cellId) ?? c.cellId;
+      const what = c.kind === "insert" ? `new cell ${id.slice(0, 10)}` : c.kind === "delete" ? `deleted cell ${id.slice(0, 10)}` : `${c.kind === "move" ? "move of" : "change to"} cell ${id.slice(0, 10)}`;
+      try {
+        const { cells } = await this.call({ op: "get_cells" });
+        const cell = cells.find((x) => x.id === id);
+        if (c.kind !== "delete" && !cell) {
+          skipped.push(`${what}: the cell no longer exists`);
+          continue;
+        }
+        if ((c.kind === "update" || c.kind === "insert") && cell!.source !== c.after) {
+          skipped.push(`${what}: edited since, so it was kept`);
+          continue;
+        }
+        if (c.kind === "update") await this.call({ op: "update_cell", cellId: id, source: c.before, review: false, byUser: true });
+        else if (c.kind === "insert") await this.call({ op: "delete_cell", cellId: id, review: false, byUser: true });
+        else if (c.kind === "move") await this.call({ op: "move_cell", cellId: id, index: c.index, byUser: true });
+        else {
+          const res = await this.call({ op: "insert_cell", index: Math.min(c.index, cells.length), cellType: c.cellType, source: c.before, review: false, byUser: true });
+          if (res.cellId) ids.set(c.cellId, res.cellId);
+        }
+        undone++;
+      } catch (e) {
+        skipped.push(`${what}: ${(e as Error).message}`);
+      }
+    }
+    msg.changes = { count: changes.length, undone: true };
+    const plural = (n: number) => `${n} change${n === 1 ? "" : "s"}`;
+    this.addPart(msg, {
+      type: "notice",
+      level: skipped.length ? "error" : "info",
+      text: `Undid ${plural(undone)}.${skipped.length ? ` Left ${skipped.length} alone:\n${skipped.map((x) => `- ${x}`).join("\n")}` : ""}`,
+    });
+    this.undoNotes.push(
+      `The user undid ${undone} of the ${plural(changes.length)} you made to the notebook in an earlier turn${skipped.length ? `; ${skipped.length} were kept because the cells changed since` : ""}. ` +
+        "Those cells are back as they were before your changes. Read the notebook again before building on that work.",
+    );
+    this.flush();
+    return { undone, skipped };
   }
 
   async resolveReview(reviewId: string, accept: boolean): Promise<boolean> {

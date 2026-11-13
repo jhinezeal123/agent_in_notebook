@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ChatMessage } from "@ainb/protocol";
+import type { AppliedChange, ChatMessage } from "@ainb/protocol";
 
 /** Older messages are dropped past this; the recap only uses the tail anyway. */
 const MAX_MESSAGES = 200;
@@ -17,6 +17,8 @@ export interface StoredChat {
   title?: string;
   updatedAt: number;
   messages: ChatMessage[];
+  /** Undo journal, by agent message id. */
+  journal?: Record<string, AppliedChange[]>;
 }
 
 /** Short, filesystem-safe name for a notebook key. */
@@ -45,7 +47,10 @@ export class ChatStore {
 
   save(chat: Omit<StoredChat, "version" | "updatedAt">): void {
     mkdirSync(this.dir, { recursive: true });
-    const data: StoredChat = { version: 1, ...chat, updatedAt: Date.now(), messages: chat.messages.slice(-MAX_MESSAGES) };
+    const messages = chat.messages.slice(-MAX_MESSAGES);
+    const kept = new Set(messages.map((m) => m.id));
+    const journal = Object.fromEntries(Object.entries(chat.journal ?? {}).filter(([id]) => kept.has(id)));
+    const data: StoredChat = { version: 1, ...chat, updatedAt: Date.now(), messages, journal };
     const file = this.file(chat.key);
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {

@@ -179,6 +179,27 @@ describe.skipIf(!RUN)("Colab", () => {
     expect(texts).toContain("print('from the panel')");
   }, 120_000);
 
+  it("undoes the agent's changes to the notebook from the side panel", async () => {
+    dumpOnFailure("undo");
+    const texts = () => nb.evaluate(() => (window as any).colab.global.notebook.cells.map((c: any) => c.getText()));
+    const before = await texts();
+    const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells[1].getId());
+    await send(
+      panel,
+      script([
+        { tool: "update_cell", args: { cell_id: cellId, source: "print('to be undone')" } },
+        { tool: "insert_cell", args: { cell_type: "markdown", source: "## temporary", index: 0 } },
+      ]),
+    );
+    const changes = panel.locator(".msg.agent").last().locator(".changes");
+    await expect.poll(() => changes.textContent(), { timeout: 60_000 }).toContain("2 notebook changes");
+    expect((await texts()).length).toBe(before.length + 1);
+    await changes.getByRole("button", { name: "Undo", exact: true }).click();
+    await changes.getByRole("button", { name: "Undo", exact: true }).click(); // confirm
+    await expect.poll(texts, { timeout: 30_000 }).toEqual(before);
+    await expect.poll(() => changes.textContent()).toContain("undone");
+  }, 120_000);
+
   it("shows a change in Colab's inline diff and applies it from the side panel", async () => {
     await panel.getByLabel("Review").check();
     const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells[2].getId());

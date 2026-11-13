@@ -9,6 +9,8 @@ export interface PartActions {
   focusCell(cellId: string): void;
   /** Insert code from the transcript as a new cell below the selected one. */
   insertCell(source: string, cellType: "code" | "markdown"): void;
+  /** Revert the notebook changes of one agent turn. */
+  undo(messageId: string): Promise<void>;
 }
 
 type PromptPart = Extract<Part, { type: "prompt" }>;
@@ -89,6 +91,42 @@ export function Message({ msg, actions, live = false }: { msg: ChatMessage; acti
             Copy
           </button>
         </div>
+      )}
+      {msg.changes && !live && <Changes msg={msg} count={msg.changes.count} undone={!!msg.changes.undone} actions={actions} />}
+    </div>
+  );
+}
+
+/** What the turn changed in the notebook, with an undo that asks once before acting. */
+function Changes({ msg, count, undone, actions }: { msg: ChatMessage; count: number; undone: boolean; actions: PartActions }) {
+  const [step, setStep] = useState<"idle" | "confirm" | "working">("idle");
+  const label = `${count} notebook change${count === 1 ? "" : "s"}`;
+  if (undone) return <div class="changes muted">{label} · undone</div>;
+  return (
+    <div class="changes">
+      {step === "confirm" ? (
+        <>
+          <span title="Cells edited since this turn are kept as they are.">Undo {label}?</span>
+          <button
+            class="primary small"
+            onClick={() => {
+              setStep("working");
+              void actions.undo(msg.id).finally(() => setStep("idle"));
+            }}
+          >
+            Undo
+          </button>
+          <button class="secondary small" onClick={() => setStep("idle")}>
+            Keep
+          </button>
+        </>
+      ) : (
+        <>
+          <span class="muted">{label}</span>
+          <button class="linkish" disabled={step === "working"} title="Put the notebook back as it was before this turn" onClick={() => setStep("confirm")}>
+            {step === "working" ? "Undoing…" : "Undo"}
+          </button>
+        </>
       )}
     </div>
   );

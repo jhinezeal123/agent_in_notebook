@@ -74,6 +74,7 @@ button.icon:hover { background: var(--bg-3); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 .msg-actions { display: flex; gap: 8px; opacity: 0; transition: opacity .15s; }
+.changes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; padding-top: 2px; border-top: 1px dashed var(--border); }
 .msg.agent:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
 
 .md { word-break: break-word; }
