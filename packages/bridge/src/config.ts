@@ -51,6 +51,26 @@ export function resetToken(): BridgeConfig {
   return next;
 }
 
+/** OpenResearch settings, in research.json. */
+export interface ResearchConfig {
+  /** The orx binary to run; unset: look on PATH and in the usual install places. */
+  orxPath?: string;
+}
+
+export function loadResearchConfig(): ResearchConfig {
+  const file = join(dataDir(), "research.json");
+  try {
+    const cfg = JSON.parse(readFileSync(file, "utf8"));
+    return typeof cfg?.orxPath === "string" && cfg.orxPath ? { orxPath: cfg.orxPath } : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveResearchConfig(cfg: ResearchConfig): void {
+  writeFileSync(join(dataDir(), "research.json"), JSON.stringify(cfg, null, 2));
+}
+
 /** A user-defined ACP agent from agents.json. */
 export interface CustomAgentConfig {
   id: string;

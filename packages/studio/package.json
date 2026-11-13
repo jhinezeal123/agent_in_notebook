@@ -1,0 +1,17 @@
+{
+  "name": "@ainb/studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "node build.mjs --typecheck"
+  },
+  "dependencies": {
+    "@ainb/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

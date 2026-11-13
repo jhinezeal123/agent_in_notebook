@@ -220,6 +220,54 @@ export interface BridgeMethods {
    * change it, run it. The agent's operations go through its chat instead.
    */
   "browser.op": { params: { tabId: number; op: BrowserOp }; result: unknown };
+  /** OpenResearch's state; `start` starts it when it is not running. */
+  "research.status": { params: { start?: boolean }; result: ResearchStatus };
+  /**
+   * Restart OpenResearch (what the bridge started), with this orx binary when
+   * `orxPath` is given (null: look for one again).
+   */
+  "research.configure": { params: { orxPath?: string | null }; result: ResearchStatus };
+  /**
+   * Run the kernel environment setup script in a terminal on the notebook's
+   * machine (its "setup" session), outside any chat. Waits up to `waitSeconds`
+   * (default 90); a longer script keeps running there (`running`).
+   */
+  "notebook.setup": {
+    params: { tabId: number; browserTab?: number; script: string; waitSeconds?: number };
+    result: { output: string; exitCode: number | null; running: boolean };
+  };
+}
+
+/**
+ * OpenResearch (`orx up`) as the bridge runs it, for the editor to show its
+ * web app. `missing`: no orx binary found; `off`: not started yet.
+ */
+export interface ResearchStatus {
+  state: "off" | "missing" | "starting" | "ready" | "error";
+  error?: string;
+  /** The orx binary used (or configured). */
+  orxPath?: string;
+  /** Where its web app and API listen, once ready. */
+  url?: string;
+  version?: string;
+  /** False when the bridge found an OpenResearch already running and uses that one. */
+  owned?: boolean;
+}
+
+/** OpenResearch's run states; the last four are final. */
+export type RunStatus = "starting" | "running" | "done" | "failed" | "cancelled" | "lost";
+export const FINAL_RUN_STATUSES: readonly RunStatus[] = ["done", "failed", "cancelled", "lost"];
+
+/** The fields of an OpenResearch run the editor uses (its API sends more). */
+export interface ResearchRun {
+  id: string;
+  experimentId: string;
+  projectId: string;
+  status: RunStatus;
+  backend?: string | null;
+  startedAt?: number | null;
+  endedAt?: number | null;
+  exitCode?: number | null;
 }
 
 export interface BrowserNotebook {
@@ -269,6 +317,9 @@ export interface BridgeEvents {
   "browser.notebook": { tabId: number; info: NotebookInfo | null };
   /** The user brought a Chrome tab holding a notebook to the front. */
   "browser.focused": { tabId: number };
+  "research.status": ResearchStatus;
+  /** A run of an OpenResearch experiment started, changed state or finished. */
+  "research.run": ResearchRun;
   ping: { t: number };
 }
 

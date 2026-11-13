@@ -28,9 +28,11 @@ import {
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost } from "./chat.js";
-import { BRIDGE_VERSION, dataDir, removeCustomAgent } from "./config.js";
+import { BRIDGE_VERSION, dataDir, removeCustomAgent, saveResearchConfig } from "./config.js";
+import { Orx, type OrxOptions } from "./research/orx.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
+import { forgetSetup, runSetup } from "./notebook/setup.js";
 import { ChatStore, pruneDir } from "./store.js";
 
 /** Saved transcripts and agent working directories untouched this long are deleted at startup. */
@@ -53,6 +55,8 @@ export interface BridgeOptions {
    * connected for this long (it closed), it stops. Unset: runs until stopped.
    */
   stopWithoutEditorMs?: number;
+  /** How OpenResearch is found and run (tests replace orx with a stand-in). */
+  research?: Pick<OrxOptions, "locate" | "knownPorts" | "startTimeoutMs">;
 }
 
 type ClientKind = "browser" | "vscode";
@@ -83,11 +87,19 @@ export class Bridge {
   private pingTimer: ReturnType<typeof setInterval>;
   private readonly log: (msg: string) => void;
   private readonly store: ChatStore;
+  /** OpenResearch, run hidden for the editor's research views; started on first use. */
+  readonly orx: Orx;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
     this.log = opts.log ?? ((m) => console.log(m));
     this.store = new ChatStore(join(dataDir(), "chats"));
+    this.orx = new Orx({
+      ...opts.research,
+      log: (m) => this.log(m),
+      onStatus: (status) => this.toEditor("research.status", status),
+      onRun: (run) => this.toEditor("research.run", run),
+    });
     try {
       this.store.prune(KEEP_MS);
       const workspaces = join(dataDir(), "workspaces");
@@ -149,6 +161,7 @@ export class Bridge {
     clearTimeout(this.editorGone);
     clearInterval(this.pingTimer);
     this.dropAllChats();
+    this.orx.close();
     for (const client of Object.values(this.clients)) {
       // Tells the extensions not to reconnect (or start a new bridge) by themselves.
       client.connection?.ws.close(4001, "stopped");
@@ -350,6 +363,19 @@ export class Bridge {
     rpc.handle("chat.answer", guard<"chat.answer">((p) => ({ answered: this.chatById(p.chatId).answer(p.promptId, p.optionId) })));
     rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(p.chatId).resolveReview(p.reviewId, p.accept) })));
     rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(p.chatId).undo(String(p.messageId))));
+    rpc.handle("notebook.setup", guard<"notebook.setup">((p) => {
+      const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
+      const waitMs = Math.min(110, Math.max(5, Number(p.waitSeconds) || 90)) * 1000;
+      return runSetup((op, timeoutMs) => this.notebookOp(target, op, timeoutMs), `${target.kind}:${target.tabId}`, String(p.script ?? ""), waitMs);
+    }));
+    rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
+    rpc.handle("research.configure", guard<"research.configure">((p) => {
+      if (p?.orxPath !== undefined) {
+        const orxPath = typeof p.orxPath === "string" && p.orxPath.trim() ? p.orxPath.trim() : undefined;
+        saveResearchConfig(orxPath ? { orxPath } : {});
+      }
+      return this.orx.restart();
+    }));
     rpc.handle(
       "browser.notebooks",
       guard<"browser.notebooks">(() => ({ notebooks: [...this.browserNotebooks].map(([tabId, info]) => ({ tabId, info })) })),
@@ -371,6 +397,7 @@ export class Bridge {
       if (!authed()) throw new Error("not paired");
       if (browser) this.setBrowserNotebook(p.tabId, null);
       for (const chat of this.chatsOn(kind, p.tabId)) this.dropChat(chat);
+      forgetSetup(`${kind}:${p.tabId}`);
       return { ok: true as const };
     });
     rpc.on("notebook.event", (p: ExtensionEvents["notebook.event"]) => {

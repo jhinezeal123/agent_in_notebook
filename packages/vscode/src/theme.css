@@ -4,7 +4,7 @@ body {
   --bg-3: var(--vscode-input-background);
   --fg: var(--vscode-sideBar-foreground, var(--vscode-foreground));
   --muted: var(--vscode-descriptionForeground);
-  --border: var(--vscode-input-border, var(--vscode-panel-border));
+  --border: var(--vscode-widget-border, var(--vscode-panel-border));
   --accent: var(--vscode-textLink-foreground);
   --accent-fg: var(--vscode-button-foreground);
   --accent-soft: var(--vscode-editor-selectionBackground);
@@ -14,9 +14,20 @@ body {
   --add-bg: var(--vscode-diffEditor-insertedTextBackground);
   --del-bg: var(--vscode-diffEditor-removedTextBackground);
   --mono: var(--vscode-editor-font-family, monospace);
+  /* the input box, bubbles and buttons of VS Code's own chat */
+  --input-bg: var(--vscode-chat-requestBackground, var(--vscode-input-background));
+  --input-border: var(--vscode-input-border, var(--vscode-widget-border, var(--vscode-panel-border)));
+  --focus: var(--vscode-focusBorder);
+  --bubble: var(--vscode-chat-requestBubbleBackground, var(--vscode-editorWidget-background));
+  --btn-bg: var(--vscode-button-background);
+  --btn-fg: var(--vscode-button-foreground);
+  --btn-hover: var(--vscode-button-hoverBackground);
+  --btn2-bg: var(--vscode-button-secondaryBackground);
+  --btn2-fg: var(--vscode-button-secondaryForeground);
+  --btn2-hover: var(--vscode-button-secondaryHoverBackground);
+  --hover: var(--vscode-toolbar-hoverBackground);
+  --widget-bg: var(--vscode-editorWidget-background);
   font: var(--vscode-font-size) / 1.5 var(--vscode-font-family);
 }
 body.vscode-light { color-scheme: light; }
 body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
-body .primary { background: var(--vscode-button-background); }
-body .primary:not(:disabled):hover { background: var(--vscode-button-hoverBackground); }
