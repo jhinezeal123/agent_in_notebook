@@ -121,7 +121,9 @@ export class AcpAgent {
     const handshake = async () => {
       this.init = await this.conn!.agent.request("initialize", {
         protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        // `session.compaction`: the agent reports compacting its context (compaction_update),
+        // after which the notebook rules are sent again.
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, session: { compaction: {} } },
         clientInfo: { name: "agent-in-notebook", title: "Agent in Notebook", version: BRIDGE_VERSION },
       });
       try {

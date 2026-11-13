@@ -55,6 +55,9 @@ export interface ChatOptions {
 }
 
 const TOOL_DETAIL_MAX = 4000;
+/** usage_update falling below this share of the last count (from at least the minimum) means a compaction. */
+const COMPACTION_SHRINK = 0.6;
+const COMPACTION_MIN_TOKENS = 20_000;
 const FLUSH_MS = 80;
 const OP_TIMEOUT_MS = 30_000;
 /** Saving rewrites the whole transcript, so it waits for a pause of this long. */
@@ -81,6 +84,11 @@ export class Chat {
   private starting: Promise<void> | null = null;
   private closed = false;
   private sessionFresh = true;
+  /**
+   * The agent compacted its context, which may have dropped the playbook it got
+   * on the session's first turn: send it (and the full outline) again.
+   */
+  private rulesDue = false;
   /** Recap to hand a session that joins mid-conversation. */
   private pendingRecap = "";
   private current: ChatMessage | null = null;
@@ -198,6 +206,9 @@ export class Chat {
         return;
       }
       this.sessionFresh = true;
+      this.rulesDue = false;
+      // A new session starts with an empty context; the old count would read as a compaction.
+      this.usage = undefined;
       this.setStatus(this.current ? "running" : "idle");
       this.host.emit("chat.snapshot", this.snapshot());
     } catch (e) {
@@ -301,7 +312,9 @@ export class Chat {
           ? [this.notebook.activeCellId]
           : [];
     const blocks: string[] = [];
-    if (this.sessionFresh) blocks.push(playbook(this.notebook));
+    const rules = this.sessionFresh || this.rulesDue;
+    if (rules) blocks.push(playbook(this.notebook));
+    this.rulesDue = false;
     if (this.pendingRecap) blocks.push(this.pendingRecap);
     if (this.undoNotes.length) {
       blocks.push(`<undo-note>\n${this.undoNotes.join("\n")}\n</undo-note>`);
@@ -309,7 +322,7 @@ export class Chat {
     }
     // The outline is resent only when it changed; the agent still has the last one.
     const outline = cells ? JSON.stringify(cells.map((c) => [c.id, c.type, c.source])) : "";
-    const unchanged = !!cells && !this.sessionFresh && !this.pendingRecap && outline === this.lastOutline;
+    const unchanged = !!cells && !rules && !this.pendingRecap && outline === this.lastOutline;
     this.lastOutline = outline;
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged));
     blocks.push(text);
@@ -351,9 +364,24 @@ export class Chat {
     if (u.sessionUpdate === "usage_update") {
       const x = u as unknown as { used?: unknown; size?: unknown; cost?: { amount?: unknown; currency?: unknown } | null };
       if (typeof x.used !== "number" || typeof x.size !== "number") return;
+      // For agents that compact without saying so: a context that shrinks this much was compacted.
+      const before = this.usage?.used;
+      if (before !== undefined && before >= COMPACTION_MIN_TOKENS && x.used < before * COMPACTION_SHRINK) this.rulesDue = true;
       this.usage = { used: x.used, size: x.size };
       if (typeof x.cost?.amount === "number" && typeof x.cost.currency === "string") this.usage.cost = { amount: x.cost.amount, currency: x.cost.currency };
       this.host.emit("chat.usage", { chatId: this.id, tabId: this.tabId, usage: this.usage });
+      return;
+    }
+    if (u.sessionUpdate === "compaction_update") {
+      const status = (u as unknown as { status?: unknown }).status;
+      if (status === "completed" && !this.rulesDue) {
+        this.rulesDue = true;
+        this.addPart(this.current ?? this.lastAgentMessage(), {
+          type: "notice",
+          level: "info",
+          text: `${this.spec.name} compacted its context. The notebook rules go with your next message again.`,
+        });
+      }
       return;
     }
     if (u.sessionUpdate === "current_mode_update") {

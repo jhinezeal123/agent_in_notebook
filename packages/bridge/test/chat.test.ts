@@ -193,3 +193,32 @@ describe("Streaming and context", () => {
     expect(notebookOp.mock.calls.filter(([, op]) => (op as { op: string }).op === "get_cells").every(([, op]) => (op as { summary?: boolean }).summary)).toBe(true);
   });
 });
+
+describe("Context compaction", () => {
+  it("sends the playbook again when the reported context shrinks sharply", async () => {
+    const { chat } = setup();
+    const { AcpAgent } = await import("../src/agents/acp-agent.js");
+    const usage = (used: number) => ({ sessionId: "test-session", update: { sessionUpdate: "usage_update", used, size: 200_000 } });
+    let report: number[] = [];
+    agent.prompt.mockImplementation(async () => {
+      const h = vi.mocked(AcpAgent).mock.calls.at(-1)![1] as { onUpdate(n: unknown): void };
+      for (const n of report) h.onUpdate(usage(n));
+      return { stopReason: "end_turn" };
+    });
+    const turn = async (text: string, used: number[]) => {
+      report = used;
+      const n = agent.prompt.mock.calls.length;
+      chat.send(text);
+      await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(n + 1));
+      await vi.waitFor(() => expect(chat.status).toBe("idle"));
+      return agent.prompt.mock.calls[n]![0] as string;
+    };
+    expect(await turn("one", [90_000, 150_000])).toContain("<agent-in-notebook>");
+    expect(await turn("two", [160_000, 40_000])).not.toContain("<agent-in-notebook>");
+    // 160k -> 40k: compacted during "two".
+    expect(await turn("three", [45_000])).toContain("<agent-in-notebook>");
+    // Growing again, or shrinking a little, is no compaction.
+    expect(await turn("four", [60_000, 50_000])).not.toContain("<agent-in-notebook>");
+    expect(await turn("five", [])).not.toContain("<agent-in-notebook>");
+  });
+});

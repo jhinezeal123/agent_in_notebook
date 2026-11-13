@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 const sessions = new Map();
 let model = "fast";
+let clientCapabilities = {};
 
 const configOptions = () => [
   {
@@ -40,11 +41,14 @@ async function connectMcp(servers) {
 }
 
 const app = agent({ name: "fake-agent" })
-  .onRequest("initialize", () => ({
-    protocolVersion: 1,
-    agentCapabilities: { mcpCapabilities: { http: false, sse: false }, promptCapabilities: { image: true } },
-    authMethods: [],
-  }))
+  .onRequest("initialize", ({ params }) => {
+    clientCapabilities = params.clientCapabilities ?? {};
+    return {
+      protocolVersion: 1,
+      agentCapabilities: { mcpCapabilities: { http: false, sse: false }, promptCapabilities: { image: true } },
+      authMethods: [],
+    };
+  })
   .onRequest("session/new", async ({ params }) => {
     const sessionId = `s${sessions.size + 1}`;
     sessions.set(sessionId, { mcp: await connectMcp(params.mcpServers), cancelled: false, turns: 0 });
@@ -83,6 +87,15 @@ const app = agent({ name: "fake-agent" })
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
       if (step.say) await say(step.say);
+      // Like Claude's adapter: report a compaction only to clients that support it.
+      if (step.compact) {
+        if (!clientCapabilities.session?.compaction) await say("[compaction not supported by client]");
+        else {
+          for (const status of ["in_progress", "completed"]) {
+            await client.notify("session/update", { sessionId: params.sessionId, update: { sessionUpdate: "compaction_update", compactionId: `k${s.turns}`, status } });
+          }
+        }
+      }
       if (step.sleep) {
         const end = Date.now() + step.sleep;
         while (Date.now() < end && !s.cancelled) await new Promise((r) => setTimeout(r, 20));

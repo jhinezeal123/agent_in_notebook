@@ -181,6 +181,26 @@ describe("chat with a notebook", () => {
   });
 });
 
+describe("context compaction", () => {
+  it("sends the playbook and the full outline again after the agent compacts its context", async () => {
+    const { ext, chatId } = await setup([{ type: "code", source: "import pandas as pd" }]);
+    expect(await turn(ext, chatId, "first")).toContain("[saw playbook]");
+    let text = await turn(ext, chatId, `ECHO_CONTEXT ${script([{ compact: true }])}`);
+    expect(text).not.toContain("not supported");
+    expect(text).toContain("unchanged since your previous message");
+    const notices = [...ext.messages.values()].flatMap((m) => m.parts).filter((p) => p.type === "notice").map((p) => (p as { text: string }).text);
+    expect(notices).toContain("Fake Agent compacted its context. The notebook rules go with your next message again.");
+    const before = (text.match(/\[saw playbook\]/g) ?? []).length;
+    text = await turn(ext, chatId, "ECHO_CONTEXT after");
+    expect((text.match(/\[saw playbook\]/g) ?? []).length).toBe(before + 1);
+    expect(text).toContain("[0] c1 code: import pandas as pd");
+    // Only once: the turn after is back to normal.
+    text = await turn(ext, chatId, "later");
+    expect((text.match(/\[saw playbook\]/g) ?? []).length).toBe(before + 1);
+    ext.close();
+  });
+});
+
 describe("agent management over the extension link", () => {
   it("adds, tests, edits and removes a launch command without reconnecting", async () => {
     const ext = new FakeExtension(new FakeNotebook([]), nextTab++);
