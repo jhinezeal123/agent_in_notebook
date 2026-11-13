@@ -111,7 +111,7 @@ Kernel chạy từng yêu cầu một, nên trong lúc một cell chạy, mọi 
 
 Thư mục làm việc và PATH vẫn hỏi kernel (`hello` qua `execute`, một lần), vì terminal của server làm việc ở thư mục gốc của server và có thể có PATH khác. Phiên terminal mới bắt đầu ở thư mục của kernel, với thư mục chứa Python của kernel đứng đầu PATH. Kernel không trả lời được thì hỏi qua terminal của server (với Jupyter: thư mục gốc cộng thư mục của notebook).
 
-Colab có đường riêng không qua kernel: terminal của Colab nối websocket `/colab/tty` của runtime (`getKernel().getTerminalConnection()`). Có vẻ mỗi runtime chỉ một terminal, dùng chung với bảng Terminal của user, và giao thức chưa rõ, nên chưa dùng; cần dò trên runtime thật (`test/debug/colab-terminal-probe.mjs` chỉ đọc mã nguồn trang).
+Colab có đường riêng không qua kernel: terminal của Colab nối websocket `/colab/tty` của runtime (`getKernel().getTerminalConnection()`). Có vẻ mỗi runtime chỉ một terminal, dùng chung với bảng Terminal của user, và giao thức chưa rõ, nên chưa dùng; cần dò trên runtime thật (`test/debug/colab-terminal-probe.mjs` chỉ đọc mã nguồn trang). Kế hoạch dùng SSH chính thức (`/colab/ssh`) cho Colab: [du-dinh-colab.md](du-dinh-colab.md).
 
 Tool call song song: agent có thể gọi nhiều tool cùng lúc. `ToolContext.exclusive` xếp hàng theo hai khóa của chat: `edit` (đọc cell, tính nội dung mới, ghi, không xen kẽ, nên hai `Edit` trên một cell không ghi đè nhau) và `run` (Jupyter chạy cell qua "active cell"). Chờ review nằm ngoài khóa.
 
