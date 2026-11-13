@@ -11,6 +11,7 @@ import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { ResearchStatus } from "@ainb/protocol";
 import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
+import type { ChangeSet, ChangedFile } from "./changes.js";
 import { OrxTunnel } from "./orx-tunnel.js";
 
 export interface StudioDeps {
@@ -41,6 +42,15 @@ export interface OrxProject {
   updatedAt: number;
 }
 
+/** A checkout of a project's code (OpenResearch's code-tree, without its file list). */
+export interface OrxCheckout {
+  /** "worktree": a research chat's own; "clone": the project's repository. */
+  root: "worktree" | "clone";
+  path: string;
+  /** Checked-out branch; null when detached. */
+  branch: string | null;
+}
+
 export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private status: ResearchStatus = { state: "off" };
   private readonly statusChanged = new vscode.EventEmitter<ResearchStatus>();
@@ -48,6 +58,9 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly projectChanged = new vscode.EventEmitter<string>();
   /** Another project was opened (the right side bar follows it). */
   readonly onDidChangeProject = this.projectChanged.event;
+  private readonly chatChanged = new vscode.EventEmitter<SelectedChat | null>();
+  /** The chat panel shows another chat (the Code tree follows a research chat's worktree). */
+  readonly onDidChangeChat = this.chatChanged.event;
   private readonly webviews = new Set<{ webview: vscode.Webview; view: () => StudioView | null }>();
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly statusItem: vscode.StatusBarItem;
@@ -85,6 +98,43 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     await this.deps.context.globalState.update(PROJECT_KEY, id);
     this.broadcast("project.current", id);
     this.projectChanged.fire(id);
+  }
+
+  /** The chat panel shows another chat: tell the views; a research chat opens its project. */
+  chatSelected(chat: SelectedChat | null): void {
+    this.broadcast("chat.selected", chat);
+    this.chatChanged.fire(chat);
+    if (chat?.kind === "research") void this.openProject(chat.projectId);
+  }
+
+  /** The research chat in the chat panel, when it is this project's. */
+  researchChatOf(projectId: string): string | null {
+    const chat = this.deps.selectedChat();
+    return chat?.kind === "research" && chat.projectId === projectId ? chat.sessionId : null;
+  }
+
+  /**
+   * Where a project's code is checked out: the chat's own worktree (where its
+   * agent works) when it has one, else the project's repository.
+   */
+  async codeCheckout(projectId: string, sessionId: string | null): Promise<OrxCheckout> {
+    if (this.status.state !== "ready" || !this.status.url) throw new Error("OpenResearch is not running.");
+    const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
+    const res = await fetch(`${this.status.url}/api/projects/${encodeURIComponent(projectId)}/code-tree${query}`);
+    if (!res.ok) throw new Error(`OpenResearch answered HTTP ${res.status}.`);
+    const tree = await res.json() as Partial<OrxCheckout>;
+    if (typeof tree.path !== "string") throw new Error("OpenResearch did not say where the code is.");
+    return { root: tree.root === "worktree" ? "worktree" : "clone", path: tree.path, branch: typeof tree.branch === "string" ? tree.branch : null };
+  }
+
+  /** What a research chat changed in its worktree (null: it has none yet). */
+  async worktreeChanges(sessionId: string): Promise<Omit<ChangeSet, "root"> | null> {
+    if (this.status.state !== "ready" || !this.status.url) throw new Error("OpenResearch is not running.");
+    const res = await fetch(`${this.status.url}/api/chat/sessions/${encodeURIComponent(sessionId)}/worktree`);
+    if (!res.ok) throw new Error(`OpenResearch answered HTTP ${res.status}.`);
+    const w = await res.json() as { exists?: boolean; branch?: string | null; baselineBranch?: string; baseSha?: string; files?: ChangedFile[] };
+    if (!w.exists || !w.baseSha) return null;
+    return { branch: w.branch ?? null, baselineBranch: w.baselineBranch ?? "baseline", baseSha: w.baseSha, files: Array.isArray(w.files) ? w.files : [] };
   }
 
   /** OpenResearch's projects; none while it is not running (this does not start it). */
@@ -335,6 +385,7 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     this.statusItem.dispose();
     this.statusChanged.dispose();
     this.projectChanged.dispose();
+    this.chatChanged.dispose();
     for (const panel of this.panels.values()) panel.dispose();
   }
 }

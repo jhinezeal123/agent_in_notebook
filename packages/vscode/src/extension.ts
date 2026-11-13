@@ -9,7 +9,8 @@ import { openChatLink, readChatImage } from "./chat-links.js";
 import { VSCodeNotebook } from "./notebook.js";
 import { PanelCore, chromeTab, isChrome, type LocalNotebooks } from "./panel-core.js";
 import { Studio } from "./studio-host.js";
-import { ArtifactsTree } from "./artifacts.js";
+import { ARTIFACTS, CODE, FolderTree } from "./folder-tree.js";
+import { registerChangeProviders } from "./changes.js";
 
 const secret = "bridge.config";
 
@@ -23,7 +24,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider("ainb.chat", panel, retain),
     vscode.window.registerWebviewViewProvider("ainb.research", studio, retain),
     vscode.window.registerWebviewViewProvider("ainb.project", studio.projectView, retain),
-    new ArtifactsTree(studio),
+    registerChangeProviders(),
+    new FolderTree(studio, CODE),
+    new FolderTree(studio, ARTIFACTS),
     vscode.commands.registerCommand("ainb.pickProject", () => studio.pickProjectToShow()),
     vscode.commands.registerCommand("ainb.open", () => vscode.commands.executeCommand("ainb.chat.focus")),
     vscode.commands.registerCommand("ainb.newChat", () => studio.open({ view: "newchat" })),
@@ -262,9 +265,8 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private setSelected(chat: SelectedChat | null): void {
     this.selected = chat;
-    this.studio.broadcast("chat.selected", chat);
     // Showing a research chat opens its project (the right side bar follows).
-    if (chat?.kind === "research") void this.studio.openProject(chat.projectId);
+    this.studio.chatSelected(chat);
   }
 
   /** Show a chat in this panel: about a notebook (with this agent, when given), or a research chat. */

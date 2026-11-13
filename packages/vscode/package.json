@@ -71,12 +71,31 @@
           "name": "Project"
         },
         {
+          "id": "ainb.code",
+          "name": "Code"
+        },
+        {
           "id": "ainb.artifacts",
           "name": "Artifacts"
         }
       ]
     },
     "viewsWelcome": [
+      {
+        "view": "ainb.code",
+        "contents": "The current project's code shows here once OpenResearch is running.",
+        "when": "ainb.code.state != none && ainb.code.state != ready"
+      },
+      {
+        "view": "ainb.code",
+        "contents": "No projects yet.\n[New Chat](command:ainb.newChat)",
+        "when": "ainb.code.state == none"
+      },
+      {
+        "view": "ainb.code",
+        "contents": "The project's repository folder is empty.",
+        "when": "ainb.code.state == ready && ainb.code.mode != changes"
+      },
       {
         "view": "ainb.artifacts",
         "contents": "The current project's artifacts show here once OpenResearch is running.",
@@ -91,6 +110,26 @@
         "view": "ainb.artifacts",
         "contents": "No artifacts yet. Files the research agent saves for this project show here.\n[New File](command:ainb.artifacts.newFile)",
         "when": "ainb.artifacts.state == ready"
+      },
+      {
+        "view": "ainb.code",
+        "contents": "Open a research chat of this project to see what its agent changed in its worktree.\n[Show Files](command:ainb.code.showFiles)",
+        "when": "ainb.code.state == ready && ainb.code.mode == changes && ainb.code.changes == noChat"
+      },
+      {
+        "view": "ainb.code",
+        "contents": "This chat has no worktree yet: its agent makes one on its first turn.",
+        "when": "ainb.code.state == ready && ainb.code.mode == changes && ainb.code.changes == pending"
+      },
+      {
+        "view": "ainb.code",
+        "contents": "No changes: the chat's worktree is as its branch started from the baseline.",
+        "when": "ainb.code.state == ready && ainb.code.mode == changes && ainb.code.changes == clean"
+      },
+      {
+        "view": "ainb.code",
+        "contents": "Could not read this chat's changes.\n[Refresh](command:ainb.code.refresh)",
+        "when": "ainb.code.state == ready && ainb.code.mode == changes && ainb.code.changes == error"
       }
     ],
     "commands": [
@@ -134,6 +173,65 @@
         "title": "Show Another Project",
         "category": "Agent in Notebook",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "ainb.code.newFile",
+        "title": "New File...",
+        "category": "Project Code",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "ainb.code.newFolder",
+        "title": "New Folder...",
+        "category": "Project Code",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "ainb.code.refresh",
+        "title": "Refresh",
+        "category": "Project Code",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ainb.code.revealFolder",
+        "title": "Reveal Repository Folder in File Explorer",
+        "category": "Project Code",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "ainb.code.openToSide",
+        "title": "Open to the Side",
+        "category": "Project Code"
+      },
+      {
+        "command": "ainb.code.revealInOS",
+        "title": "Reveal in File Explorer",
+        "category": "Project Code"
+      },
+      {
+        "command": "ainb.code.openInTerminal",
+        "title": "Open in Integrated Terminal",
+        "category": "Project Code"
+      },
+      {
+        "command": "ainb.code.copyPath",
+        "title": "Copy Path",
+        "category": "Project Code"
+      },
+      {
+        "command": "ainb.code.copyRelativePath",
+        "title": "Copy Relative Path",
+        "category": "Project Code"
+      },
+      {
+        "command": "ainb.code.rename",
+        "title": "Rename...",
+        "category": "Project Code"
+      },
+      {
+        "command": "ainb.code.delete",
+        "title": "Delete",
+        "category": "Project Code"
       },
       {
         "command": "ainb.artifacts.newFile",
@@ -193,9 +291,44 @@
         "command": "ainb.artifacts.delete",
         "title": "Delete",
         "category": "Artifacts"
+      },
+      {
+        "command": "ainb.code.showChanges",
+        "title": "Show Changes",
+        "category": "Project Code",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "ainb.code.showFiles",
+        "title": "Show Files",
+        "category": "Project Code",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "ainb.code.openChange",
+        "title": "Open Changes",
+        "category": "Project Code",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "ainb.code.openFile",
+        "title": "Open File",
+        "category": "Project Code",
+        "icon": "$(go-to-file)"
       }
     ],
     "keybindings": [
+      {
+        "command": "ainb.code.rename",
+        "key": "f2",
+        "when": "focusedView == ainb.code && !inputFocus"
+      },
+      {
+        "command": "ainb.code.delete",
+        "key": "delete",
+        "mac": "cmd+backspace",
+        "when": "focusedView == ainb.code && !inputFocus"
+      },
       {
         "command": "ainb.artifacts.rename",
         "key": "f2",
@@ -241,6 +374,26 @@
           "group": "navigation@1"
         },
         {
+          "command": "ainb.code.newFile",
+          "when": "view == ainb.code && ainb.code.state == ready && ainb.code.mode != changes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ainb.code.newFolder",
+          "when": "view == ainb.code && ainb.code.state == ready && ainb.code.mode != changes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ainb.code.refresh",
+          "when": "view == ainb.code",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ainb.code.revealFolder",
+          "when": "view == ainb.code && ainb.code.state == ready",
+          "group": "more@1"
+        },
+        {
           "command": "ainb.artifacts.newFile",
           "when": "view == ainb.artifacts && ainb.artifacts.state == ready",
           "group": "navigation@1"
@@ -259,22 +412,77 @@
           "command": "ainb.artifacts.revealFolder",
           "when": "view == ainb.artifacts && ainb.artifacts.state == ready",
           "group": "more@1"
+        },
+        {
+          "command": "ainb.code.showChanges",
+          "when": "view == ainb.code && ainb.code.state == ready && ainb.code.mode != changes",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ainb.code.showFiles",
+          "when": "view == ainb.code && ainb.code.mode == changes",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
         {
+          "command": "ainb.code.openToSide",
+          "when": "view == ainb.code && viewItem == projectFile",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ainb.code.newFile",
+          "when": "view == ainb.code && viewItem == projectFolder",
+          "group": "1_new@1"
+        },
+        {
+          "command": "ainb.code.newFolder",
+          "when": "view == ainb.code && viewItem == projectFolder",
+          "group": "1_new@2"
+        },
+        {
+          "command": "ainb.code.revealInOS",
+          "when": "view == ainb.code",
+          "group": "2_reveal@1"
+        },
+        {
+          "command": "ainb.code.openInTerminal",
+          "when": "view == ainb.code",
+          "group": "2_reveal@2"
+        },
+        {
+          "command": "ainb.code.copyPath",
+          "when": "view == ainb.code",
+          "group": "6_copypath@1"
+        },
+        {
+          "command": "ainb.code.copyRelativePath",
+          "when": "view == ainb.code",
+          "group": "6_copypath@2"
+        },
+        {
+          "command": "ainb.code.rename",
+          "when": "view == ainb.code && !listMultiSelection && viewItem =~ /^project/",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "ainb.code.delete",
+          "when": "view == ainb.code && viewItem =~ /^project/",
+          "group": "7_modification@2"
+        },
+        {
           "command": "ainb.artifacts.openToSide",
-          "when": "view == ainb.artifacts && viewItem == artifactFile",
+          "when": "view == ainb.artifacts && viewItem == projectFile",
           "group": "navigation@1"
         },
         {
           "command": "ainb.artifacts.newFile",
-          "when": "view == ainb.artifacts && viewItem == artifactFolder",
+          "when": "view == ainb.artifacts && viewItem == projectFolder",
           "group": "1_new@1"
         },
         {
           "command": "ainb.artifacts.newFolder",
-          "when": "view == ainb.artifacts && viewItem == artifactFolder",
+          "when": "view == ainb.artifacts && viewItem == projectFolder",
           "group": "1_new@2"
         },
         {
@@ -306,9 +514,52 @@
           "command": "ainb.artifacts.delete",
           "when": "view == ainb.artifacts",
           "group": "7_modification@2"
+        },
+        {
+          "command": "ainb.code.openFile",
+          "when": "view == ainb.code && viewItem == change",
+          "group": "inline"
+        },
+        {
+          "command": "ainb.code.openFile",
+          "when": "view == ainb.code && viewItem == change",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ainb.code.openChange",
+          "when": "view == ainb.code && viewItem =~ /^change/",
+          "group": "navigation@1"
         }
       ],
       "commandPalette": [
+        {
+          "command": "ainb.code.openToSide",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.revealInOS",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.openInTerminal",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.copyRelativePath",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.rename",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.delete",
+          "when": "false"
+        },
         {
           "command": "ainb.artifacts.openToSide",
           "when": "false"
@@ -335,6 +586,14 @@
         },
         {
           "command": "ainb.artifacts.delete",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.openChange",
+          "when": "false"
+        },
+        {
+          "command": "ainb.code.openFile",
           "when": "false"
         }
       ]
