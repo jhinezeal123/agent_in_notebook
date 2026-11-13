@@ -1,11 +1,12 @@
-// Pairing through native messaging in a real browser: `ainb install`, then
-// opening a notebook starts the bridge and connects with no token typed in.
+// Pairing through native messaging in a real browser: after `ainb install`, a
+// notebook tab joins the bridge VS Code starts, with no token typed in (the
+// browser never starts the bridge itself).
 //
 // It registers the native host for this user's browsers (on Windows: HKCU
 // registry keys) and removes the registration afterwards, so it only runs when asked:
 //   E2E_NATIVE=1 pnpm --filter @ainb/extension exec vitest run test/native-e2e.test.ts
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -63,6 +64,12 @@ function saveRegistration(): () => void {
   };
 }
 
+/** What VS Code does when its panel opens: start the bridge (here in the foreground, so it does not stop for want of VS Code). */
+const startBridge = () => {
+  const child = spawn(process.execPath, [CLI, "serve"], { env: { ...process.env, AINB_HOME: home }, stdio: "ignore" });
+  child.unref();
+};
+
 let restoreRegistration = () => {};
 let ctx: BrowserContext;
 let nb: Page;
@@ -105,19 +112,23 @@ describe.skipIf(!RUN)("native messaging", () => {
     expect(new URL(sw.url()).host).toBe("mkdjlgboacefhokakjlobfailhipgklf");
   });
 
-  it("starts the bridge and pairs when a notebook opens", async () => {
+  it("waits for VS Code to start the bridge, then pairs by itself", async () => {
     expect(await running()).toBe(false);
     nb = await ctx.newPage();
     await nb.goto(COLAB, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    // The browser does not start the bridge: VS Code does.
+    await nb.waitForTimeout(8000);
+    expect(await running()).toBe(false);
+    startBridge();
     await expect.poll(paired, { timeout: 60_000 }).toBe(true);
-  }, 120_000);
+  }, 180_000);
 
-  it("stays stopped after `ainb stop` until a notebook is opened again", async () => {
+  it("after `ainb stop`, joins again when the bridge is back", async () => {
     expect(ainb("stop").stdout).toContain("Stopped.");
     await expect.poll(running, { timeout: 15_000 }).toBe(false);
     await nb.waitForTimeout(4000);
     expect(await running()).toBe(false);
-    await nb.reload({ waitUntil: "domcontentloaded", timeout: 120_000 });
+    startBridge();
     await expect.poll(paired, { timeout: 60_000 }).toBe(true);
   }, 180_000);
 });

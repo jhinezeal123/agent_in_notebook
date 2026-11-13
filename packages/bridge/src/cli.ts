@@ -14,7 +14,9 @@ const HELP = `agent-in-notebook bridge ${BRIDGE_VERSION}
 Usage:
   ainb install [--extension-id ID]   Let the browser extension start and pair with the bridge by itself
   ainb uninstall                     Undo "install"
-  ainb serve [--port N] [--log F]    Run the bridge in this console (or logging to file F)
+  ainb serve [--port N] [--log F] [--background]
+                                     Run the bridge in this console (or logging to file F);
+                                     --background: stop when VS Code has been closed for a while
   ainb status                        Is the bridge running?
   ainb stop                          Stop a running bridge (also one the extension started)
   ainb token [--reset]               Print (or regenerate) the pairing token
@@ -26,6 +28,8 @@ Data directory: ${process.env.AINB_HOME ?? "~/.agent-in-notebook"}  (set AINB_HO
 Custom ACP agents: add them to agents.json in the data directory.`;
 
 const self = fileURLToPath(import.meta.url);
+/** How long a background bridge waits for VS Code (to connect, or to come back) before it stops. */
+const EDITOR_GRACE_MS = 30_000;
 
 /** Values of a repeatable flag: --name a --name b, or --name=a. */
 function flagValues(args: string[], name: string): string[] {
@@ -74,7 +78,9 @@ async function main() {
         process.exit(0);
       };
       const [{ Bridge }, { describeAgents }] = await Promise.all([server(), agents()]);
-      const bridge = new Bridge({ port, token: cfg.token, mcpCommand: { command: process.execPath, args: [self, "mcp"] }, onShutdown: () => void stop() });
+      const bridge = new Bridge({ port, token: cfg.token, mcpCommand: { command: process.execPath, args: [self, "mcp"] }, onShutdown: () => void stop(),
+        // VS Code started it: it goes when VS Code does (the grace period covers a window reload).
+        stopWithoutEditorMs: rest.includes("--background") ? EDITOR_GRACE_MS : undefined });
       try {
         await bridge.listen();
       } catch (e) {
@@ -95,7 +101,7 @@ async function main() {
       const r = (await native()).installNativeHost(self, flagValues(rest, "--extension-id"));
       console.log(`Registered for ${r.browsers.join(", ")} (${r.manifest}).`);
       console.log(`Allowed extension IDs: ${r.extensionIds.join(", ")}`);
-      console.log("Open a Colab or Kaggle notebook in Chrome: the extension starts the bridge and pairs by itself.");
+      console.log("Open the Agent in Notebook panel in VS Code: it starts the bridge, and notebooks open in Chrome join it.");
       console.log(`Moved this folder or changed Node? Run "ainb install" again.`);
       return;
     }

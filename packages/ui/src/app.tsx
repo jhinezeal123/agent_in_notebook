@@ -197,6 +197,16 @@ export function App() {
           )}
         </div>
         {notebook && <span class={`kernel k-${notebook.kernel}`} title="Notebook kernel">kernel: {notebook.kernel}</span>}
+        {notebook && tabId !== null && tabId < 0 && (
+          <button
+            class="icon"
+            title="Open this notebook in VS Code: edits and runs go to the Chrome tab"
+            aria-label="Open in VS Code"
+            onClick={() => void run(client.request("notebook.mirror", { tabId }))}
+          >
+            ⧉
+          </button>
+        )}
         {live && (
           <button
             class="icon"
@@ -209,6 +219,14 @@ export function App() {
             ＋
           </button>
         )}
+        <button
+          class="icon"
+          title="Stop the bridge and its agents (it also stops by itself when VS Code closes)"
+          aria-label="Stop the bridge"
+          onClick={() => void run(client.request("bridge.stop", {}))}
+        >
+          ⏻
+        </button>
       </header>
 
       {!notebook ? (
@@ -520,10 +538,10 @@ function Setup({ bridge }: { bridge: BridgeState }) {
   return (
     <div class="setup pad">
       <h1>Connect to the bridge</h1>
-      <p>Run <code>pnpm bridge</code> from the project folder in a terminal.</p>
-      {busy ? <p role="status">Connecting…</p> : <p role="status">{error ?? bridge.error}</p>}
+      <p>The agents run on your computer through a small local bridge. It starts by itself once <code>pnpm ainb install</code> has been run.</p>
+      {busy ? <p role="status">Starting the bridge…</p> : <p role="status" class={`status ${bridge.conn}`}>{error ?? bridge.error}</p>}
       <div class="row-actions">
-        <button class="primary" disabled={busy} onClick={() => connect("config.auto")}>{bridge.conn === "replaced" ? "Connect here" : "Retry connection"}</button>
+        <button class="primary" disabled={busy} onClick={() => connect("config.auto")}>{bridge.conn === "replaced" ? "Connect here" : "Start the bridge"}</button>
         <button class="secondary" disabled={busy} onClick={() => connect("config.prompt")}>Enter pairing token</button>
         {bridge.config.source === "manual" && <button class="linkish" disabled={busy} onClick={() => connect("config.reset")}>Use local configuration</button>}
       </div>

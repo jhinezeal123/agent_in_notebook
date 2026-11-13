@@ -4,3 +4,5 @@ dist/
 .DS_Store
 # debug screenshots from packages/extension/test/debug
 packages/extension/test/debug/*.png
+# packaged VS Code extension
+*.vsix

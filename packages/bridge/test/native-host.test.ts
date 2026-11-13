@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { NativeReply } from "@ainb/protocol";
-import { frame, NativeReader } from "../src/native-host.js";
+import { frame, NativeReader, writeLauncher } from "../src/native-host.js";
+import { askNativeHost, launcherPath } from "../../vscode/src/start-bridge.js";
 
 const CLI = resolve(import.meta.dirname, "../dist/cli.js");
 
@@ -62,6 +63,10 @@ describe("native host", () => {
     const port = await freePort();
     writeFileSync(join(home, "config.json"), JSON.stringify({ token: "native-token-0123456789", port }));
 
+    // The browser only asks: it never starts the bridge.
+    expect(await ask(home, { type: "connect", start: false })).toMatchObject({ ok: false, notRunning: true });
+    expect(cli(home, "status").status).toBe(1);
+
     const first = await ask(home, { type: "connect" });
     expect(first).toMatchObject({ ok: true, port, token: "native-token-0123456789", started: true });
     // The bridge outlived the host process.
@@ -70,9 +75,30 @@ describe("native host", () => {
 
     expect(await ask(home, { type: "connect" })).toMatchObject({ ok: true, started: false });
     expect(cli(home, "status").status).toBe(0);
+    expect(await ask(home, { type: "connect", start: false })).toMatchObject({ ok: true, port, token: "native-token-0123456789", started: false });
     expect(cli(home, "stop").stdout).toContain("Stopped.");
     expect(cli(home, "status").status).toBe(1);
   });
+
+  it("lets VS Code start the bridge through the launcher `ainb install` writes", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ainb-native-"));
+    homes.push(home);
+    const port = await freePort();
+    writeFileSync(join(home, "config.json"), JSON.stringify({ token: "vscode-token-0123456789", port }));
+    const before = process.env.AINB_HOME;
+    process.env.AINB_HOME = home;
+    try {
+      expect(launcherPath()).toBeNull();
+      const launcher = writeLauncher(CLI);
+      expect(launcherPath()).toBe(launcher);
+      expect(await askNativeHost(launcher)).toMatchObject({ ok: true, port, token: "vscode-token-0123456789", started: true });
+      expect(((await (await fetch(`http://127.0.0.1:${port}/health`)).json()) as { ok: boolean }).ok).toBe(true);
+      expect(await askNativeHost(launcher)).toMatchObject({ ok: true, started: false });
+    } finally {
+      if (before === undefined) delete process.env.AINB_HOME;
+      else process.env.AINB_HOME = before;
+    }
+  }, 60_000);
 
   it("refuses to stop a bridge for a request without its token", async () => {
     const home = mkdtempSync(join(tmpdir(), "ainb-native-"));

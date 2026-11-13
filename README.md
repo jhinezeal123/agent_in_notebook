@@ -74,23 +74,21 @@ pnpm install
 pnpm build
 ```
 
-**1. Bridge**
+**1. Bridge: đăng ký một lần**
 
 ```sh
-pnpm bridge            # = node packages/bridge/dist/cli.js serve
+pnpm ainb install      # = node packages/bridge/dist/cli.js install
 ```
 
-Bridge in ra **pairing token** và ghi nó vào `~/.agent-in-notebook/config.json`; VS Code đọc file này nên thường không cần dán token. In lại token: `pnpm ainb token`. Đổi token: thêm `--reset`.
+Bridge là chương trình nhỏ chạy agent trên máy bạn. Lệnh trên đăng ký nó để **VS Code tự bật bridge khi cần, và Chrome tự nối vào**: bạn không phải mở terminal hay dán token. Về kỹ thuật, nó đăng ký bridge làm *native messaging host* cho Chrome, Chromium, Edge và Brave (trên Windows: khóa registry trong `HKCU`, không cần quyền admin), và VS Code dùng chính launcher đó. Nếu bạn chuyển thư mục project hoặc đổi bản Node, hãy chạy lại `install`. Gỡ đăng ký bằng `pnpm ainb uninstall`.
+
+Bridge đi theo VS Code: nó bật khi bạn mở sidebar **Agent in Notebook**, và **tự tắt khoảng 30 giây sau khi VS Code đóng** (đủ lâu để Reload Window không làm nó tắt). Muốn tắt ngay thì bấm nút **⏻** (Stop the bridge) ở đầu sidebar, hoặc chạy `pnpm ainb stop`; bật lại bằng **Start the bridge**. Chrome không bao giờ tự bật bridge: nó chờ và tự nối vào khi VS Code bật. Bridge chạy nền ghi log vào `~/.agent-in-notebook/bridge.log`; xem trạng thái bằng `pnpm ainb status`.
+
+Vẫn có thể chạy bridge bằng tay, chẳng hạn để xem log ngay trên terminal: `pnpm bridge` (bridge chạy tay không tự tắt khi VS Code đóng). In lại pairing token: `pnpm ainb token` (đổi token: thêm `--reset`).
 
 **2. VS Code: nơi bạn chat**
 
-Chạy thử từ mã nguồn, trong một terminal khác ở thư mục repo:
-
-```sh
-code --extensionDevelopmentPath="${PWD}/packages/vscode"
-```
-
-Hoặc cài vào VS Code đang dùng hằng ngày:
+Cài vào VS Code đang dùng hằng ngày:
 
 ```sh
 cd packages/vscode
@@ -98,23 +96,20 @@ pnpm dlx @vscode/vsce@4.1.1 package --no-dependencies --skip-license
 code --install-extension agent-in-notebook-vscode-0.1.0.vsix
 ```
 
-Bấm **Agent in Notebook** trên Activity Bar (hoặc **Agent in Notebook: Open Chat** trong Command Palette). Nếu bridge dùng port khác, chọn **Enter pairing token** để nhập port và token.
+Có bản mới thì chạy lại ba lệnh này (sau `pnpm build`). Khi đang sửa code của plugin, có thể chạy thẳng từ mã nguồn trong một cửa sổ riêng thay vì cài: `code --extensionDevelopmentPath="${PWD}/packages/vscode"`.
+
+Bấm **Agent in Notebook** trên Activity Bar (hoặc **Agent in Notebook: Open Chat** trong Command Palette): plugin tự bật bridge nếu chưa chạy và tự ghép nối. Bridge chạy ở máy khác hoặc port khác thì chọn **Enter pairing token** để nhập port và token.
 
 **3. Chrome: notebook Colab/Kaggle trên web**
 
-`chrome://extensions` → bật *Developer mode* → *Load unpacked* → chọn `packages/extension/dist`. ID của extension cố định (`mkdjlgboacefhokakjlobfailhipgklf`, nhờ trường `key` trong manifest). Sau đó đăng ký bridge với trình duyệt một lần:
+`chrome://extensions` → bật *Developer mode* → *Load unpacked* → chọn `packages/extension/dist`. ID của extension cố định (`mkdjlgboacefhokakjlobfailhipgklf`, nhờ trường `key` trong manifest).
 
-```sh
-pnpm ainb install      # = node packages/bridge/dist/cli.js install
-```
-
-Lệnh này đăng ký bridge làm *native messaging host* cho Chrome, Chromium, Edge và Brave (trên Windows: khóa registry trong `HKCU`, không cần quyền admin). Extension Chrome không có giao diện chat: khi bạn mở một notebook Colab hoặc Kaggle, nó tự bật bridge nếu bridge chưa chạy, tự ghép nối, và notebook hiện ra trong ô chọn notebook của sidebar VS Code. Biểu tượng của extension có dấu **!** khi chưa nối được bridge; bấm vào biểu tượng để thử lại (di chuột lên để xem lý do). Nếu bạn chuyển thư mục project hoặc đổi bản Node, hãy chạy lại `install`. Gỡ đăng ký bằng `pnpm ainb uninstall`.
-
-Bridge được bật theo cách này chạy nền và ghi log vào `~/.agent-in-notebook/bridge.log`. Các lệnh đi kèm: `pnpm ainb status`, `pnpm ainb stop`. Sau `stop`, extension không tự bật lại bridge cho tới khi bạn mở (hoặc reload) một notebook, hay bấm vào biểu tượng của extension.
+Extension Chrome không có giao diện chat: khi bạn mở một notebook Colab hoặc Kaggle, nó nối vào bridge mà VS Code đã bật (chưa bật thì nó chờ, rồi tự nối trong vòng vài giây khi VS Code bật), và notebook hiện ra trong ô chọn notebook của sidebar VS Code. Biểu tượng của extension có dấu **!** khi có lỗi kết nối; bấm vào biểu tượng để thử lại (di chuột lên để xem lý do).
 
 **4. Dùng**
 
 - Notebook trên web: mở notebook Colab hoặc Kaggle trong Chrome (ở chế độ chỉnh sửa), rồi chat ở sidebar VS Code. Nếu notebook đã mở từ trước khi cài extension, hãy reload tab một lần.
+- Xem và sửa notebook Chrome ngay trong VS Code: bấm nút **⧉** (Open in VS Code) cạnh chữ *kernel* ở đầu sidebar. VS Code mở một bản sao sống của notebook: sửa, thêm, xóa, kéo cell ở bên nào thì bên kia cập nhật theo (khoảng một giây), và bấm chạy cell trong VS Code thì cell chạy trên Colab/Kaggle, kết quả hiện ở cả hai bên. Notebook vẫn nằm ở tab Chrome, nên giữ tab đó mở; Colab và Kaggle tự lưu, Save trong VS Code không làm gì thêm. Chat tự đi theo notebook đang mở trong VS Code.
 - Notebook trong VS Code: mở file `.ipynb` bằng Notebook Editor. Để chạy cell, cài **Jupyter** trong VS Code và chọn kernel ở **Select Kernel**; muốn dùng GPU/TPU của Colab, cài thêm extension **Colab** của Google và chọn kernel Colab. Chạy một cell để khởi động kernel và cấp quyền kernel cho Agent in Notebook khi Jupyter hỏi. Lưu notebook bằng Save của VS Code. Các cell cũ chưa có ID trong `.ipynb` có ID tạm trong phiên mở tài liệu, nên hoàn tác theo lượt với các cell đó cần làm trước khi đóng notebook.
 
 Dù notebook mở ở đâu, agent vẫn làm việc trên máy của notebook (VM Colab/Kaggle, server Jupyter, hay máy bạn với kernel local), với terminal, file và file notebook ở đó.

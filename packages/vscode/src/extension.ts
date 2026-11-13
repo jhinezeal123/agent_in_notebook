@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { OpRunner, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import type { PanelEvent, PanelRequest, PanelResponse, Prefs } from "../../ui/src/panel-messages.js";
 import { BridgeLink } from "./bridge.js";
+import { ChromeMirrors, MIRROR_TYPE, mirrorTab } from "./mirror.js";
 import { openChatLink, readChatImage } from "./chat-links.js";
 import { VSCodeNotebook } from "./notebook.js";
 import { PanelCore, type LocalNotebooks } from "./panel-core.js";
@@ -35,6 +36,8 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly bridge: BridgeLink;
   /** Which notebook the chat is about, and the notebooks in Chrome tabs. */
   private readonly core: PanelCore;
+  /** Notebooks of Chrome tabs opened in VS Code. */
+  private readonly mirrors: ChromeMirrors;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.bridge = new BridgeLink(context.extension.packageJSON.version, (event) => {
@@ -50,8 +53,12 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         }
       }
       this.core.connectionChanged(connected);
-    }, ({ tabId, op }) => this.runOp(tabId, op), (event) => this.core.onBrowser(event));
-    this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event));
+    }, ({ tabId, op }) => this.runOp(tabId, op), (event) => {
+      this.core.onBrowser(event);
+      if ("notebook" in event) this.mirrors.browserChanged(event.notebook.tabId, event.notebook.info);
+    });
+    this.mirrors = new ChromeMirrors((method, params) => this.bridge.request(method, params));
+    this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event), (tab, info) => this.mirrors.open(tab, info));
     this.subscriptions = [
       vscode.window.onDidChangeActiveNotebookEditor(() => this.activeChanged()),
       vscode.workspace.onDidChangeNotebookDocument(({ notebook, cellChanges }) => {
@@ -92,7 +99,12 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       },
       front: () => {
         const document = vscode.window.activeNotebookEditor?.notebook;
-        return (document && this.notebooks.get(document)?.tabId) ?? null;
+        if (!document) return null;
+        if (document.notebookType === MIRROR_TYPE) {
+          const tab = mirrorTab(document.uri);
+          return tab === null ? null : -tab;
+        }
+        return this.notebooks.get(document)?.tabId ?? null;
       },
     };
   }
@@ -125,6 +137,12 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private activeChanged(): void {
     const document = vscode.window.activeNotebookEditor?.notebook;
+    if (document?.notebookType === MIRROR_TYPE) {
+      // A Chrome tab's notebook shown here: the chat is about that tab.
+      const tab = mirrorTab(document.uri);
+      if (tab !== null && this.core.exists(-tab)) this.core.follow(-tab);
+      return;
+    }
     const supported = document?.notebookType === "jupyter-notebook";
     let notebook = supported ? this.notebooks.get(document) : undefined;
     if (supported && !notebook) {
@@ -186,6 +204,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       case "prefs.get": return this.context.globalState.get<Prefs>("prefs");
       case "prefs.set": return this.context.globalState.update("prefs", params);
       case "config.auto": return this.connect();
+      case "bridge.stop": return this.bridge.stop();
       case "config.prompt": {
         const token = await vscode.window.showInputBox({ title: "Agent in Notebook pairing token", password: true, ignoreFocusOut: true, validateInput: (value) => value.trim() ? undefined : "Enter the token printed by pnpm bridge." });
         if (!token) return;
@@ -221,6 +240,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   dispose(): void {
+    this.mirrors.dispose();
     this.bridge.dispose();
     for (const { adapter } of this.notebooks.values()) adapter.dispose();
     this.notebooks.clear();

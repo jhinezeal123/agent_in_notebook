@@ -56,6 +56,8 @@ export class PanelCore {
     private readonly bridge: PanelBridge,
     private readonly local: LocalNotebooks,
     private readonly post: (event: PanelEvent) => void,
+    /** Show a Chrome tab's notebook in the editor (VS Code's mirror); absent where there is no editor. */
+    private readonly openMirror?: (chromeTabId: number, info: NotebookInfo) => Promise<void>,
   ) {}
 
   /** The bridge connected or went away. */
@@ -184,6 +186,13 @@ export class PanelCore {
         const result = await this.userOp(tabId, { op: "insert_cell", index, source, cellType, review: false, byUser: true }) as { cellId: string | null };
         if (result.cellId) await this.userOp(tabId, { op: "focus_cell", cellId: result.cellId }).catch(() => {});
         return result;
+      }
+      case "notebook.mirror": {
+        const { tabId } = params as { tabId: number };
+        const info = isChrome(tabId) ? await this.info(tabId) : null;
+        if (!info) throw new Error("That notebook is no longer open in Chrome.");
+        if (!this.openMirror) throw new Error("Opening a Chrome notebook here is not available.");
+        return this.openMirror(chromeTab(tabId), info);
       }
       case "chat.open": {
         const p = params as Record<string, unknown> & { tabId: number };

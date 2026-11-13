@@ -80,6 +80,26 @@ describe("pairing", () => {
     ext.close();
   });
 
+  it("stops when started in the background and VS Code has been gone for a while", async () => {
+    let stops = 0;
+    const background = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {}, onShutdown: () => stops++, stopWithoutEditorMs: 1500 });
+    const bgPort = await background.listen();
+    const editor = new FakeExtension(new FakeNotebook([{ type: "code", source: "x = 1" }]));
+    const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "y = 2" }]));
+    try {
+      await editor.connect(bgPort, TOKEN);
+      // A browser alone does not keep it running; VS Code does.
+      await browser.connect(bgPort, TOKEN, "chrome-extension://abcdef");
+      await new Promise((r) => setTimeout(r, 2500));
+      expect(stops).toBe(0);
+      editor.close();
+      await expect.poll(() => stops, { timeout: 5000 }).toBe(1);
+    } finally {
+      browser.close();
+      await background.close();
+    }
+  }, 15_000);
+
   it("lets the editor chat about a notebook in a Chrome tab, beside its own notebook with the same tab ID", async () => {
     const tab = 5;
     const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "browser_value = 1" }]), tab);
@@ -93,7 +113,12 @@ describe("pairing", () => {
       expect(await announced).toMatchObject({ tabId: tab, info: { title: "test.ipynb" } });
       expect((await editor.request<{ notebooks: unknown[] }>("browser.notebooks", {})).notebooks).toEqual([{ tabId: tab, info: expect.objectContaining({ title: "test.ipynb" }) }]);
       expect(await editor.request("browser.op", { tabId: tab, op: { op: "info" } })).toMatchObject({ title: "test.ipynb" });
-      await expect(editor.request("browser.op", { tabId: tab, op: { op: "delete_cell", cellId: "c1" } })).rejects.toThrow(/not available/);
+      // The user's own edits and runs are allowed; anything the agent alone does, or a reviewed change, is not.
+      await expect(editor.request("browser.op", { tabId: tab, op: { op: "delete_cell", cellId: "c1", review: true } })).rejects.toThrow(/not available/);
+      await expect(editor.request("browser.op", { tabId: tab, op: { op: "execute", code: "1", waitMs: 1000 } })).rejects.toThrow(/not available/);
+      await editor.request("browser.op", { tabId: tab, op: { op: "update_cell", cellId: "c1", source: "browser_value = 1  # user", review: false, byUser: true } });
+      expect(browser.notebook.cells[0]!.source).toBe("browser_value = 1  # user");
+      await editor.request("browser.op", { tabId: tab, op: { op: "update_cell", cellId: "c1", source: "browser_value = 1", review: false, byUser: true } });
       // The browser extension serves notebooks only: it has no chats.
       await expect(browser.request("chat.get", { tabId: tab })).rejects.toThrow();
 

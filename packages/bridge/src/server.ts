@@ -13,6 +13,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import {
   DEFAULT_SETTINGS,
+  isBrowserOp,
   RpcPeer,
   WIRE_VERSION,
   type AppliedChange,
@@ -45,8 +46,13 @@ export interface BridgeOptions {
   /** Extra allowed WebSocket origins besides chrome-extension://. */
   allowOrigins?: string[];
   log?: (msg: string) => void;
-  /** Called on an authorized POST /shutdown. */
+  /** Called on an authorized POST /shutdown, and when the bridge stops for want of VS Code. */
   onShutdown?: () => void;
+  /**
+   * A bridge started in the background serves VS Code's chat: with no VS Code
+   * connected for this long (it closed), it stops. Unset: runs until stopped.
+   */
+  stopWithoutEditorMs?: number;
 }
 
 type ClientKind = "browser" | "vscode";
@@ -119,12 +125,28 @@ export class Bridge {
       this.server.listen(this.opts.port, "127.0.0.1", () => {
         const addr = this.server.address();
         this.port = typeof addr === "object" && addr ? addr.port : this.opts.port;
+        this.watchEditor();
         resolve(this.port);
       });
     });
   }
 
+  /** While no VS Code is connected: count down to stopping (background bridges only). */
+  private editorGone?: ReturnType<typeof setTimeout>;
+
+  private watchEditor(): void {
+    const ms = this.opts.stopWithoutEditorMs;
+    if (ms === undefined || this.clients.vscode.connection || this.editorGone) return;
+    this.editorGone = setTimeout(() => {
+      this.editorGone = undefined;
+      if (this.clients.vscode.connection) return;
+      this.log(`No VS Code connected for ${Math.round(ms / 1000)} s: stopping.`);
+      this.opts.onShutdown?.();
+    }, ms);
+  }
+
   async close(): Promise<void> {
+    clearTimeout(this.editorGone);
     clearInterval(this.pingTimer);
     this.dropAllChats();
     for (const client of Object.values(this.clients)) {
@@ -169,6 +191,10 @@ export class Bridge {
         previous.ws.close(4000, "replaced");
       }
       client.connection = { ws, rpc };
+      if (kind === "vscode") {
+        clearTimeout(this.editorGone);
+        this.editorGone = undefined;
+      }
       this.log(`${kind} extension connected.`);
       return { bridgeVersion: BRIDGE_VERSION, agents: describeAgents() };
     });
@@ -196,6 +222,7 @@ export class Bridge {
         if (kind === "vscode") this.dropAllChats();
         else this.forgetBrowserNotebooks();
         this.log(`${kind} extension disconnected.`);
+        if (kind === "vscode") this.watchEditor();
       }
     });
     ws.on("error", () => {});
@@ -330,12 +357,9 @@ export class Bridge {
     rpc.handle(
       "browser.op",
       guard<"browser.op">((p) => {
-        const op = p.op;
-        const allowed = op?.op === "info" || op?.op === "get_cells" || op?.op === "focus_cell"
-          || (op?.op === "insert_cell" && op.review === false && op.byUser === true);
-        if (!allowed) throw new Error("This operation is not available on a browser notebook.");
+        if (!isBrowserOp(p.op)) throw new Error("This operation is not available on a browser notebook.");
         if (!this.browserNotebooks.has(p.tabId)) throw new Error("That notebook is no longer open in Chrome.");
-        return this.notebookOp({ kind: "browser", tabId: p.tabId }, op);
+        return this.notebookOp({ kind: "browser", tabId: p.tabId }, p.op);
       }),
     );
   }

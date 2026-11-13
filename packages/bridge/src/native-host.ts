@@ -15,6 +15,7 @@ import { EXTENSION_ID, NATIVE_HOST, type NativeReply } from "@ainb/protocol";
 import { BRIDGE_VERSION, dataDir, loadConfig, STOPPED_MARK } from "./config.js";
 
 const START_TIMEOUT_MS = 15_000;
+const NOT_RUNNING = "The bridge is not running: it starts with VS Code (open the Agent in Notebook panel).";
 
 // ------------------------------------------------------------------ framing
 
@@ -68,8 +69,16 @@ export async function runNativeHost(cliPath: string): Promise<void> {
 }
 
 async function answer(msg: unknown, cliPath: string): Promise<NativeReply> {
-  if ((msg as { type?: unknown })?.type !== "connect") return { ok: false, error: "Unknown request." };
+  const req = msg as { type?: unknown; start?: unknown } | null;
+  if (req?.type !== "connect") return { ok: false, error: "Unknown request." };
   const cfg = loadConfig();
+  if (req.start === false) {
+    // The browser: it joins the bridge VS Code started, and never starts one itself.
+    const now = await health(cfg.port);
+    if (now === "foreign") return { ok: false, error: `Port ${cfg.port} is taken by another program. Set a different "port" in ${join(dataDir(), "config.json")}.` };
+    if (now === "down") return { ok: false, error: NOT_RUNNING, notRunning: true };
+    return { ok: true, port: cfg.port, token: cfg.token, version: BRIDGE_VERSION, started: false };
+  }
   const started = await ensureBridge(cfg.port, cliPath);
   if (typeof started === "object") return started;
   return { ok: true, port: cfg.port, token: cfg.token, version: BRIDGE_VERSION, started };
@@ -101,7 +110,7 @@ export async function ensureBridge(port: number, cliPath: string): Promise<boole
     // Node hands every inheritable handle to a child on Windows, which would include
     // the browser's pipes: the bridge would hold them open for as long as it runs.
     // Start-Process (ShellExecute) passes none, and the bridge writes its own log.
-    const args = `"${cliPath}" serve --log "${logFile}"`;
+    const args = `"${cliPath}" serve --background --log "${logFile}"`;
     const script = `Start-Process -WindowStyle Hidden -FilePath '${process.execPath.replace(/'/g, "''")}' -ArgumentList '${args.replace(/'/g, "''")}'`;
     const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { stdio: "ignore", windowsHide: true });
     const code = await new Promise<number>((r) => {
@@ -111,7 +120,7 @@ export async function ensureBridge(port: number, cliPath: string): Promise<boole
     if (code !== 0) return { ok: false, error: "Could not start the bridge (PowerShell Start-Process failed)." };
   } else {
     // Detached, so the bridge outlives this short-lived host.
-    const child = spawn(process.execPath, [cliPath, "serve", "--log", logFile], { detached: true, stdio: "ignore" });
+    const child = spawn(process.execPath, [cliPath, "serve", "--background", "--log", logFile], { detached: true, stdio: "ignore" });
     child.on("exit", () => (exited = true));
     child.on("error", () => (exited = true));
     child.unref();
@@ -159,7 +168,7 @@ function hostDir(): string {
 }
 
 /** A script the browser can start: it runs this very Node and CLI, whatever PATH the browser has. */
-function writeLauncher(cliPath: string): string {
+export function writeLauncher(cliPath: string): string {
   const dir = hostDir();
   mkdirSync(dir, { recursive: true });
   const home = process.env.AINB_HOME;

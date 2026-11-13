@@ -37,14 +37,14 @@ let retryDelay = 1000;
 
 /** The bridge closes a connection with this code when a newer one replaces it. */
 const CLOSE_REPLACED = 4000;
-/** ...and with this one when it shuts down on purpose (Ctrl+C, `ainb stop`). */
+/** ...and with this one when it shuts down on purpose (VS Code closed, Stop the bridge, `ainb stop`). */
 const CLOSE_STOPPED = 4001;
+/** The bridge is VS Code's: it starts with VS Code, and this extension joins it. */
+const WAITING = "waiting for VS Code (the bridge starts when the Agent in Notebook panel opens)";
 const REPLACED_MESSAGE = "Another Chrome window or profile connected to the bridge. Click the extension's icon to take over.";
 
-/** Ask the native host (which can start the bridge) before the next connection attempt. */
-let askNative = true;
-/** The bridge was stopped on purpose: no automatic reconnect or restart until the user asks. */
-let stopped = false;
+/** Ask the native host for the bridge's port and token before the next attempt (also done when none is known). */
+let askNative = false;
 let connecting: Promise<void> | null = null;
 
 // ------------------------------------------------------------------ bridge
@@ -77,11 +77,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   reconnect();
 });
 
-/** The icon's badge tells whether the notebooks here reach the bridge (and so VS Code). */
+/**
+ * The icon's badge tells whether the notebooks here reach the bridge (and so
+ * VS Code). Waiting for VS Code to start the bridge is no fault: no "!".
+ */
 function setConn(conn: Conn, error?: string) {
   state.conn = conn;
   state.error = error;
-  const text = conn === "connected" ? "" : conn === "connecting" ? "…" : tabs.size ? "!" : "";
+  const text = conn === "connected" || error === WAITING ? "" : conn === "connecting" ? "…" : tabs.size ? "!" : "";
   void chrome.action.setBadgeText({ text }).catch(() => {});
   void chrome.action.setBadgeBackgroundColor({ color: "#b3261e" }).catch(() => {});
   const title = conn === "connected"
@@ -91,7 +94,7 @@ function setConn(conn: Conn, error?: string) {
 }
 
 function scheduleReconnect() {
-  if (retryTimer || stopped || state.conn === "unpaired" || state.conn === "replaced") return;
+  if (retryTimer || state.conn === "unpaired" || state.conn === "replaced") return;
   retryTimer = setTimeout(() => {
     retryTimer = null;
     connect();
@@ -100,18 +103,18 @@ function scheduleReconnect() {
 }
 
 /**
- * Ask the native host for the bridge's port and token; it starts the bridge if
- * it is not running.
+ * Ask the native host for the bridge's port and token. It does not start the
+ * bridge: VS Code does, and the bridge stops when VS Code goes.
  */
-async function pairNatively(): Promise<{ ok: boolean; error?: string }> {
+async function pairNatively(): Promise<{ ok: boolean; error?: string; notRunning?: boolean }> {
   let reply: NativeReply | undefined;
   try {
-    reply = (await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: "connect" } satisfies NativeRequest)) as NativeReply;
+    reply = (await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: "connect", start: false } satisfies NativeRequest)) as NativeReply;
   } catch (e) {
     const msg = String((e as Error)?.message ?? e);
     return { ok: false, error: /not found|forbidden/i.test(msg) ? 'The bridge is not registered with Chrome. Run "ainb install" once.' : msg };
   }
-  if (!reply?.ok) return { ok: false, error: reply?.error ?? "The native host did not answer." };
+  if (!reply?.ok) return { ok: false, error: reply?.error ?? "The native host did not answer.", notRunning: reply?.notRunning };
   if (reply.port !== state.config.port || reply.token !== state.config.token || state.config.source !== "native") {
     state.config = { port: reply.port, token: reply.token, source: "native" };
     await chrome.storage.local.set({ config: state.config });
@@ -126,14 +129,20 @@ function connect(): void {
 async function connectNow(): Promise<void> {
   if (state.conn === "replaced") return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  // Only start the bridge while a notebook is open here: that is the user
-  // working on one, and the browser starting up is not.
+  // Only while a notebook is open here: that is the user working on one.
   let fresh = false;
-  if (askNative && tabs.size > 0 && state.config.source !== "manual") {
+  if ((askNative || !state.config.token) && tabs.size > 0 && state.config.source !== "manual") {
     askNative = false;
     setConn("connecting");
     const paired = await pairNatively();
     fresh = paired.ok;
+    if (paired.notRunning) {
+      // Joined when VS Code starts it: the retries try the socket (cheap) with what is known.
+      setConn("disconnected", WAITING);
+      if (!state.config.token) askNative = true;
+      scheduleReconnect();
+      return;
+    }
     if (!paired.ok && !state.config.token) {
       setConn("disconnected", paired.error);
       return;
@@ -193,14 +202,11 @@ function openSocket(fresh: boolean): void {
       if (e.code === CLOSE_REPLACED) {
         setConn("replaced", REPLACED_MESSAGE);
         void chrome.storage.session?.set({ replaced: true }).catch(() => {});
-      } else if (e.code === CLOSE_STOPPED) {
-        stopped = true;
-        askNative = true;
-        setConn("disconnected", "the bridge was stopped");
       } else if (state.conn !== "unpaired") {
-        // Not running, or it crashed: the native host can start it again.
-        askNative = true;
-        setConn("disconnected", state.conn === "connected" ? "lost the connection to the bridge" : "the bridge is not running");
+        // Stopped (VS Code closed) or not started yet: back when VS Code starts it.
+        // Crashed: VS Code starts it again. Either way this extension waits and retries.
+        const lost = state.conn === "connected" && e.code !== CLOSE_STOPPED;
+        setConn("disconnected", lost ? "lost the connection to the bridge" : WAITING);
         scheduleReconnect();
       }
     }
@@ -211,7 +217,6 @@ function reconnect() {
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = null;
   retryDelay = 1000;
-  stopped = false;
   askNative = true;
   state.conn = "disconnected";
   void chrome.storage.session?.remove("replaced").catch(() => {});
@@ -363,5 +368,5 @@ void loadConfig().then(discoverAll).then(connect);
 // A wake-up alarm reconnects after the worker was suspended without a socket.
 chrome.alarms.create("ainb-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(() => {
-  if (!ws && !stopped) connect();
+  if (!ws) connect();
 });
