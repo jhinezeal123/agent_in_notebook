@@ -2,7 +2,7 @@
 // NotebookOps relayed by the content script over window.postMessage.
 
 import type { NotebookEvent, NotebookOp } from "@ainb/protocol";
-import { OpRunner, type NotebookAdapter } from "./adapter.js";
+import { OpRunner, type NotebookAdapter } from "@ainb/protocol";
 import { ColabAdapter, detectColab } from "./colab.js";
 import { detectJupyter, JupyterAdapter } from "./jupyter.js";
 import { TO_EXT, TO_PAGE, type PageToExt } from "../shared/page-messages.js";

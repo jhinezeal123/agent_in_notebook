@@ -4,6 +4,8 @@ import { diffLines, diffStats, withContext, type ChatMessage, type Part, type Re
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
 import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
+import { usePanelHost, type PanelHost } from "./host.js";
+
 export interface PartActions {
   answer(promptId: string, optionId: string): void;
   review(reviewId: string, accept: boolean): void;
@@ -16,9 +18,9 @@ export interface PartActions {
 
 type PromptPart = Extract<Part, { type: "prompt" }>;
 
-export async function copyText(text: string, button?: HTMLElement): Promise<void> {
+export async function copyText(host: PanelHost, text: string, button?: HTMLElement): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text);
+    await host.copy(text);
     if (button) {
       const old = button.textContent;
       button.textContent = "Copied";
@@ -30,6 +32,7 @@ export async function copyText(text: string, button?: HTMLElement): Promise<void
 }
 
 export function Markdown({ text, actions }: { text: string; actions?: PartActions }) {
+  const host = usePanelHost();
   const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
   return (
     <div
@@ -40,7 +43,7 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
         if (act) {
           const box = act.closest<HTMLElement>(".code");
           const code = box?.querySelector("code")?.textContent ?? "";
-          if (act.dataset.codeAct === "copy") void copyText(code, act);
+          if (act.dataset.codeAct === "copy") void copyText(host, code, act);
           else if (act.dataset.codeAct === "insert") actions?.insertCell(code.replace(/\n$/, ""), /^(md|markdown)$/i.test(box?.dataset.lang ?? "") ? "markdown" : "code");
           return;
         }
@@ -48,7 +51,7 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
         const a = target.closest("a");
         if (a?.href) {
           e.preventDefault();
-          void chrome.tabs.create({ url: a.href });
+          void host.openLink(a.href).catch(() => {});
         }
       }}
     >
@@ -76,6 +79,7 @@ function messageText(msg: ChatMessage): string {
 export const Message = memo(MessageView);
 
 function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions: PartActions; live?: boolean }) {
+  const host = usePanelHost();
   if (msg.role === "user") {
     const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     return <div class="msg user">{text}</div>;
@@ -94,7 +98,7 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
       )}
       {text && (
         <div class="msg-actions">
-          <button class="linkish" title="Copy this reply" onClick={(e) => void copyText(text, e.currentTarget)}>
+          <button class="linkish" title="Copy this reply" onClick={(e) => void copyText(host, text, e.currentTarget)}>
             Copy
           </button>
         </div>

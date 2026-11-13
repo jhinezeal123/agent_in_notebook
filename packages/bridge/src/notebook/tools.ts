@@ -253,7 +253,7 @@ const waitArg = z
 export const TOOLS = [
   tool({
     name: "notebook_info",
-    description: "Title, platform, kernel state, active cell and the current permission mode of the notebook open in the user's browser.",
+    description: "Title, platform, kernel state, active cell and the current permission mode of the notebook open in the user's editor.",
     schema: z.object({}),
     async run(ctx) {
       const info = await ctx.call({ op: "info" });
@@ -449,7 +449,7 @@ export const TOOLS = [
   tool({
     name: "run_shell",
     description:
-      "Run a command in a terminal on the machine the notebook's kernel runs on (the Colab or Kaggle VM), as you would in a terminal on your own computer. " +
+      "Run a command in a terminal on the machine the notebook's kernel runs on, as you would in a terminal on your own computer. " +
       "Each session is a persistent interactive bash: cd, exported variables and an activated environment carry over to the next command, and it outlives kernel restarts. " +
       "Commands run until they finish, however long. If one is still running when this call has waited long enough, you get its output so far and it keeps running: " +
       "then use shell_wait, shell_input (to answer a prompt) or shell_interrupt (Ctrl+C). " +

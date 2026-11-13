@@ -1,8 +1,6 @@
-// The contract every platform adapter implements. Adapters run in the page's
-// main world, next to the notebook app they drive.
+// The contract for notebook editors and the shared runner for their operations.
 
 import {
-  normalizeIpynbOutput,
   summarizeCell,
   type AppliedChange,
   type CellInfo,
@@ -14,16 +12,17 @@ import {
   type NotebookOp,
   type ReviewInfo,
   type RunResult,
-} from "@ainb/protocol";
+} from "./notebook.js";
+import { normalizeIpynbOutput } from "./outputs.js";
 
 export interface NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
   info(): NotebookInfo;
   getCells(opts: { cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean }): CellInfo[];
   /** Returns false when the source was already equal. */
-  setSource(cellId: string, source: string): boolean;
+  setSource(cellId: string, source: string): boolean | Promise<boolean>;
   insertCell(index: number, type: CellType, source: string): Promise<string>;
-  deleteCell(cellId: string): void;
+  deleteCell(cellId: string): void | Promise<void>;
   /** Resolves to the index the cell ended up at. */
   moveCell(cellId: string, index: number): number | Promise<number>;
   /** Run one code cell; resolves when it finishes or `timeoutMs` passes (the cell keeps running). */
@@ -33,13 +32,15 @@ export interface NotebookAdapter {
    * the kernel's history. Throws when the kernel is busy or not connected.
    */
   startExecution(code: string): Promise<Execution>;
-  interrupt(): boolean;
-  focusCell(cellId: string): boolean;
+  interrupt(): boolean | Promise<boolean>;
+  focusCell(cellId: string): boolean | Promise<boolean>;
+  /** Reserve an ID for a reviewed insertion that only exists once it is accepted. */
+  reserveCell?(index: number, type: CellType): string;
   /**
    * Show a proposed change in the notebook. `decided` resolves when the user
    * accepts or rejects it, here or through `resolve`.
    */
-  showReview(review: ReviewInfo): { decided: Promise<boolean>; resolve(accept: boolean): void };
+  showReview(review: ReviewInfo): { decided: Promise<boolean | { index: number }>; resolve(accept: boolean): void | Promise<void> };
   /** Selection changes, for the "edit this cell" mode. */
   onSelectionChange(cb: () => void): void;
 }
@@ -60,7 +61,7 @@ let reviewSeq = 0;
  * the cell held before, so the user can undo it later.
  */
 export class OpRunner {
-  private reviews = new Map<string, { info: ReviewInfo; resolve(accept: boolean): void }>();
+  private reviews = new Map<string, { info: ReviewInfo; resolve(accept: boolean): void | Promise<void> }>();
   private readonly executions = new Executions();
 
   constructor(
@@ -71,6 +72,10 @@ export class OpRunner {
       const info = adapter.info();
       emit({ type: "selection_changed", activeCellId: info.activeCellId, selectedCellIds: info.selectedCellIds });
     });
+  }
+
+  async discardReviews(): Promise<void> {
+    await Promise.allSettled([...this.reviews.values()].map(({ resolve }) => Promise.resolve(resolve(false))));
   }
 
   pendingCellIds(): Set<string> {
@@ -94,7 +99,7 @@ export class OpRunner {
         if (!cell) throw new OpError(`No cell with id "${op.cellId}".`);
         if (cell.source === op.source) return { applied: false };
         if (!op.review) {
-          const applied = a.setSource(op.cellId, op.source);
+          const applied = await a.setSource(op.cellId, op.source);
           if (applied && !op.byUser) this.journal({ kind: "update", cellId: cell.id, cellType: cell.type, index: cell.index, before: cell.source, after: op.source });
           return { applied };
         }
@@ -108,8 +113,9 @@ export class OpRunner {
           if (!op.byUser) this.journal({ kind: "insert", cellId, cellType: op.cellType, index, before: "", after: op.source });
           return { applied: true, cellId };
         }
-        // The cell exists while it is reviewed; rejecting removes it again.
-        const cellId = await a.insertCell(index, op.cellType, "");
+        // Browser adapters use a cell to host the inline diff. An editor that
+        // displays the diff elsewhere can reserve an ID without editing yet.
+        const cellId = a.reserveCell?.(index, op.cellType) ?? await a.insertCell(index, op.cellType, "");
         const reviewId = this.open({ cellId, kind: "insert", cellType: op.cellType, before: "", after: op.source });
         return { applied: false, cellId, reviewId };
       }
@@ -118,7 +124,7 @@ export class OpRunner {
         const [cell] = a.getCells({ cellIds: [op.cellId] });
         if (!cell) throw new OpError(`No cell with id "${op.cellId}".`);
         if (!op.review) {
-          a.deleteCell(op.cellId);
+          await a.deleteCell(op.cellId);
           if (!op.byUser) this.journal({ kind: "delete", cellId: cell.id, cellType: cell.type, index: cell.index, before: cell.source, after: "" });
           return { applied: true };
         }
@@ -163,13 +169,13 @@ export class OpRunner {
       case "execute_wait":
         return this.executions.wait(op.execId, op.waitMs);
       case "interrupt":
-        return { interrupted: a.interrupt() };
+        return { interrupted: await a.interrupt() };
       case "focus_cell":
-        return { focused: a.focusCell(op.cellId) };
+        return { focused: await a.focusCell(op.cellId) };
       case "resolve_review": {
         const r = this.reviews.get(op.reviewId);
         if (!r) return { resolved: false };
-        r.resolve(op.accept);
+        await r.resolve(op.accept);
         return { resolved: true };
       }
     }
@@ -197,9 +203,9 @@ export class OpRunner {
         this.reviews.delete(info.reviewId);
         if (accepted) {
           // The change is recorded before the review closes, so whoever waits on the review sees it.
-          this.journal({ kind: info.kind, cellId: info.cellId, cellType: info.cellType, index, before: info.before, after: info.after, reviewId: info.reviewId });
+          this.journal({ kind: info.kind, cellId: info.cellId, cellType: info.cellType, index: typeof accepted === "object" ? accepted.index : index, before: info.before, after: info.after, reviewId: info.reviewId });
         }
-        this.emit({ type: "review_closed", reviewId: info.reviewId, accepted });
+        this.emit({ type: "review_closed", reviewId: info.reviewId, accepted: !!accepted });
       },
       () => {
         this.reviews.delete(info.reviewId);
@@ -212,10 +218,11 @@ export class OpRunner {
 
 /** Race a promise against a timeout without cancelling it. */
 export function within<T>(p: Promise<T>, ms: number): Promise<{ done: true; value: T } | { done: false }> {
+  let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     p.then((value) => ({ done: true as const, value })),
-    new Promise<{ done: false }>((r) => setTimeout(() => r({ done: false }), Math.max(0, ms))),
-  ]);
+    new Promise<{ done: false }>((r) => { timer = setTimeout(() => r({ done: false }), Math.max(0, ms)); }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 export const KERNEL_BUSY = "The kernel is busy running a cell, so this would wait behind it. Wait for the cell (wait_for_cells) or stop it (interrupt_kernel), then try again.";
@@ -284,7 +291,11 @@ export class Executions {
     );
     this.runs.set(execId, { settled, collected: e.collected });
     // Dropped some time after it ends, if nobody comes back for it.
-    void settled.then(() => setTimeout(() => this.runs.delete(execId), EXECUTION_KEEP_MS));
+    void settled.then(() => {
+      if (!this.runs.has(execId)) return;
+      const timer = setTimeout(() => this.runs.delete(execId), EXECUTION_KEEP_MS);
+      (timer as unknown as { unref?(): void }).unref?.();
+    });
     return execId;
   }
 

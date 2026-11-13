@@ -1,39 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { EXTENSION_ID, SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type Prefs } from "../shared/panel-messages.js";
-import { client } from "./client.js";
+import { usePanelHost } from "./host.js";
 import { copyText, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { AgentManager } from "./agent-manager.js";
 
-const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter" } as const;
-
-function useActiveTab(): number | null {
-  // `?tab=<id>` pins the panel to one tab (used when it is opened as a page, e.g. in tests).
-  const pinned = Number(new URLSearchParams(location.search).get("tab")) || null;
-  const [tabId, setTabId] = useState<number | null>(pinned);
-  useEffect(() => {
-    if (pinned) return;
-    let windowId: number | undefined;
-    const refresh = async () => {
-      const [tab] = await chrome.tabs.query({ active: true, ...(windowId !== undefined ? { windowId } : { currentWindow: true }) });
-      setTabId(tab?.id ?? null);
-    };
-    void chrome.windows.getCurrent().then((w) => {
-      windowId = w.id;
-      void refresh();
-    });
-    const onActivated = (info: chrome.tabs.OnActivatedInfo) => {
-      if (windowId === undefined || info.windowId === windowId) setTabId(info.tabId);
-    };
-    chrome.tabs.onActivated.addListener(onActivated);
-    return () => chrome.tabs.onActivated.removeListener(onActivated);
-  }, []);
-  return tabId;
-}
+const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
 export function App() {
+  const client = usePanelHost();
+  const inVSCode = client.kind === "vscode";
   const [bridge, setBridge] = useState<BridgeState | null>(null);
-  const tabId = useActiveTab();
+  const [tabId, setTabId] = useState<number | null>(null);
+  useEffect(() => client.watchTab(setTabId), [client]);
   const [notebook, setNotebook] = useState<NotebookInfo | null>(null);
   const [chat, setChat] = useState<ChatSnapshot | null>(null);
   const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS);
@@ -50,8 +29,8 @@ export function App() {
   const unsentSettings = useRef<Partial<ChatSettings> | null>(null);
 
   useEffect(() => {
-    void chrome.storage.local.get("prefs").then(({ prefs }) => prefs && setPrefsState({ ...DEFAULT_PREFS, ...prefs })).finally(() => setPrefsReady(true));
-    void client.request<BridgeState>("state.get").then(setBridge);
+    void client.getPrefs().then((prefs) => prefs && setPrefsState({ ...DEFAULT_PREFS, ...prefs }), () => {}).finally(() => setPrefsReady(true));
+    void client.request<BridgeState>("state.get").then(setBridge, (e: Error) => setError(e.message));
     return client.on((e) => {
       if (e.event === "state") setBridge({ ...e.params });
       else if (e.event === "notebook") {
@@ -99,7 +78,7 @@ export function App() {
   const setPrefs = (p: Partial<Prefs>) => {
     setPrefsState((old) => {
       const next = { ...old, ...p };
-      void chrome.storage.local.set({ prefs: next });
+      void client.setPrefs(next).catch((e: Error) => setError(e.message));
       return next;
     });
   };
@@ -113,12 +92,10 @@ export function App() {
     }
   }, []);
 
-  // The open chat's settings, unless it belongs to another agent (being switched away from).
+  // During a tab or document switch, ignore snapshots from the previous notebook.
+  const live = chat && chat.tabId === tabId && chat.status !== "closed" && (!chat.notebookKey || chat.notebookKey === notebook?.key) ? chat : null;
   const settings: ChatSettings =
-    chat && chat.agentId === prefs.agentId ? chat.settings : { scope: prefs.scope, review: prefs.review, targetCellIds: [], notebookOnly: prefs.notebookOnly };
-  // A chat belongs to one notebook: when another notebook fills the tab, the
-  // old chat is not shown and a chat for the new notebook is opened (or restored).
-  const live = chat && chat.status !== "closed" && (!chat.notebookKey || !notebook?.key || chat.notebookKey === notebook.key) ? chat : null;
+    live?.agentId === prefs.agentId ? live.settings : { scope: prefs.scope, review: prefs.review, targetCellIds: [], notebookOnly: prefs.notebookOnly };
 
   // ACP exposes model choices when the session opens, before any prompt.
   useEffect(() => {
@@ -164,6 +141,7 @@ export function App() {
     let c = live;
     if (!c || c.agentId !== prefs.agentId) c = (await openChat(prefs.agentId)) ?? null;
     if (!c) return false;
+    if (c.tabId !== tabRef.current) return false;
     const ok = await run(client.request("chat.send", { chatId: c.chatId, text }));
     return ok !== undefined;
   };
@@ -182,8 +160,8 @@ export function App() {
     [live?.chatId, tabId],
   );
 
-  if (!bridge) return <div class="center muted">Loading…</div>;
-  if (!connected) return <Setup bridge={bridge} />;
+  if (!bridge) return <div class="center muted">{error ?? "Loading…"}</div>;
+  if (!connected) return inVSCode ? <VSCodeSetup bridge={bridge} /> : <Setup bridge={bridge} />;
 
   const agents = bridge.agents;
   const running = live?.status === "running";
@@ -202,7 +180,7 @@ export function App() {
               <strong>{PLATFORM[notebook.platform]}</strong> · <span title={notebook.title}>{notebook.title}</span>
             </>
           ) : (
-            <span class="muted">No notebook in this tab</span>
+            <span class="muted">{inVSCode ? "No active notebook" : "No notebook in this tab"}</span>
           )}
         </div>
         {notebook && <span class={`kernel k-${notebook.kernel}`} title="Notebook kernel">kernel: {notebook.kernel}</span>}
@@ -211,7 +189,9 @@ export function App() {
             class="icon"
             title="New chat (clears the saved conversation for this notebook)"
             aria-label="New chat"
-            onClick={() => void run(client.request("chat.close", { chatId: live.chatId })).then(() => setChat(null))}
+            onClick={() => void run(client.request("chat.close", { chatId: live.chatId })).then((closed) => {
+              if (closed) setChat((current) => current?.chatId === live.chatId ? null : current);
+            })}
           >
             ＋
           </button>
@@ -220,8 +200,10 @@ export function App() {
 
       {!notebook ? (
         <div class="center muted pad">
-          <p>Open a notebook on Colab or Kaggle (or a local Jupyter started with app exposure) to chat with an agent about it.</p>
-          <p class="small">If the notebook is open, reload its tab once after installing the extension.</p>
+          {inVSCode ? <p>Open an <code>.ipynb</code> file in the Notebook Editor to chat with an agent about it.</p> : <>
+            <p>Open a notebook on Colab or Kaggle (or a local Jupyter started with app exposure) to chat with an agent about it.</p>
+            <p class="small">If the notebook is open, reload its tab once after installing the extension.</p>
+          </>}
           <button class="secondary" onClick={() => setManagingAgents(true)}>Manage agents</button>
         </div>
       ) : (
@@ -516,7 +498,30 @@ function AgentOptions({ chat, busy, onSet }: { chat: ChatSnapshot; busy: boolean
   );
 }
 
+function VSCodeSetup({ bridge }: { bridge: BridgeState }) {
+  const client = usePanelHost();
+  const [error, setError] = useState<string>();
+  const busy = bridge.conn === "connecting";
+  const connect = (method: string) => {
+    setError(undefined);
+    void client.request(method).catch((e: Error) => setError(e.message));
+  };
+  return (
+    <div class="setup pad">
+      <h1>Connect to the bridge</h1>
+      <p>Run <code>pnpm bridge</code> from the project folder in a terminal.</p>
+      {busy ? <p role="status">Connecting…</p> : <p role="status">{error ?? bridge.error}</p>}
+      <div class="row-actions">
+        <button class="primary" disabled={busy} onClick={() => connect("config.auto")}>{bridge.conn === "replaced" ? "Connect here" : "Retry connection"}</button>
+        <button class="secondary" disabled={busy} onClick={() => connect("config.prompt")}>Enter pairing token</button>
+        {bridge.config.source === "manual" && <button class="linkish" disabled={busy} onClick={() => connect("config.reset")}>Use local configuration</button>}
+      </div>
+    </div>
+  );
+}
+
 function Setup({ bridge }: { bridge: BridgeState }) {
+  const client = usePanelHost();
   const [port, setPort] = useState(String(bridge.config.port));
   const [token, setToken] = useState(bridge.config.source === "manual" ? bridge.config.token : "");
   const [saving, setSaving] = useState(false);
@@ -543,7 +548,7 @@ function Setup({ bridge }: { bridge: BridgeState }) {
             </p>
             <div class="cmd">
               <code>{command}</code>
-              <button class="linkish" onClick={(e) => void copyText(command, e.currentTarget)}>
+              <button class="linkish" onClick={(e) => void copyText(client, command, e.currentTarget)}>
                 Copy
               </button>
             </div>

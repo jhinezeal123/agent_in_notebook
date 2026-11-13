@@ -1,11 +1,14 @@
 // The side panel's channel to the background service worker. Reconnects when
 // the worker restarts.
 
-import type { PanelEvent, PanelResponse } from "../shared/panel-messages.js";
+import type { PanelEvent, PanelResponse, Prefs } from "../shared/panel-messages.js";
+
+import type { PanelHost } from "./host.js";
 
 type Listener = (e: PanelEvent) => void;
 
-export class PanelClient {
+export class PanelClient implements PanelHost {
+  readonly kind = "browser" as const;
   private port: chrome.runtime.Port | null = null;
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
@@ -45,6 +48,47 @@ export class PanelClient {
       this.port.postMessage({ id, method, params });
     });
   }
+
+  watchTab(listener: (id: number | null) => void): () => void {
+    // A pinned panel is used when it is opened as a page, e.g. in tests.
+    const pinned = Number(new URLSearchParams(location.search).get("tab"));
+    if (pinned) {
+      listener(pinned);
+      return () => {};
+    }
+    let windowId: number | undefined;
+    let watching = true;
+    let activation = 0;
+    const onActivated = (info: chrome.tabs.OnActivatedInfo) => {
+      if (windowId !== undefined && info.windowId === windowId) {
+        activation++;
+        listener(info.tabId);
+      }
+    };
+    chrome.tabs.onActivated.addListener(onActivated);
+    void chrome.windows.getCurrent().then(async (window) => {
+      windowId = window.id;
+      const observed = activation;
+      const [tab] = await chrome.tabs.query({ active: true, windowId });
+      if (watching && observed === activation) listener(tab?.id ?? null);
+    }).catch(() => {});
+    return () => {
+      watching = false;
+      chrome.tabs.onActivated.removeListener(onActivated);
+    };
+  }
+
+  async getPrefs(): Promise<Partial<Prefs> | undefined> {
+    return (await chrome.storage.local.get<{ prefs?: Partial<Prefs> }>("prefs")).prefs;
+  }
+
+  async setPrefs(prefs: Prefs): Promise<void> {
+    await chrome.storage.local.set({ prefs });
+  }
+
+  copy(text: string): Promise<void> { return navigator.clipboard.writeText(text); }
+
+  openLink(url: string): Promise<unknown> { return chrome.tabs.create({ url }); }
 
   on(listener: Listener): () => void {
     this.listeners.add(listener);

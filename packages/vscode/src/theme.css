@@ -1,0 +1,22 @@
+body {
+  --bg: var(--vscode-sideBar-background);
+  --bg-2: var(--vscode-editor-background);
+  --bg-3: var(--vscode-input-background);
+  --fg: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  --muted: var(--vscode-descriptionForeground);
+  --border: var(--vscode-input-border, var(--vscode-panel-border));
+  --accent: var(--vscode-textLink-foreground);
+  --accent-fg: var(--vscode-button-foreground);
+  --accent-soft: var(--vscode-editor-selectionBackground);
+  --ok: var(--vscode-testing-iconPassed);
+  --warn: var(--vscode-editorWarning-foreground);
+  --err: var(--vscode-errorForeground);
+  --add-bg: var(--vscode-diffEditor-insertedTextBackground);
+  --del-bg: var(--vscode-diffEditor-removedTextBackground);
+  --mono: var(--vscode-editor-font-family, monospace);
+  font: var(--vscode-font-size) / 1.5 var(--vscode-font-family);
+}
+body.vscode-light { color-scheme: light; }
+body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
+body .primary { background: var(--vscode-button-background); }
+body .primary:not(:disabled):hover { background: var(--vscode-button-hoverBackground); }

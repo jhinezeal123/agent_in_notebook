@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CellInfo, CellType, NotebookEvent, NotebookInfo, ReviewInfo, RunResult } from "@ainb/protocol";
-import { OpRunner, OutputCollector, type Execution, type NotebookAdapter } from "../src/page/adapter.js";
+import { OpRunner, OutputCollector, type Execution, type NotebookAdapter } from "@ainb/protocol";
 
 class MemoryAdapter implements NotebookAdapter {
   readonly platform = "jupyter" as const;

@@ -1,6 +1,6 @@
 # Agent in Notebook
 
-Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex, Gemini CLI, OpenCode, hoặc bất kỳ agent nào nói [ACP](https://agentclientprotocol.com)) và **notebook trong trình duyệt** (Google Colab, Kaggle, Jupyter). Giống tính năng Gemini trong Colab, nhưng bạn tự chọn agent và dùng được cả trên Kaggle.
+Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex, Gemini CLI, OpenCode, hoặc bất kỳ agent nào nói [ACP](https://agentclientprotocol.com)) và **notebook** trong VS Code hoặc trình duyệt (Google Colab, Kaggle, Jupyter).
 
 ```
 ┌─ Chrome extension ──────────────────┐        ┌─ Bridge (máy bạn, 127.0.0.1) ─────────┐
@@ -37,7 +37,39 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 - Giới hạn của terminal: bridge đọc và ghi terminal thông qua kernel (gửi những đoạn Python ngắn), nên khi kernel đang chạy một cell thì tạm thời không đọc được output của terminal. Lệnh trong terminal không bị ảnh hưởng, cell chạy xong là đọc tiếp được. Cần kernel Python trên Linux/macOS (Colab, Kaggle đều vậy).
 - **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên side panel để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
 
-## Cài đặt
+## Dùng trong VS Code
+
+Extension **Agent in Notebook** mở giao diện chat ở sidebar cạnh Notebook Editor của VS Code. Agent đọc, sửa và chạy cell trên tài liệu `.ipynb` đang mở. Sidebar theo notebook đang chọn và hiển thị diff để **Apply / Reject**. Lịch sử chat được lưu theo đường dẫn notebook.
+
+**Chạy thử từ mã nguồn** với VS Code 1.105 trở lên. Từ thư mục repo:
+
+```sh
+pnpm install
+pnpm build
+pnpm bridge
+```
+
+Mở terminal khác trong cùng thư mục, sau đó chạy:
+
+```sh
+code --extensionDevelopmentPath="${PWD}/packages/vscode"
+```
+
+Trong cửa sổ **Extension Development Host**, mở một file `.ipynb` bằng Notebook Editor. Bấm **Agent in Notebook** trên Activity Bar hoặc chạy **Agent in Notebook: Open Chat** từ Command Palette. Chọn agent rồi gửi tin. Sidebar đọc port và pairing token từ cấu hình bridge trên cùng máy. Nếu bridge dùng port khác, chọn **Enter pairing token** để nhập port và token.
+
+Để chạy cell, cài **Jupyter** trong VS Code và chọn kernel ở **Select Kernel**. Muốn dùng GPU/TPU của Colab, cài thêm extension **Colab** của Google và chọn kernel Colab. `run_code` và các tool terminal của notebook dùng API kernel của Jupyter. Chạy một cell để khởi động kernel và cấp quyền kernel cho Agent in Notebook khi Jupyter hỏi. Với Kaggle, tải `.ipynb` về để mở trong VS Code và chọn kernel có sẵn ở đó. Runtime Kaggle đang chạy trong tab web chỉ được kết nối qua bản Chrome bên dưới.
+
+Nếu muốn cài vào VS Code đang dùng hằng ngày, đóng gói từ repo đã build:
+
+```sh
+cd packages/vscode
+pnpm dlx @vscode/vsce@4.1.1 package --no-dependencies --skip-license
+code --install-extension agent-in-notebook-vscode-0.1.0.vsix
+```
+
+Lưu notebook bằng thao tác Save của VS Code. Undo theo lượt trong sidebar chỉ hoàn tác cell còn khớp với bản agent sửa. Các cell cũ chưa có ID trong `.ipynb` có ID tạm trong phiên mở tài liệu, nên hoàn tác các cell đó cần thực hiện trước khi đóng notebook.
+
+## Cài đặt bản Chrome
 
 Cần Node ≥ 20, pnpm và Chrome ≥ 116.
 
@@ -109,7 +141,7 @@ jupyter notebook --JupyterNotebookApp.expose_app_in_browser=True
 
 ## Bảo mật
 
-- Bridge chỉ nghe trên `127.0.0.1`. WebSocket chỉ nhận origin `chrome-extension://` **và** đúng pairing token, nên trang web lạ không gọi vào được.
+- Bridge chỉ nghe trên `127.0.0.1`. WebSocket `/ext` kiểm tra origin của extension trình duyệt. `/vscode` dành cho VS Code Extension Host và từ chối request có header `Origin`. Cả hai cần đúng pairing token.
 - Native messaging: trình duyệt chỉ cho extension có ID nằm trong `allowed_origins` gọi native host, nên chỉ extension này nhận được token từ host. `POST /shutdown` (`ainb stop`) cần pairing token và bị từ chối nếu có header `Origin`.
 - Mỗi chat có một token riêng cho MCP relay. Relay từ chối mọi request có header `Origin` (tức là đến từ trình duyệt).
 - Agent chạy trong thư mục riêng `~/.agent-in-notebook/workspaces/<notebook>` (mỗi notebook một thư mục). Bridge không sửa config của agent.
@@ -136,7 +168,7 @@ E2E_NATIVE=1 pnpm --filter @ainb/extension exec vitest run test/native-e2e.test.
 
 `AINB_DEBUG=1 pnpm bridge` in toàn bộ luồng ACP của agent (update, xin quyền, stderr).
 
-Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, side panel). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
+Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC, `OpRunner`), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, giao diện chat dùng chung), `packages/vscode` (sidebar và adapter Notebook Editor). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
 
 ## Giới hạn đã biết
 

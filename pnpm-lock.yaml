@@ -100,6 +100,34 @@ importers:
         specifier: 5.1.0
         version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2))
 
+  packages/vscode:
+    dependencies:
+      '@ainb/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      preact:
+        specifier: 10.27.2
+        version: 10.27.2
+      ws:
+        specifier: ^8.22.2
+        version: 8.22.2
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.6
+        version: 26.6.6
+      '@types/vscode':
+        specifier: 1.105.0
+        version: 1.105.0
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
 packages:
 
   '@agentclientprotocol/claude-agent-acp@0.101.0':
@@ -540,6 +568,9 @@ packages:
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
+
+  '@types/vscode@1.105.0':
+    resolution: {integrity: sha512-Lotk3CTFlGZN8ray4VxJE7axIyLZZETQJVWi/lYoUVQuqfRxlQhVOfoejsD2V3dVXPSbS15ov5ZyowMAzgUqcw==}
 
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
@@ -1699,6 +1730,8 @@ snapshots:
 
   '@types/trusted-types@2.0.7':
     optional: true
+
+  '@types/vscode@1.105.0': {}
 
   '@types/ws@8.18.2':
     dependencies:
