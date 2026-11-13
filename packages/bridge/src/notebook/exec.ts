@@ -3,7 +3,7 @@
 
 import type { CellOutput } from "@ainb/protocol";
 
-/** Outputs of the latest run_shell / run_code results, by run id, for read_output. */
+/** Outputs of the latest Bash / run_code results, by run id, for read_output. */
 export class RecentRuns {
   private readonly runs = new Map<string, CellOutput[]>();
   private seq = 0;

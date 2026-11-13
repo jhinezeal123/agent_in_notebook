@@ -50,10 +50,10 @@ try {
 
   const steps = [
     { say: "Let me look at the notebook first." },
-    { tool: "list_cells", args: {}, quiet: true },
-    { tool: "read_cells", args: { start_index: 0, end_index: 2 }, quiet: true },
     { tool: "notebook_info", args: {}, quiet: true },
-    { tool: "insert_cell", args: { cell_type: "markdown", source: "## Load the data", index: 1 }, quiet: true },
+    { tool: "Read", args: { file_path: "colab-github-demo.ipynb", limit: 3 }, quiet: true },
+    { tool: "Grep", args: { pattern: "import" }, quiet: true },
+    { tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", edit_mode: "insert", cell_type: "markdown", new_source: "## Load the data" }, quiet: true },
     { say: "\n\nHere is a cell you could add:\n\n```python\nimport pandas as pd\ndf = pd.read_csv('data.csv')\ndf.head()\n```\n\nI also want to check your installed packages." },
     { permission: "Run shell: pip list" },
     { say: "\n\nDone." },

@@ -55,6 +55,11 @@ export interface NotebookInfo {
   docPath?: string;
   /** Stable identity of the notebook (see notebookKey), added by the extension from the tab URL. */
   key?: string;
+  /**
+   * The notebook server lends a terminal, so the machine is reached without
+   * the kernel (see `machine_exec`), even while a cell runs.
+   */
+  serverTerminals?: boolean;
 }
 
 /** What running code on the kernel outside any cell produced (see the `execute` op). */
@@ -127,6 +132,13 @@ export type NotebookOp =
    */
   | { op: "execute"; code: string; waitMs: number }
   | { op: "execute_wait"; execId: string; waitMs: number }
+  /**
+   * Run Python on the notebook's machine to work it (files, the terminal
+   * sessions), not the notebook: through a terminal of the notebook server
+   * when it lends one, so a running cell does not block it, else through the
+   * kernel like `execute`. Not in the notebook's namespace.
+   */
+  | { op: "machine_exec"; code: string; waitMs: number }
   | { op: "interrupt" }
   | { op: "focus_cell"; cellId: string }
   | { op: "resolve_review"; reviewId: string; accept: boolean };
@@ -141,6 +153,7 @@ export interface NotebookOpResults {
   run_cells: { results: RunResult[] };
   execute: ExecResult;
   execute_wait: ExecResult;
+  machine_exec: ExecResult;
   interrupt: { interrupted: boolean };
   focus_cell: { focused: boolean };
   resolve_review: { resolved: boolean };

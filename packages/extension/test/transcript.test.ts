@@ -42,18 +42,19 @@ const tool = (title: string, status: ToolPart["status"] = "completed", calls?: s
 
 describe("tool groups", () => {
   it("groups consecutive tool calls and keeps other parts in place", () => {
-    const parts: Part[] = [{ type: "text", text: "Looking." }, tool("mcp__notebook__list_cells"), tool("mcp__notebook__read_cells"), { type: "text", text: "Now edit." }, tool("x")];
+    const parts: Part[] = [{ type: "text", text: "Looking." }, tool("mcp__notebook__Read"), tool("mcp__notebook__Grep"), { type: "text", text: "Now edit." }, tool("x")];
     expect(groupParts(parts).map((i) => (i.kind === "tools" ? `tools:${i.tools.length}` : i.part.type))).toEqual(["text", "tools:2", "text", "tools:1"]);
   });
 
   it("summarizes by action, counting every notebook call one agent call made", () => {
     const tools = [
-      tool("mcp__notebook__list_cells"),
-      tool("mcp__notebook__read_cells"),
-      tool("execute", "completed", ["edit_cell", "run_cells"]),
+      tool("mcp__notebook__Read"),
+      tool("mcp__notebook__read_output"),
+      tool("execute", "completed", ["NotebookEdit", "run_cells"]),
       tool("notebook.run_all"),
+      tool("mcp__notebook__Bash"),
       tool("Run shell: ls"),
     ];
-    expect(summarizeTools(tools)).toBe("Read ×2 · Edited · Ran ×2 · Used tool");
+    expect(summarizeTools(tools)).toBe("Read ×2 · Edited · Ran ×2 · Ran command · Used tool");
   });
 });

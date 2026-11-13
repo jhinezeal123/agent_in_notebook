@@ -10,8 +10,11 @@ import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, type ExecResult, type NotebookOp } from "@ainb/protocol";
 import { RecentRuns } from "../src/notebook/exec.js";
+import { NotebookMirror } from "../src/notebook/nbfile.js";
 import { ShellSessions } from "../src/notebook/shell.js";
 import { callTool, type ToolContext } from "../src/notebook/tools.js";
+import { FakeNotebook } from "./fixtures/fake-extension.js";
+import { context as nbContext } from "./fixtures/tool-context.js";
 
 const VM = process.env.SHELL_VM;
 
@@ -38,6 +41,7 @@ function context(shells = new ShellSessions()): ToolContext {
       const o = op as NotebookOp;
       if (o.op === "info") return { platform: "colab", title: "t", url: "u", cellCount: 0, activeCellId: null, selectedCellIds: [], kernel: "idle", language: "python" } as never;
       if (o.op === "execute") return (await python(o.code)) as never;
+      if (o.op === "get_cells") return { cells: [] } as never;
       throw new Error(`unexpected op ${o.op}`);
     },
     awaitReview: async () => "pending",
@@ -47,10 +51,11 @@ function context(shells = new ShellSessions()): ToolContext {
     exclusive: (_lock, fn) => fn(),
     runs: new RecentRuns(),
     shells,
+    mirror: new NotebookMirror(),
   };
 }
 
-const run = (ctx: ToolContext, args: Record<string, unknown>) => callTool(ctx, "run_shell", args).then((r) => r.text);
+const run = (ctx: ToolContext, args: Record<string, unknown>) => callTool(ctx, "Bash", args).then((r) => r.text);
 
 describe.skipIf(!VM)("terminal on a real Linux machine", () => {
   const session = `t${Date.now().toString(36)}`;
@@ -112,5 +117,49 @@ describe.skipIf(!VM)("terminal on a real Linux machine", () => {
     const res = await sh("exit 4");
     expect(res).toMatch(/^\(the previous command ended meanwhile: exit code 0 · .*\nsurvived\)\n\nthe shell exited \(exit code 4\)/);
     expect(await sh("pwd")).toMatch(/\n\/$/);
+  }, 60_000);
+});
+
+describe.skipIf(!VM)("files and the notebook file on a real Linux machine", () => {
+  const dir = `/tmp/ainb-files-${Date.now().toString(36)}`;
+  const nb = new FakeNotebook([{ type: "code", source: "a = 1" }, { type: "markdown", source: "# Notes" }]);
+  const ctx = nbContext(nb, {
+    overrides: {
+      waitMs: 60_000,
+      call: async (op) => ((op as NotebookOp).op === "execute" ? python((op as { code: string }).code) : nb.handle(op as NotebookOp)) as never,
+    },
+  });
+  const tool = (name: string, args: Record<string, unknown>) => callTool(ctx, name, args);
+
+  it("writes, reads, edits and finds files", async () => {
+    expect((await tool("Write", { file_path: `${dir}/src/train.py`, content: "lr = 0.1\nepochs = 3\n" })).text).toBe(`Wrote ${dir}/src/train.py (20 bytes).`);
+    expect((await tool("Read", { file_path: `${dir}/src/train.py` })).text).toBe("     1\tlr = 0.1\n     2\tepochs = 3");
+    expect((await tool("Edit", { file_path: `${dir}/src/train.py`, old_string: "lr = 0.1", new_string: "lr = 0.01" })).text).toBe(`Edited ${dir}/src/train.py.`);
+    await tool("Write", { file_path: `${dir}/README.md`, content: "Learning rate notes\n" });
+    expect((await tool("Glob", { pattern: "**/*.py", path: dir })).text).toBe(`${dir}/src/train.py`);
+    expect((await tool("Glob", { pattern: "*.{md,py}", path: dir })).text).toBe(`${dir}/README.md`);
+    expect((await tool("Grep", { pattern: "learning", path: dir, "-i": true })).text).toBe(`${dir}/README.md`);
+    expect((await tool("Grep", { pattern: "^lr", path: dir, glob: "*.py", output_mode: "content", "-C": 1 })).text).toBe(`${dir}/src/train.py:1:lr = 0.01\n${dir}/src/train.py-2-epochs = 3`);
+    expect((await tool("Grep", { pattern: "(", path: dir })).text).toMatch(/^Invalid regular expression/);
+  }, 60_000);
+
+  it("moves big files in pieces and keeps binary files out of text reads", async () => {
+    const big = Array.from({ length: 40_000 }, (_, i) => `row ${i} ${"x".repeat(20)}`).join("\n") + "\n";
+    expect((await tool("Write", { file_path: `${dir}/big.txt`, content: big })).text).toBe(`Wrote ${dir}/big.txt (${big.length} bytes).`);
+    expect((await tool("Read", { file_path: `${dir}/big.txt`, offset: 39_999, limit: 5 })).text).toBe(` 39999\trow 39998 ${"x".repeat(20)}\n 40000\trow 39999 ${"x".repeat(20)}`);
+    expect((await tool("Edit", { file_path: `${dir}/big.txt`, old_string: "row 39999 ", new_string: "last row " })).text).toBe(`Edited ${dir}/big.txt.`);
+    expect((await tool("Bash", { command: `tail -c 30 ${dir}/big.txt; head -c 100 /dev/urandom > ${dir}/noise.bin` })).text).toMatch(/last row x+$/);
+    expect((await tool("Read", { file_path: `${dir}/noise.bin` })).text).toBe(`${dir}/noise.bin is a binary file (100 bytes).`);
+  }, 60_000);
+
+  it("keeps the notebook as a file in the working directory, both ways", async () => {
+    const info = (await tool("notebook_info", {})).text;
+    const file = info.match(/Notebook file: (\S+)/)![1]!;
+    expect(file).toMatch(/^\/test(\.agent)?\.ipynb$/);
+    const edit = `python3 -c "import json; p='${file}'; nb=json.load(open(p)); nb['cells'][0]['source']=['a = 2']; nb['cells'].append({'cell_type':'code','metadata':{},'outputs':[],'execution_count':None,'source':['b = 3']}); json.dump(nb, open(p,'w'), indent=2)"`;
+    const res = (await tool("Bash", { command: edit })).text;
+    expect(res).toMatch(/changed on the machine; this reached the notebook in the browser:\nApplied: cell c1 changed; new code cell c3 inserted at index 2\./);
+    expect(nb.cells.map((c) => c.source)).toEqual(["a = 2", "# Notes", "b = 3"]);
+    expect((await tool("Bash", { command: `python3 -c "import json; print([c['id'] for c in json.load(open('${file}'))['cells']])"` })).text).toMatch(/\n\['c1', 'c2', 'c3'\]$/);
   }, 60_000);
 });

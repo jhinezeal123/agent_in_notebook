@@ -33,6 +33,11 @@ export interface NotebookAdapter {
    * the kernel's history. Throws when the kernel is busy or not connected.
    */
   startExecution(code: string): Promise<Execution>;
+  /**
+   * Run Python on the machine without the kernel (see ServerPython). Throws
+   * NoServerPython when the server offers no way; the kernel is used then.
+   */
+  machineExec?(code: string, waitMs: number): Promise<ExecResult>;
   interrupt(): boolean;
   focusCell(cellId: string): boolean;
   /**
@@ -45,6 +50,9 @@ export interface NotebookAdapter {
 }
 
 export class OpError extends Error {}
+
+/** The notebook server cannot lend a terminal that runs Python; the kernel is used instead. */
+export class NoServerPython extends Error {}
 
 /** Code running on the kernel outside any cell: its reply, and the outputs so far. */
 export interface Execution {
@@ -162,6 +170,15 @@ export class OpRunner {
         return this.executions.wait(this.executions.add(await a.startExecution(op.code)), op.waitMs);
       case "execute_wait":
         return this.executions.wait(op.execId, op.waitMs);
+      case "machine_exec":
+        if (a.machineExec) {
+          try {
+            return await a.machineExec(op.code, op.waitMs);
+          } catch (e) {
+            if (!(e instanceof NoServerPython)) throw e;
+          }
+        }
+        return this.executions.wait(this.executions.add(await a.startExecution(op.code)), op.waitMs);
       case "interrupt":
         return { interrupted: a.interrupt() };
       case "focus_cell":

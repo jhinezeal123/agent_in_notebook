@@ -144,20 +144,20 @@ describe("chat with a notebook", () => {
       ext,
       chatId,
       script([
-        { tool: "list_cells", args: {} },
-        { tool: "edit_cell", args: { cell_id: "c2", old_text: "x = 1", new_text: "x = 2" } },
-        { tool: "insert_cell", args: { cell_type: "markdown", source: "## Notes", after_cell_id: "c1" } },
-        { tool: "read_cells", args: { cell_ids: ["c2"] } },
+        { tool: "Read", args: { file_path: "test.ipynb" } },
+        { tool: "Edit", args: { file_path: "test.ipynb", old_string: "x = 1", new_string: "x = 2" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", edit_mode: "insert", cell_type: "markdown", new_source: "## Notes" } },
+        { tool: "Read", args: { file_path: "test.ipynb", offset: 2, limit: 1 } },
       ]),
     );
-    expect(text).toContain("RESULT list_cells: [0] c1 markdown");
-    expect(text).toContain("RESULT edit_cell: Updated cell c2.");
+    expect(text).toContain("RESULT Read: /content/test.ipynb: the notebook open in the browser, 2 cells, shown as cells.\n\n### cell [0] id=c1 markdown");
+    expect(text).toContain("RESULT Edit: Applied: cell c2 changed.");
     expect(nb.cells.map((c) => c.source)).toEqual(["# Title", "## Notes", "x = 2\nprint(x)"]);
     expect(text).toContain("### cell [2] id=c2 code");
     const tools = ext.parts().filter((p): p is Extract<Part, { type: "tool" }> => p.type === "tool");
     expect(tools.every((t) => t.notebook && t.status === "completed")).toBe(true);
     // The bridge records which notebook tool each agent call reached.
-    expect(tools.map((t) => t.notebookCalls)).toEqual([["list_cells"], ["edit_cell"], ["insert_cell"], ["read_cells"]]);
+    expect(tools.map((t) => t.notebookCalls)).toEqual([["Read"], ["Edit"], ["NotebookEdit"], ["Read"]]);
     ext.close();
   });
 
@@ -167,16 +167,18 @@ describe("chat with a notebook", () => {
       ext,
       chatId,
       script([
-        { tool: "edit_cell", args: { cell_id: "c1", old_text: "zzz", new_text: "y" } },
-        { tool: "edit_cell", args: { cell_id: "c1", old_text: "a = 1", new_text: "b" } },
-        { tool: "update_cell", args: { cell_id: "c1" } },
-        { tool: "read_cells", args: { cell_ids: ["nope"] } },
+        { tool: "Edit", args: { file_path: "test.ipynb", old_string: "zzz", new_string: "y" } },
+        { tool: "Edit", args: { file_path: "test.ipynb", old_string: "a = 1", new_string: "b" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "nope", new_source: "x" } },
+        { tool: "Edit", args: { notebook: "test.ipynb" } },
       ]),
     );
-    expect(text).toContain("RESULT edit_cell (error): old_text was not found");
-    expect(text).toContain("matches 2 places");
-    expect(text).toContain("RESULT update_cell (error): Invalid arguments");
-    expect(text).toContain("RESULT read_cells: No matching cells.");
+    expect(text).toContain("RESULT Edit (error): old_string was not found in any cell");
+    expect(text).toContain("old_string occurs 2 times (cells c1 (2×))");
+    expect(text).toContain('RESULT NotebookEdit (error): new_source is required for edit_mode "replace".');
+    expect(text).toContain('RESULT NotebookEdit (error): No cell with id "nope".');
+    expect(text).toContain("RESULT Edit (error): Invalid arguments");
     ext.close();
   });
 });
@@ -234,22 +236,22 @@ describe("modes", () => {
       ext,
       chatId,
       script([
-        { tool: "update_cell", args: { cell_id: "c2", source: "b = 3" } },
-        { tool: "update_cell", args: { cell_id: "c1", source: "a = 10" } },
-        { tool: "insert_cell", args: { cell_type: "code", source: "c = 3" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c2", new_source: "b = 3" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "a = 10" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c2", edit_mode: "insert", cell_type: "code", new_source: "c = 3" } },
         { tool: "run_cells", args: { cell_ids: ["c1"] } },
       ]),
     );
-    expect(text).toContain("RESULT update_cell (error): Mode is 'Edit cell': only cell(s) c1 may be edited.");
-    expect(text).toContain("RESULT update_cell: Updated cell c1.");
-    expect(text).toMatch(/RESULT insert_cell \(error\): Mode is 'Edit cell'/);
+    expect(text).toContain("RESULT NotebookEdit (error): Change to cell c2: not applied. Mode is 'Edit cell': only cell(s) c1 may be edited.");
+    expect(text).toContain("RESULT NotebookEdit: Applied: cell c1 changed.");
+    expect(text).toMatch(/RESULT NotebookEdit \(error\): New code cell after cell c2: not applied\. Mode is 'Edit cell'/);
     expect(text).toMatch(/RESULT run_cells \(error\): Mode is 'Edit cell': running cells is not allowed/);
     expect(nb.cells.map((c) => c.source)).toEqual(["a = 10", "b = 2"]);
     expect(nb.ran).toEqual([]);
 
     // Explicit targets win over the active cell; the change applies to the next call.
     await ext.request("chat.settings", { chatId, settings: { scope: "cell", review: false, targetCellIds: ["c2"] } });
-    await turn(ext, chatId, script([{ tool: "update_cell", args: { cell_id: "c2", source: "b = 20" } }]));
+    await turn(ext, chatId, script([{ tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c2", new_source: "b = 20" } }]));
     expect(nb.cells[1]!.source).toBe("b = 20");
     ext.close();
   });
@@ -260,13 +262,13 @@ describe("modes", () => {
       ext,
       chatId,
       script([
-        { tool: "insert_cell", args: { cell_type: "code", source: "print(a)" } },
-        { tool: "delete_cell", args: { cell_id: "c1" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", edit_mode: "insert", cell_type: "code", new_source: "print(a)" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", edit_mode: "delete" } },
         { tool: "run_all", args: {} },
       ]),
     );
-    expect(text).toContain("RESULT insert_cell: Inserted code cell c2 at index 1.");
-    expect(text).toContain("RESULT delete_cell: Deleted cell c1.");
+    expect(text).toContain("RESULT NotebookEdit: Applied: new code cell c2 inserted at index 1.");
+    expect(text).toContain("RESULT NotebookEdit: Applied: cell c1 deleted.");
     expect(text).toMatch(/RESULT run_all \(error\): Mode is 'Write': running cells is not allowed/);
     expect(nb.cells.map((c) => c.source)).toEqual(["print(a)"]);
     expect(nb.ran).toEqual([]);
@@ -296,13 +298,13 @@ describe("review", () => {
   it("applies accepted changes and reports rejected ones", async () => {
     const { nb, ext, chatId } = await setup([{ type: "code", source: "x = 1" }], { review: true });
     ext.autoReview = true;
-    let text = await turn(ext, chatId, script([{ tool: "update_cell", args: { cell_id: "c1", source: "x = 2" } }]));
-    expect(text).toContain("RESULT update_cell: Change to cell c1: the user accepted the change");
+    let text = await turn(ext, chatId, script([{ tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "x = 2" } }]));
+    expect(text).toContain("RESULT NotebookEdit: Change to cell c1: the user accepted it; it is applied.");
     expect(nb.cells[0]!.source).toBe("x = 2");
 
     ext.autoReview = false;
-    text = await turn(ext, chatId, script([{ tool: "insert_cell", args: { cell_type: "code", source: "y = 1" } }]));
-    expect(text).toContain("the user REJECTED the change");
+    text = await turn(ext, chatId, script([{ tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", edit_mode: "insert", cell_type: "code", new_source: "y = 1" } }]));
+    expect(text).toContain("the user REJECTED it");
     expect(nb.cells).toHaveLength(1);
 
     const reviews = ext.parts().filter((p): p is Extract<Part, { type: "review" }> => p.type === "review");
@@ -320,13 +322,13 @@ describe("review", () => {
     await ext.request("chat.send", {
       chatId,
       text: script([
-        { tool: "update_cell", args: { cell_id: "c1", source: "x = 5" } },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "x = 5" } },
         { say: "WAITING" },
         { tool: "await_review", args: { review_id: "__ID__" } },
       ]).replace("__ID__", "placeholder"),
     });
     await ext.waitFor(() => ext.agentText().includes("WAITING"), 20_000, "pending result");
-    expect(ext.agentText()).toContain("still awaiting review");
+    expect(ext.agentText()).toContain("still awaiting the user's review");
     const review = ext.parts().find((p): p is Extract<Part, { type: "review" }> => p.type === "review")!;
     expect(review.status).toBe("pending");
     // Nothing is applied while the review waits.
@@ -338,7 +340,7 @@ describe("review", () => {
     expect(res.resolved).toBe(true);
     expect(nb.cells[0]!.source).toBe("x = 5");
     const text = await turn(ext, chatId, script([{ tool: "await_review", args: { review_id: review.review.reviewId } }]));
-    expect(text).toContain(`Review ${review.review.reviewId}: the user accepted the change`);
+    expect(text).toContain(`Review ${review.review.reviewId}: the user accepted it; it is applied.`);
     await ext.waitFor(
       () => ext.parts().some((p) => p.type === "review" && p.status === "accepted"),
       5_000,
@@ -471,11 +473,11 @@ describe("chats follow the notebook", () => {
   it("discards a pending review when the page goes away", async () => {
     const { nb, ext, chatId } = await setup([{ type: "code", source: "x = 1" }], { review: true });
     const before = ext.statuses.length;
-    await ext.request("chat.send", { chatId, text: script([{ tool: "update_cell", args: { cell_id: "c1", source: "x = 9" } }]) });
+    await ext.request("chat.send", { chatId, text: script([{ tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "x = 9" } }]) });
     await ext.waitFor(() => ext.parts().some((p) => p.type === "review"), 20_000, "review opened");
     ext.rpc.emit("notebook.detached", { tabId: ext.tabId });
     await ext.waitFor(() => ext.statuses.slice(before).includes("idle"), 20_000, "turn end");
-    expect(ext.agentText()).toContain("RESULT update_cell (error): Change to cell c1: the notebook page reloaded or navigated away");
+    expect(ext.agentText()).toContain("RESULT NotebookEdit (error): Change to cell c1: the notebook page reloaded before the user decided");
     const review = ext.parts().find((p): p is Extract<Part, { type: "review" }> => p.type === "review")!;
     expect(review.status).toBe("discarded");
     expect(nb.cells[0]!.source).toBe("x = 1");
@@ -488,9 +490,9 @@ describe("chats follow the notebook", () => {
       { type: "code", source: "z".repeat(50_000) },
       ...Array.from({ length: 12 }, () => ({ type: "code" as const, source: big })),
     ]);
-    const text = await turn(ext, chatId, script([{ tool: "read_cells", args: {} }]));
+    const text = await turn(ext, chatId, script([{ tool: "Read", args: { file_path: "test.ipynb" } }]));
     expect(text).toContain("shown shortened");
-    expect(text).toMatch(/more cells not shown to keep this short \(\[\d+\]\.\.\[12\]\)\. Ask for them with read_cells using start_index=\d+/);
+    expect(text).toMatch(/more cells not shown to keep this short \(\[\d+\]\.\.\[12\]\)\. Read them with offset=\d+\./);
     expect(text.length).toBeLessThan(80_000);
     ext.close();
   });
@@ -502,9 +504,10 @@ describe("plots and notebook-only mode", () => {
     let text = await turn(ext, chatId, script([{ tool: "run_cells", args: { cell_ids: ["c1"] } }]));
     expect(text).toContain("<Figure size 640x480>\n[image/png output: image 1 attached to this result]");
     expect(text).toContain(`IMAGES 1 image/png:${TINY_PNG.length}`);
-    text = await turn(ext, chatId, script([{ tool: "read_cells", args: { cell_ids: ["c1"], include_images: false } }]));
-    expect(text).toContain("[image/png output not shown]");
-    expect(text.match(/IMAGES /g)).toHaveLength(1);
+    text = await turn(ext, chatId, script([{ tool: "Read", args: { file_path: "test.ipynb" } }]));
+    expect(text).toContain("<Figure size 640x480>\n[image/png output: image 1 attached to this result]");
+    // One image with each of the two results.
+    expect(text.match(/IMAGES /g)).toHaveLength(2);
     ext.close();
   });
 
@@ -541,7 +544,7 @@ describe("plots and notebook-only mode", () => {
     expect(text).toContain("Notebook only: requests to use your own tools");
 
     const before = ext.statuses.length;
-    await ext.request("chat.send", { chatId, text: script([{ permission: "mcp__notebook__update_cell" }]) });
+    await ext.request("chat.send", { chatId, text: script([{ permission: "mcp__notebook__NotebookEdit" }]) });
     const prompt = () => ext.parts().find((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt");
     await ext.waitFor(() => !!prompt(), 20_000, "notebook tool prompt");
     await ext.request("chat.answer", { chatId, promptId: prompt()!.promptId, optionId: "allow" });
@@ -565,12 +568,12 @@ describe("undo", () => {
       ext,
       chatId,
       script([
-        { tool: "update_cell", args: { cell_id: "c1", source: "x = 10" }, quiet: true },
-        { tool: "insert_cell", args: { cell_type: "code", source: "new = True", after_cell_id: "c1" }, quiet: true },
-        { tool: "update_cell", args: { cell_id: "c3", source: "# edited notes" }, quiet: true },
-        { tool: "delete_cell", args: { cell_id: "c3" }, quiet: true },
-        { tool: "move_cell", args: { cell_id: "c2", index: 0 }, quiet: true },
-        { tool: "update_cell", args: { cell_id: "c1", source: "x = 11" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "x = 10" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", edit_mode: "insert", cell_type: "code", new_source: "new = True" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c3", new_source: "# edited notes" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c3", edit_mode: "delete" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c2", edit_mode: "move", index: 0 }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "x = 11" }, quiet: true },
       ]),
     );
     expect(nb.cells.map((c) => c.source)).toEqual(["y = 2", "x = 11", "new = True"]);
@@ -600,8 +603,8 @@ describe("undo", () => {
       ext,
       chatId,
       script([
-        { tool: "update_cell", args: { cell_id: "c1", source: "a = 2" }, quiet: true },
-        { tool: "insert_cell", args: { cell_type: "code", source: "b = 1" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "a = 2" }, quiet: true },
+        { tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", edit_mode: "insert", cell_type: "code", new_source: "b = 1" }, quiet: true },
       ]),
     );
     nb.cells[0]!.source = "a = 2  # my edit";
@@ -628,7 +631,7 @@ describe("undo", () => {
     const snap = await open();
     await ext.waitFor(() => ext.statuses.includes("idle"), 30_000, "agent start");
     ext.autoReview = true;
-    await turn(ext, snap.chatId, script([{ tool: "update_cell", args: { cell_id: "c1", source: "v = 2" } }]));
+    await turn(ext, snap.chatId, script([{ tool: "NotebookEdit", args: { notebook_path: "test.ipynb", cell_id: "c1", new_source: "v = 2" } }]));
     expect(nb.cells[0]!.source).toBe("v = 2");
 
     // Close the tab's chat (saved), then open it again: the journal comes back too.
@@ -706,9 +709,9 @@ describe("agent lifecycle", () => {
     expect(snap?.chatId).toBe(chatId);
     // The reconnected extension has no notebook in that tab any more.
     const before = again.statuses.length;
-    await again.request("chat.send", { chatId, text: script([{ tool: "list_cells", args: {} }]) });
+    await again.request("chat.send", { chatId, text: script([{ tool: "notebook_info", args: {} }]) });
     await again.waitFor(() => again.statuses.slice(before).includes("idle"), 20_000, "turn end");
-    expect(again.agentText()).toContain("RESULT list_cells (error): list_cells failed: no notebook in that tab");
+    expect(again.agentText()).toContain("RESULT notebook_info (error): notebook_info failed: no notebook in that tab");
     again.close();
   });
 });

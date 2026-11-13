@@ -49,8 +49,8 @@ try {
 
   const steps = [
     { say: "I'll put a small example in the empty code cell." },
-    { tool: "list_cells", args: {} },
-    { tool: "update_cell", args: { cell_id: cellId, source: 'import pandas as pd\ndf = pd.DataFrame({"a": [1, 2, 3]})\ndf.describe()' } },
+    { tool: "Read", args: { file_path: "colab-github-demo.ipynb" } },
+    { tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: cellId, new_source:'import pandas as pd\ndf = pd.DataFrame({"a": [1, 2, 3]})\ndf.describe()' } },
   ];
   const box = panel.getByPlaceholder(/Ask about this notebook/);
   await box.fill(`Fill in the empty cell. SCRIPT: ${JSON.stringify(steps)}`);

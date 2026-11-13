@@ -30,6 +30,7 @@ import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
 import { playbook, recap, turnContext } from "./instructions.js";
 import { RecentRuns } from "./notebook/exec.js";
+import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
 import { callTool, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
 import { keyHash } from "./store.js";
@@ -114,10 +115,12 @@ export class Chat {
   private lastOutline = "";
   /** Tail of each lock's queue (see ToolContext.exclusive). */
   private locks = new Map<string, Promise<unknown>>();
-  /** Outputs of recent run_shell / run_code calls, for read_output. */
+  /** Outputs of recent Bash / run_code calls, for read_output. */
   private runs = new RecentRuns();
   /** Terminal sessions on the notebook machine; their shells live on there, this keeps the screens. */
   private shells = new ShellSessions();
+  /** The notebook's file on its machine. */
+  private mirror = new NotebookMirror();
   /** Parts of each message as last sent to the extension, to send only what changed. */
   private sent = new Map<string, SentPart[]>();
 
@@ -206,7 +209,7 @@ export class Chat {
     });
     this.agent = agent;
     try {
-      await agent.start(cwd, [this.host.mcpServer(this.mcpToken)]);
+      await agent.start(cwd, [this.host.mcpServer(this.mcpToken)], this.spec.sessionMeta);
       if (this.closed) {
         agent.dispose();
         return;
@@ -304,12 +307,14 @@ export class Chat {
 
   private async buildPrompt(text: string): Promise<string> {
     let cells: CellInfo[] | null = null;
+    let file: string | null = null;
     try {
       this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
       cells = (await this.call({ op: "get_cells", summary: true })).cells;
     } catch {
       this.notebook = null;
     }
+    if (this.notebook) file = await notebookPath(this.toolContext(), this.notebook).catch(() => null);
     this.turnTargets = this.settings.targetCellIds.length
       ? this.settings.targetCellIds
       : this.notebook?.selectedCellIds.length
@@ -319,7 +324,7 @@ export class Chat {
           : [];
     const blocks: string[] = [];
     const rules = this.sessionFresh || this.rulesDue;
-    if (rules) blocks.push(playbook(this.notebook));
+    if (rules) blocks.push(playbook(this.notebook, file));
     this.rulesDue = false;
     if (this.pendingRecap) blocks.push(this.pendingRecap);
     if (this.undoNotes.length) {
@@ -330,7 +335,7 @@ export class Chat {
     const outline = cells ? JSON.stringify(cells.map((c) => [c.id, c.type, c.source])) : "";
     const unchanged = !!cells && !rules && !this.pendingRecap && outline === this.lastOutline;
     this.lastOutline = outline;
-    blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged));
+    blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file));
     blocks.push(text);
     return blocks.join("\n\n");
   }
@@ -558,6 +563,7 @@ export class Chat {
       exclusive: (lock, fn) => this.exclusive(lock, fn),
       runs: this.runs,
       shells: this.shells,
+      mirror: this.mirror,
     };
   }
 
@@ -919,7 +925,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP server is registered as "notebook"; agents spell the tool name differently. */
 function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(list_cells|read_cells|read_output|update_cell|edit_cell|insert_cell|delete_cell|move_cell|run_cells|run_all|run_shell|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
+  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && toolName.includes("notebook");
 }

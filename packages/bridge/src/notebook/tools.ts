@@ -1,6 +1,11 @@
-// The notebook tools offered to every agent over MCP. Each call is checked
-// against the chat's mode at the moment it runs, so switching mode in the side
-// panel takes effect on the agent's very next tool call.
+// The tools offered to every agent over MCP. The agent works on the machine
+// the notebook runs on (the Colab or Kaggle VM) as it would on its own
+// computer: a terminal (Bash), files (Read, Write, Edit, Glob, Grep), and the
+// notebook itself as an .ipynb file in the working directory, kept in step
+// with the editor in the browser (see nbfile.ts). Running cells stays with the
+// notebook tools. Each call is checked against the chat's mode at the moment
+// it runs, so switching mode in the side panel takes effect on the agent's
+// very next tool call.
 
 import { z } from "zod";
 import {
@@ -8,11 +13,12 @@ import {
   decide,
   firstLine,
   hideDataUris,
-  outputsToText,
   restoreDataUris,
+  outputsToText,
   SCOPE_LABEL,
   type CellInfo,
   type CellOutput,
+  type CellType,
   type ChatSettings,
   type ExecResult,
   type NotebookInfo,
@@ -26,7 +32,11 @@ import {
   wasShortened,
 } from "@ainb/protocol";
 import { RecentRuns } from "./exec.js";
-import { SCROLLBACK, SESSION_NAME, ShellError, type KernelExec, type Report, type ShellSession, type ShellSessions } from "./shell.js";
+import { asCellInfo, editCells, EditError, fromCellInfo, NotebookFormatError, parseIpynb, replaceInCells, writeIpynb, type CellEdit, type NbCell } from "./ipynb.js";
+import { KernelBusy, Unreachable, VmError, type KernelExec } from "./kernel.js";
+import { applyCells, describeApplied, machineExec, notebookPath, places, reachable, reviewLine, syncIn, syncOut, type NotebookMirror } from "./nbfile.js";
+import { SCROLLBACK, SESSION_NAME, type Report, type ShellSession, type ShellSessions, type ShellStart } from "./shell.js";
+import { FileTooBig, glob, grep, readFile, readLines, resolvePath, writeFile, type Stat } from "./vmfs.js";
 
 export type ReviewOutcome = "accepted" | "rejected" | "pending" | "discarded";
 
@@ -49,10 +59,12 @@ export interface ToolContext {
    * second would undo the first, and runs on Jupyter go through the active cell.
    */
   exclusive<T>(lock: "edit" | "run", fn: () => Promise<T>): Promise<T>;
-  /** Outputs of the chat's latest run_shell / run_code calls, for read_output. */
+  /** Outputs of the chat's latest Bash / run_code calls, for read_output. */
   runs: RecentRuns;
   /** The chat's terminal sessions on the notebook's machine. */
   shells: ShellSessions;
+  /** The notebook's file on its machine. */
+  mirror: NotebookMirror;
 }
 
 export interface ToolResult {
@@ -134,6 +146,10 @@ const PAGE_MAX = 12_000;
 const EXEC_OUTPUT_MAX = 10_000;
 /** What a tool call keeps of its time for answering after a wait. */
 const WAIT_MARGIN_MS = 10_000;
+/** Lines Read shows of a file by default. */
+const READ_LINES = 2000;
+/** Image files Read shows as images. */
+const IMAGE_FILES: Record<string, OutputImage["mime"]> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg" };
 
 const SHORTENED_HINT = "(output shortened: read_output with this cell id pages through or searches all of it)";
 
@@ -150,7 +166,7 @@ function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): strin
   const long = text.length > SOURCE_MAX;
   const source = long ? capLines(text, SOURCE_MAX, 0.6) : text;
   const notes = [
-    long ? `source is ${text.length} characters, shown shortened; edit_cell needs text from the shown parts` : "",
+    long ? `source is ${text.length} characters, shown shortened; Edit needs text from the shown parts` : "",
     payloads.length ? `${payloads.length} embedded data URI${payloads.length === 1 ? "" : "s"} shown as [[ainb:data-N]] marks; keep the marks to keep them` : "",
   ].filter(Boolean);
   let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}${notes.length ? ` (${notes.join("; ")})` : ""}\n${source}`;
@@ -164,7 +180,7 @@ function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): strin
  * Join rendered cells until the budget is spent. The first cell is always
  * shown; the rest is named so the agent can ask for it.
  */
-function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, sep: string, att?: Attachments, budget = READ_BUDGET): string {
+function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, sep: string, att?: Attachments, budget = READ_BUDGET, more = readMoreHint): string {
   const out: string[] = [];
   let used = 0;
   for (const [i, c] of cells.entries()) {
@@ -172,19 +188,18 @@ function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, se
     const text = render(c);
     if (i > 0 && used + text.length > budget) {
       if (mark) att!.reset(mark);
-      const rest = cells.slice(i);
-      const first = rest[0]!;
-      const last = rest.at(-1)!;
-      out.push(
-        `… ${rest.length} more cell${rest.length === 1 ? "" : "s"} not shown to keep this short ([${first.index}]..[${last.index}]). ` +
-          `Ask for them with read_cells using start_index=${first.index}, or by cell_ids.`,
-      );
+      out.push(more(cells.slice(i)));
       break;
     }
     out.push(text);
     used += text.length + sep.length;
   }
   return out.join(sep);
+}
+
+function readMoreHint(rest: CellInfo[]): string {
+  const first = rest[0]!;
+  return `… ${rest.length} more cell${rest.length === 1 ? "" : "s"} not shown to keep this short ([${first.index}]..[${rest.at(-1)!.index}]). Read them with offset=${first.index}.`;
 }
 
 function runHead(r: RunResult): string {
@@ -218,30 +233,7 @@ function renderRuns(results: RunResult[], att: Attachments): string {
   return out.join("\n\n");
 }
 
-async function findCell(ctx: ToolContext, cellId: string): Promise<CellInfo> {
-  const { cells } = await ctx.call({ op: "get_cells", cellIds: [cellId] });
-  const cell = cells[0];
-  if (!cell) throw new Denied(`No cell with id "${cellId}". Call list_cells to see the current ids.`);
-  return cell;
-}
-
-function reviewText(outcome: ReviewOutcome, what: string, reviewId: string): ToolResult {
-  if (outcome === "accepted") return { text: `${what}: the user accepted the change; it is applied.` };
-  if (outcome === "rejected") {
-    return { text: `${what}: the user REJECTED the change, so nothing was applied. Do not retry the same change; ask the user what they want instead.` };
-  }
-  if (outcome === "discarded") {
-    return {
-      text: `${what}: the notebook page reloaded or navigated away before the user decided, so the change was not applied. Read the notebook again before proposing it anew.`,
-      isError: true,
-    };
-  }
-  return {
-    text: `${what}: the change is shown to the user and still awaiting review (review_id "${reviewId}"). Call await_review with this review_id to wait for the decision before depending on it.`,
-  };
-}
-
-const cellId = z.string().describe("Cell id, as shown by list_cells.");
+const pathArg = z.string().min(1).describe("Path on the notebook's machine; relative paths start in the notebook's working directory.");
 const sessionArg = z.string().regex(SESSION_NAME).optional().describe('Terminal session name, like a terminal tab (letters, digits, - and _). Default "main".');
 const waitArg = z
   .number()
@@ -253,152 +245,293 @@ const waitArg = z
 export const TOOLS = [
   tool({
     name: "notebook_info",
-    description: "Title, platform, kernel state, active cell and the current permission mode of the notebook open in the user's browser.",
+    description:
+      "The notebook open in the user's browser: title, platform, kernel state, active cell, its file on the machine, and the current permission mode.",
     schema: z.object({}),
     async run(ctx) {
       const info = await ctx.call({ op: "info" });
-      return { text: describeInfo(info, ctx.settings(), ctx.targets()) };
+      return { text: describeInfo(info, ctx.settings(), ctx.targets(), await notebookPath(ctx, info).catch(() => null)) };
     },
   }),
   tool({
-    name: "list_cells",
-    description: "Outline of every cell: index, id, type, first line, execution count. Use read_cells for full source and outputs.",
-    schema: z.object({}),
-    async run(ctx) {
-      const { cells } = await ctx.call({ op: "get_cells", summary: true });
-      if (!cells.length) return { text: "The notebook has no cells." };
-      const line = (c: CellInfo) => {
-        const exec = c.type === "code" ? ` [${c.running ? "*" : (c.executionCount ?? " ")}]` : "";
-        const lines = c.lineCount ?? (c.source ? c.source.split("\n").length : 0);
-        return `[${c.index}] ${c.id} ${c.type}${exec} (${lines} lines)${c.pendingReview ? " (pending review)" : ""}: ${firstLine(c.source) || "(empty)"}`;
-      };
-      return { text: joinWithinBudget(cells, line, "\n") };
-    },
-  }),
-  tool({
-    name: "read_output",
+    name: "Read",
     description:
-      "The full text output of one code cell, or of a run_shell / run_code result, for when it was shortened. Search it with pattern (a regular expression, case-insensitive) or page through it with start_line / line_count.",
+      "Read a file on the notebook's machine, with line numbers (offset: first line, 1-based; limit: number of lines; default the first 2000). " +
+      "An .ipynb file is shown as its cells with their outputs (offset and limit then count cells, from 0), and the notebook file itself " +
+      "comes straight from the browser, so it is current even while a cell runs. PNG and JPEG files are shown as images.",
     schema: z.object({
-      cell_id: z.string().describe("Cell id, or the run id (run-N) a run_shell / run_code result named."),
-      pattern: z.string().min(1).optional().describe("Show only the lines matching this, with context."),
-      context_lines: z.number().int().min(0).max(20).optional().describe("Lines shown around each match. Default 2."),
-      start_line: z.number().int().min(1).optional().describe("First line to show (1-based). Default 1."),
-      line_count: z.number().int().min(1).max(1000).optional().describe("Lines to show. Default 200."),
+      file_path: pathArg,
+      offset: z.number().int().min(0).optional(),
+      limit: z.number().int().min(1).optional(),
     }),
     async run(ctx, a) {
       check(ctx, "read", null);
-      let outputs = ctx.runs.get(a.cell_id);
-      if (!outputs) {
-        if (/^run-\d+$/.test(a.cell_id)) throw new Denied(`The output of ${a.cell_id} is no longer kept (only the latest runs are). Run it again.`);
-        const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true })).cells[0];
-        if (!cell) throw new Denied(`No cell with id "${a.cell_id}". Call list_cells to see the current ids.`);
-        outputs = cell.outputs ?? [];
+      const info = await ctx.call({ op: "info" });
+      const path = await resolve(ctx, info, a.file_path);
+      if (path === (await notebookPath(ctx, info))) {
+        const { cells } = await ctx.call({ op: "get_cells", includeOutputs: true });
+        const head = `${path}: the notebook open in the browser, ${cells.length} cell${cells.length === 1 ? "" : "s"}, shown as cells.`;
+        return readCells(ctx, head, cells, a.offset, a.limit);
       }
-      const text = outputsToText(outputs, Infinity);
-      if (!text) return { text: `${a.cell_id.startsWith("run-") ? "Run" : "Cell"} ${a.cell_id} has no text output.` };
-      return { text: a.pattern ? searchLines(text, a.pattern, a.context_lines ?? 2) : pageLines(text, a.start_line ?? 1, a.line_count ?? 200) };
+      const exec = machine(ctx, info);
+      const ext = path.split(".").pop()!.toLowerCase();
+      if (ext === "ipynb") {
+        const { cells } = parseIpynb((await readFile(exec, path)).data.toString("utf8"));
+        return readCells(ctx, `${path}: a notebook file, ${cells.length} cell${cells.length === 1 ? "" : "s"}, shown as cells.`, asCellInfo(cells), a.offset, a.limit);
+      }
+      if (IMAGE_FILES[ext] && ctx.images) {
+        const { data } = await readFile(exec, path, IMAGES_BYTES_MAX);
+        return { text: `${path}: image, ${data.length} bytes, attached.`, images: [{ mime: IMAGE_FILES[ext]!, data: data.toString("base64") }] };
+      }
+      const start = Math.max(1, a.offset ?? 1);
+      const r = await readLines(exec, path, start, a.limit ?? READ_LINES, READ_BUDGET);
+      if (r.binary) return { text: `${path} is a binary file (${r.stat.size} bytes).` };
+      if (!r.total) return { text: `${path} is empty.` };
+      if (!r.lines.length) return { text: `${path} has only ${r.total} lines.`, isError: true };
+      const end = start + r.lines.length - 1;
+      const body = r.lines.map((l, k) => `${String(start + k).padStart(6)}\t${l}`).join("\n");
+      const more = end < r.total ? `\n(lines ${start}-${end} of ${r.total}; continue with offset=${end + 1})` : "";
+      return { text: body + more };
     },
   }),
   tool({
-    name: "read_cells",
+    name: "Write",
     description:
-      "Full source of cells, with their outputs (plots come back as images when you can read them). Pass cell_ids, or an index range; with neither, reads the whole notebook.",
-    schema: z.object({
-      cell_ids: z.array(z.string()).optional().describe("Cells to read."),
-      start_index: z.number().int().min(0).optional(),
-      end_index: z.number().int().min(0).optional().describe("Inclusive."),
-      include_outputs: z.boolean().optional().describe("Default true."),
-      include_images: z.boolean().optional().describe("Attach plot images (at most 4 per call). Default true."),
-    }),
+      "Write a file on the notebook's machine, replacing it (parent directories are made). Writing the notebook file (.ipynb JSON) replaces the " +
+      "notebook in the browser: cells are matched by id, so keep the ids of cells you keep; cells without an id are added. Outputs come from running cells and are not written.",
+    schema: z.object({ file_path: pathArg, content: z.string() }),
     async run(ctx, a) {
-      const includeOutputs = a.include_outputs ?? true;
-      const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, start: a.start_index, end: a.end_index, includeOutputs });
-      if (!cells.length) return { text: "No matching cells." };
-      const att = new Attachments(ctx.images && (a.include_images ?? true));
-      return att.result(joinWithinBudget(cells, (c) => renderCell(c, includeOutputs, att), "\n\n", att));
+      const info = await ctx.call({ op: "info" });
+      const path = await resolve(ctx, info, a.file_path);
+      if (path === (await notebookPath(ctx, info))) {
+        let target: NbCell[];
+        try {
+          target = parseIpynb(a.content).cells;
+        } catch (e) {
+          if (e instanceof NotebookFormatError) throw new Denied(`Nothing was written: ${path} is the notebook, so the content must be the notebook as .ipynb JSON. ${e.message}`);
+          throw e;
+        }
+        return changeNotebook(ctx, path, () => target);
+      }
+      const exec = machine(ctx, info);
+      await confirmFileChange(ctx, `Write ${path} on the notebook's machine`, capLines(a.content, 3000, 0.7));
+      const r = await writeFile(exec, path, Buffer.from(a.content, "utf8"));
+      return { text: "conflict" in r ? `${path} could not be written.` : `Wrote ${path} (${r.stat.size} bytes).`, isError: "conflict" in r || undefined };
     },
   }),
   tool({
-    name: "update_cell",
-    description: "Replace the whole source of a cell. Prefer edit_cell for small changes to long cells.",
-    schema: z.object({ cell_id: cellId, source: z.string().describe("The complete new source.") }),
-    async run(ctx, a) {
-      const d = check(ctx, "update", a.cell_id);
-      return applyUpdate(ctx, a.cell_id, d.allow && d.review, () => a.source);
-    },
-  }),
-  tool({
-    name: "edit_cell",
-    description: "Replace an exact snippet of a cell's source with new text. old_text must match exactly once unless replace_all is true.",
+    name: "Edit",
+    description:
+      "Replace exact text in a file on the notebook's machine. old_string must occur exactly once unless replace_all is true. " +
+      "In an .ipynb file (the notebook file included), the text is matched inside the cells as Read shows them, without line numbers; " +
+      "an edit to the notebook file changes the notebook in the browser.",
     schema: z.object({
-      cell_id: cellId,
-      old_text: z.string().min(1),
-      new_text: z.string(),
+      file_path: pathArg,
+      old_string: z.string().min(1),
+      new_string: z.string(),
       replace_all: z.boolean().optional(),
     }),
     async run(ctx, a) {
-      const d = check(ctx, "update", a.cell_id);
-      return applyUpdate(ctx, a.cell_id, d.allow && d.review, (shown) => {
-        // Matched against the source as the agent saw it (data URIs as marks).
-        const count = shown.split(a.old_text).length - 1;
-        if (count === 0) return { text: `old_text was not found in cell ${a.cell_id}. Read the cell again; it may have changed.`, isError: true };
-        if (count > 1 && !a.replace_all) {
-          return { text: `old_text matches ${count} places in cell ${a.cell_id}. Add surrounding context to make it unique, or pass replace_all.`, isError: true };
-        }
-        return a.replace_all ? shown.split(a.old_text).join(a.new_text) : shown.replace(a.old_text, () => a.new_text);
-      });
+      if (a.old_string === a.new_string) throw new Denied("old_string and new_string are the same; nothing to change.");
+      const info = await ctx.call({ op: "info" });
+      const path = await resolve(ctx, info, a.file_path);
+      const replace = (cells: NbCell[]) => replaceInCells(cells, a.old_string, a.new_string, a.replace_all ?? false).cells;
+      if (path === (await notebookPath(ctx, info))) return changeNotebook(ctx, path, replace);
+      const exec = machine(ctx, info);
+      if (/\.ipynb$/i.test(path)) return changeNotebookFile(ctx, exec, path, replace);
+      const { data, stat } = await readWhole(exec, path);
+      const text = data.toString("utf8");
+      const count = text.split(a.old_string).length - 1;
+      if (count === 0) throw new Denied(`old_string was not found in ${path}. Read the file again; it may differ from what you expect.`);
+      if (count > 1 && !a.replace_all) throw new Denied(`old_string occurs ${count} times in ${path}. Add surrounding text to make it unique, or set replace_all.`);
+      const next = a.replace_all ? text.split(a.old_string).join(a.new_string) : text.replace(a.old_string, () => a.new_string);
+      await confirmFileChange(ctx, `Edit ${path} on the notebook's machine`, `- ${capLines(a.old_string, 1500, 0.7)}\n+ ${capLines(a.new_string, 1500, 0.7)}`);
+      return finishWrite(exec, path, next, stat, `Edited ${path}${count > 1 ? ` (${count} places)` : ""}.`);
     },
   }),
   tool({
-    name: "insert_cell",
-    description: "Insert a new code or markdown cell. Position it with after_cell_id or index; with neither, it goes at the end.",
+    name: "NotebookEdit",
+    description:
+      "Change the cells of an .ipynb file on the notebook's machine; on the notebook file, this changes the notebook in the browser. " +
+      'edit_mode "replace" (default) sets a cell\'s source (and type, if given); "insert" adds a cell after cell_id (at the top without one); ' +
+      '"delete" removes a cell; "move" moves a cell to index (0-based).',
     schema: z.object({
-      cell_type: z.enum(["code", "markdown"]),
-      source: z.string(),
-      after_cell_id: z.string().optional().describe("Insert right after this cell."),
-      index: z.number().int().min(0).optional().describe("Position of the new cell."),
+      notebook_path: pathArg,
+      cell_id: z.string().optional().describe("The cell to change; for insert, the cell the new one follows."),
+      new_source: z.string().optional(),
+      cell_type: z.enum(["code", "markdown"]).optional().describe("Required for insert."),
+      edit_mode: z.enum(["replace", "insert", "delete", "move"]).optional(),
+      index: z.number().int().min(0).optional().describe("For move: the cell's new index."),
     }),
     async run(ctx, a) {
-      const d = check(ctx, "insert", null);
-      const review = d.allow && d.review;
-      const { index, res } = await ctx.exclusive("edit", async () => {
-        let index: number;
-        if (a.after_cell_id) index = (await findCell(ctx, a.after_cell_id)).index + 1;
-        else if (a.index !== undefined) index = a.index;
-        else index = (await ctx.call({ op: "info" })).cellCount;
-        return { index, res: await ctx.call({ op: "insert_cell", index, cellType: a.cell_type, source: a.source, review }) };
+      const edit = notebookEdit(a);
+      const info = await ctx.call({ op: "info" });
+      const path = await resolve(ctx, info, a.notebook_path);
+      const apply = (cells: NbCell[]) => editCells(cells, edit);
+      if (path === (await notebookPath(ctx, info))) return changeNotebook(ctx, path, apply);
+      if (!/\.ipynb$/i.test(path)) throw new Denied(`${path} is not an .ipynb file; use Edit or Write.`);
+      return changeNotebookFile(ctx, machine(ctx, info), path, apply);
+    },
+  }),
+  tool({
+    name: "Glob",
+    description: 'Find files on the notebook\'s machine by pattern ("**/*.py", "data/*.{csv,parquet}"), newest first.',
+    schema: z.object({ pattern: z.string().min(1), path: z.string().optional().describe("Directory to search; default the working directory.") }),
+    async run(ctx, a) {
+      check(ctx, "read", null);
+      const info = await ctx.call({ op: "info" });
+      const exec = machine(ctx, info);
+      const notes = await syncOutNotes(ctx);
+      const base = await resolve(ctx, info, a.path ?? ".");
+      const r = await glob(exec, base, a.pattern, 200);
+      const body = r.paths.length ? r.paths.join("\n") : `No files match ${a.pattern} in ${base}.`;
+      const more = r.total > r.paths.length || r.more ? `\n(${r.more ? "search stopped early; " : ""}showing ${r.paths.length} of ${r.total}${r.more ? "+" : ""} files; narrow the pattern)` : "";
+      return withNotes(notes, { text: body + more });
+    },
+  }),
+  tool({
+    name: "Grep",
+    description:
+      "Search file contents on the notebook's machine with a regular expression (Python syntax). Skips binary files and hidden, .git and node_modules directories. " +
+      'output_mode: "files_with_matches" (default, newest first), "content" (matching lines as path:line:text), or "count".',
+    schema: z.object({
+      pattern: z.string().min(1),
+      path: z.string().optional().describe("File or directory to search; default the working directory."),
+      glob: z.string().optional().describe('Only files matching this ("*.py", "*.{ts,tsx}").'),
+      output_mode: z.enum(["content", "files_with_matches", "count"]).optional(),
+      "-i": z.boolean().optional().describe("Ignore case."),
+      "-C": z.number().int().min(0).max(20).optional().describe("Lines of context around each match (content mode)."),
+      head_limit: z.number().int().min(1).optional().describe("Show at most this many results."),
+    }),
+    async run(ctx, a) {
+      check(ctx, "read", null);
+      const info = await ctx.call({ op: "info" });
+      const exec = machine(ctx, info);
+      const notes = await syncOutNotes(ctx);
+      const base = await resolve(ctx, info, a.path ?? ".");
+      const mode = a.output_mode ?? "files_with_matches";
+      const limit = a.head_limit ?? (mode === "content" ? 200 : 100);
+      const r = await grep(exec, { pattern: a.pattern, base, glob: a.glob, ignore_case: a["-i"] ?? false, mode, context: a["-C"] ?? 0, limit });
+      let lines: string[];
+      if (mode === "content") lines = r.hits.map(([p, n, text, hit]) => `${p}${hit ? ":" : "-"}${n}${hit ? ":" : "-"}${text}`);
+      else if (mode === "count") lines = r.counts.slice(0, limit).map(([p, n]) => `${p}:${n}`);
+      else lines = r.files.slice(0, limit);
+      const total = mode === "content" ? r.hits.length : mode === "count" ? r.counts.length : r.files.length;
+      if (!lines.length) return withNotes(notes, { text: `No matches for ${a.pattern} in ${base}.${r.more ? " (The search stopped early: too many files.)" : ""}` });
+      let text = capLines(lines.join("\n"), EXEC_OUTPUT_MAX, 0.8);
+      if (r.more || total > lines.length) text += `\n(more results not shown${r.more ? "; the search stopped early" : ""}: narrow the pattern, path or glob)`;
+      return withNotes(notes, { text });
+    },
+  }),
+  tool({
+    name: "Bash",
+    description:
+      "Run a command in a terminal on the machine the notebook runs on (the Colab or Kaggle VM), as you would in a terminal on your own computer. " +
+      "Each session is a persistent interactive bash: cd, exported variables and an activated environment carry over to the next command, and it outlives kernel restarts. " +
+      "Commands run until they finish, however long. If one is still running when this call has waited long enough, you get its output so far and it keeps running: " +
+      "then use shell_wait, shell_input (to answer a prompt) or shell_interrupt (Ctrl+C). " +
+      "Use more sessions, by name, to run things side by side (a server in one, commands in another). " +
+      "You see what the terminal shows (progress bars in their final state). The notebook's Python variables are not visible here; run_code sees them. " +
+      "The notebook's file is in the working directory: commands may read or change it, and changes reach the notebook in the browser.",
+    schema: z.object({
+      command: z.string().min(1).describe("What to type at the prompt; may span several lines."),
+      session: sessionArg,
+      wait_seconds: waitArg,
+    }),
+    async run(ctx, a) {
+      const d = check(ctx, "execute", null);
+      const { exec, start } = await terminal(ctx);
+      const name = a.session ?? "main";
+      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(`Run in the notebook machine's terminal${name === "main" ? "" : ` (${name})`}`, a.command))) {
+        return { text: "The user declined to run this command. Nothing was run." };
+      }
+      const deadline = Date.now() + waitWindow(ctx, a.wait_seconds);
+      const before = await syncOutNotes(ctx);
+      const result = await ctx.shells.exclusive(name, async (sh) => {
+        const { paused: before } = await catchUp(sh, exec, deadline, start);
+        if (sh.state === "running") return busySession(sh);
+        // A command that ended after the agent last looked: say how, before the new one.
+        const previous = sh.command?.end ? shellResult(ctx, sh, sh.report(false)) : undefined;
+        await sh.start(exec, a.command);
+        const cmd = sh.command!;
+        const { paused } = await sh.pollUntil(exec, () => !!cmd.end, deadline);
+        const result = shellResult(ctx, sh, sh.report(paused || before));
+        if (previous) result.text = `(the previous command ended meanwhile: ${previous.text})\n\n${result.text}`;
+        return result;
       });
-      if (!res.reviewId) return { text: `Inserted ${a.cell_type} cell ${res.cellId} at index ${index}.` };
-      const outcome = await ctx.awaitReview(res.reviewId, ctx.waitMs);
-      return reviewText(outcome, `New ${a.cell_type} cell ${res.cellId} at index ${index}`, res.reviewId);
+      return withNotes(before, withNotes(await syncInNotes(ctx), result, "after"));
     },
   }),
   tool({
-    name: "delete_cell",
-    description: "Delete a cell.",
-    schema: z.object({ cell_id: cellId }),
+    name: "shell_wait",
+    description:
+      "Wait for the command running in a terminal session and show what it printed since you last looked, or, with nothing running, what background jobs printed.",
+    schema: z.object({ session: sessionArg, wait_seconds: waitArg }),
     async run(ctx, a) {
-      const d = check(ctx, "delete", a.cell_id);
-      const res = await ctx.exclusive("edit", () => ctx.call({ op: "delete_cell", cellId: a.cell_id, review: d.allow && d.review }));
-      if (!res.reviewId) return { text: `Deleted cell ${a.cell_id}.` };
-      return reviewText(await ctx.awaitReview(res.reviewId, ctx.waitMs), `Deleting cell ${a.cell_id}`, res.reviewId);
+      check(ctx, "read", null);
+      const name = a.session ?? "main";
+      const deadline = Date.now() + waitWindow(ctx, a.wait_seconds);
+      const { exec, start } = await terminal(ctx);
+      const result = await ctx.shells.exclusive(name, async (sh) => {
+        if (sh.state === "new") await sh.open(exec, deadline, start);
+        const cmd = sh.command;
+        const { paused } = await sh.pollUntil(exec, () => sh.state !== "running" || !!cmd?.end, deadline);
+        return shellResult(ctx, sh, sh.report(paused));
+      });
+      return withNotes(await syncInNotes(ctx), result, "after");
     },
   }),
   tool({
-    name: "move_cell",
-    description: "Move a cell to a new index.",
-    schema: z.object({ cell_id: cellId, index: z.number().int().min(0) }),
+    name: "shell_input",
+    description:
+      "Type into the program running in a terminal session (answer a prompt, feed a REPL), then show what it printed. " +
+      "Enter is pressed after the text unless press_enter is false. Control characters work too: \\u0004 is Ctrl+D, \\u001b is Escape.",
+    schema: z.object({
+      text: z.string(),
+      session: sessionArg,
+      press_enter: z.boolean().optional().describe("Default true."),
+    }),
     async run(ctx, a) {
-      check(ctx, "move", a.cell_id);
-      const res = await ctx.exclusive("edit", () => ctx.call({ op: "move_cell", cellId: a.cell_id, index: a.index }));
-      return { text: `Moved cell ${a.cell_id} to index ${res.index}.` };
+      const d = check(ctx, "execute", null);
+      const name = a.session ?? "main";
+      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(`Type into the terminal${name === "main" ? "" : ` (${name})`}`, a.text))) {
+        return { text: "The user declined. Nothing was typed." };
+      }
+      const { exec, start } = await terminal(ctx);
+      const result = await ctx.shells.exclusive(name, async (sh) => {
+        await catchUp(sh, exec, Date.now() + waitWindow(ctx), start);
+        if (sh.state !== "running") return { text: `Nothing is running in session "${name}". Use Bash to run a command.`, isError: true };
+        const cmd = sh.command;
+        await sh.type(exec, a.text + (a.press_enter ?? true ? "\r" : ""));
+        const { paused } = await sh.pollUntil(exec, () => !!cmd?.end, Date.now() + Math.min(2_000, waitWindow(ctx)));
+        return shellResult(ctx, sh, sh.report(paused));
+      });
+      return withNotes(await syncInNotes(ctx), result, "after");
+    },
+  }),
+  tool({
+    name: "shell_interrupt",
+    description: "Press Ctrl+C in a terminal session, stopping the command running there, and show its last output.",
+    schema: z.object({ session: sessionArg }),
+    async run(ctx, a) {
+      check(ctx, "interrupt", null);
+      const name = a.session ?? "main";
+      const { exec, start } = await terminal(ctx);
+      const result = await ctx.shells.exclusive(name, async (sh) => {
+        await catchUp(sh, exec, Date.now() + waitWindow(ctx), start);
+        if (sh.state !== "running") return { text: `Nothing is running in session "${name}".` };
+        const cmd = sh.command;
+        await sh.type(exec, "\u0003");
+        const { paused } = await sh.pollUntil(exec, () => !!cmd?.end, Date.now() + Math.min(5_000, waitWindow(ctx)));
+        return shellResult(ctx, sh, sh.report(paused));
+      });
+      return withNotes(await syncInNotes(ctx), result, "after");
     },
   }),
   tool({
     name: "run_cells",
     description:
-      "Run code cells in order and return their outputs. Stops at the first error. If a cell is still running when the wait ends, it keeps running; use wait_for_cells.",
+      "Run code cells of the notebook in order and return their outputs. Stops at the first error. If a cell is still running when the wait ends, it keeps running; use wait_for_cells.",
     schema: z.object({
       cell_ids: z.array(z.string()).min(1),
       timeout_seconds: z.number().int().min(1).optional().describe("How long to wait for the results."),
@@ -414,7 +547,7 @@ export const TOOLS = [
   }),
   tool({
     name: "run_all",
-    description: "Run every code cell from the top, stopping at the first error.",
+    description: "Run every code cell of the notebook from the top, stopping at the first error.",
     schema: z.object({ timeout_seconds: z.number().int().min(1).optional() }),
     async run(ctx, a) {
       const d = check(ctx, "run", null);
@@ -443,108 +576,32 @@ export const TOOLS = [
       }
       const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
       const att = new Attachments(ctx.images);
-      return att.result(joinWithinBudget(cells, (c) => renderCell(c, true, att), "\n\n", att));
+      return att.result(joinWithinBudget(cells, (c) => renderCell(c, true, att), "\n\n", att, READ_BUDGET, (rest) => `… ${rest.length} more cells not shown; wait for them separately.`));
     },
   }),
   tool({
-    name: "run_shell",
+    name: "read_output",
     description:
-      "Run a command in a terminal on the machine the notebook's kernel runs on (the Colab or Kaggle VM), as you would in a terminal on your own computer. " +
-      "Each session is a persistent interactive bash: cd, exported variables and an activated environment carry over to the next command, and it outlives kernel restarts. " +
-      "Commands run until they finish, however long. If one is still running when this call has waited long enough, you get its output so far and it keeps running: " +
-      "then use shell_wait, shell_input (to answer a prompt) or shell_interrupt (Ctrl+C). " +
-      "Use more sessions, by name, to run things side by side (a server in one, commands in another). " +
-      "You see what the terminal shows (progress bars in their final state). The notebook's Python variables are not visible here; run_code sees them. " +
-      "Steps the notebook needs in order to run again (installs it imports, downloads it reads) still belong in cells.",
+      "The full text output of one code cell, or of a Bash / run_code result, for when it was shortened. Search it with pattern (a regular expression, case-insensitive) or page through it with start_line / line_count.",
     schema: z.object({
-      command: z.string().min(1).describe("What to type at the prompt; may span several lines."),
-      session: sessionArg,
-      wait_seconds: waitArg,
+      cell_id: z.string().describe("Cell id, or the run id (run-N) a Bash / run_code result named."),
+      pattern: z.string().min(1).optional().describe("Show only the lines matching this, with context."),
+      context_lines: z.number().int().min(0).max(20).optional().describe("Lines shown around each match. Default 2."),
+      start_line: z.number().int().min(1).optional().describe("First line to show (1-based). Default 1."),
+      line_count: z.number().int().min(1).max(1000).optional().describe("Lines to show. Default 200."),
     }),
-    async run(ctx, a) {
-      const d = check(ctx, "execute", null);
-      await requirePython(ctx);
-      const name = a.session ?? "main";
-      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(`Run in the notebook machine's terminal${name === "main" ? "" : ` (${name})`}`, a.command))) {
-        return { text: "The user declined to run this command. Nothing was run." };
-      }
-      const deadline = Date.now() + waitWindow(ctx, a.wait_seconds);
-      const exec = kernelExec(ctx);
-      return ctx.shells.exclusive(name, async (sh) => {
-        const { paused: before } = await catchUp(sh, exec, deadline);
-        if (sh.state === "running") return busySession(sh);
-        // A command that ended after the agent last looked: say how, before the new one.
-        const previous = sh.command?.end ? shellResult(ctx, sh, sh.report(false)) : undefined;
-        await sh.start(exec, a.command);
-        const cmd = sh.command!;
-        const { paused } = await sh.pollUntil(exec, () => !!cmd.end, deadline);
-        const result = shellResult(ctx, sh, sh.report(paused || before));
-        if (previous) result.text = `(the previous command ended meanwhile: ${previous.text})\n\n${result.text}`;
-        return result;
-      });
-    },
-  }),
-  tool({
-    name: "shell_wait",
-    description:
-      "Wait for the command running in a terminal session and show what it printed since you last looked, or, with nothing running, what background jobs printed.",
-    schema: z.object({ session: sessionArg, wait_seconds: waitArg }),
     async run(ctx, a) {
       check(ctx, "read", null);
-      const name = a.session ?? "main";
-      const deadline = Date.now() + waitWindow(ctx, a.wait_seconds);
-      const exec = kernelExec(ctx);
-      return ctx.shells.exclusive(name, async (sh) => {
-        if (sh.state === "new") await sh.open(exec, deadline);
-        const cmd = sh.command;
-        const { paused } = await sh.pollUntil(exec, () => sh.state !== "running" || !!cmd?.end, deadline);
-        return shellResult(ctx, sh, sh.report(paused));
-      });
-    },
-  }),
-  tool({
-    name: "shell_input",
-    description:
-      "Type into the program running in a terminal session (answer a prompt, feed a REPL), then show what it printed. " +
-      "Enter is pressed after the text unless press_enter is false. Control characters work too: \\u0004 is Ctrl+D, \\u001b is Escape.",
-    schema: z.object({
-      text: z.string(),
-      session: sessionArg,
-      press_enter: z.boolean().optional().describe("Default true."),
-    }),
-    async run(ctx, a) {
-      const d = check(ctx, "execute", null);
-      const name = a.session ?? "main";
-      if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(`Type into the terminal${name === "main" ? "" : ` (${name})`}`, a.text))) {
-        return { text: "The user declined. Nothing was typed." };
+      let outputs = ctx.runs.get(a.cell_id);
+      if (!outputs) {
+        if (/^run-\d+$/.test(a.cell_id)) throw new Denied(`The output of ${a.cell_id} is no longer kept (only the latest runs are). Run it again.`);
+        const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true })).cells[0];
+        if (!cell) throw new Denied(`No cell with id "${a.cell_id}". Read the notebook file to see the current ids.`);
+        outputs = cell.outputs ?? [];
       }
-      const exec = kernelExec(ctx);
-      return ctx.shells.exclusive(name, async (sh) => {
-        await catchUp(sh, exec, Date.now() + waitWindow(ctx));
-        if (sh.state !== "running") return { text: `Nothing is running in session "${name}". Use run_shell to run a command.`, isError: true };
-        const cmd = sh.command;
-        await sh.type(exec, a.text + (a.press_enter ?? true ? "\r" : ""));
-        const { paused } = await sh.pollUntil(exec, () => !!cmd?.end, Date.now() + Math.min(2_000, waitWindow(ctx)));
-        return shellResult(ctx, sh, sh.report(paused));
-      });
-    },
-  }),
-  tool({
-    name: "shell_interrupt",
-    description: "Press Ctrl+C in a terminal session, stopping the command running there, and show its last output.",
-    schema: z.object({ session: sessionArg }),
-    async run(ctx, a) {
-      check(ctx, "interrupt", null);
-      const name = a.session ?? "main";
-      const exec = kernelExec(ctx);
-      return ctx.shells.exclusive(name, async (sh) => {
-        await catchUp(sh, exec, Date.now() + waitWindow(ctx));
-        if (sh.state !== "running") return { text: `Nothing is running in session "${name}".` };
-        const cmd = sh.command;
-        await sh.type(exec, "\u0003");
-        const { paused } = await sh.pollUntil(exec, () => !!cmd?.end, Date.now() + Math.min(5_000, waitWindow(ctx)));
-        return shellResult(ctx, sh, sh.report(paused));
-      });
+      const text = outputsToText(outputs, Infinity);
+      if (!text) return { text: `${a.cell_id.startsWith("run-") ? "Run" : "Cell"} ${a.cell_id} has no text output.` };
+      return { text: a.pattern ? searchLines(text, a.pattern, a.context_lines ?? 2) : pageLines(text, a.start_line ?? 1, a.line_count ?? 200) };
     },
   }),
   tool({
@@ -553,7 +610,7 @@ export const TOOLS = [
       "Run code on the notebook's kernel, in its language, without adding a cell, and see its output: it sees and changes the notebook's variables " +
       "(df.shape, df.head(), a model's config, torch.cuda.is_available()). It runs until it finishes, like a cell; if it is still running when this call " +
       "has waited long enough, you get its output so far and a run id for wait_for_code, and the kernel stays busy meanwhile (interrupt_kernel stops it). " +
-      "Not while a cell is running. Work the notebook depends on belongs in cells (insert_cell, run_cells).",
+      "Not while a cell is running. Work the notebook depends on belongs in its cells.",
     schema: z.object({ code: z.string().min(1), wait_seconds: waitArg }),
     async run(ctx, a) {
       const d = check(ctx, "execute", null);
@@ -590,31 +647,167 @@ export const TOOLS = [
   }),
   tool({
     name: "await_review",
-    description: "Wait for the user's decision on a change that is awaiting review.",
+    description: "Wait for the user's decision on a change to the notebook that is awaiting review.",
     schema: z.object({ review_id: z.string() }),
     async run(ctx, a) {
-      return reviewText(await ctx.awaitReview(a.review_id, ctx.waitMs), `Review ${a.review_id}`, a.review_id);
+      return { text: reviewLine(await ctx.awaitReview(a.review_id, ctx.waitMs), `Review ${a.review_id}`, a.review_id) };
     },
   }),
 ];
 
-/**
- * Read the cell, compute its new source from what the agent was shown, and
- * write it, with no other edit in between. The review (if any) is awaited
- * outside the lock, so other edits can be proposed meanwhile.
- */
-async function applyUpdate(ctx: ToolContext, id: string, review: boolean, edit: (shown: string) => string | ToolResult): Promise<ToolResult> {
-  const res = await ctx.exclusive("edit", async () => {
-    const cell = await findCell(ctx, id);
-    const { text, payloads } = hideDataUris(cell.source);
-    const next = edit(text);
-    if (typeof next !== "string") return next;
-    return ctx.call({ op: "update_cell", cellId: id, source: restoreDataUris(next, payloads), review });
-  });
-  if ("text" in res) return res;
-  if (!res.reviewId) return { text: res.applied ? `Updated cell ${id}.` : `Cell ${id} already had that content.` };
-  return reviewText(await ctx.awaitReview(res.reviewId, ctx.waitMs), `Change to cell ${id}`, res.reviewId);
+// ------------------------------------------------------------ files
+
+/** The machine is reached through a Python kernel; returns the way to it. */
+function machine(ctx: ToolContext, info: NotebookInfo): KernelExec {
+  if (!reachable(info)) {
+    throw new Denied(
+      `The notebook's machine is reached through its Python kernel; this kernel runs ${info.language}. ` +
+        "The notebook file itself can still be read and edited; run commands with run_code and the language's own call (system() in R, run() in Julia).",
+    );
+  }
+  return machineExec(ctx);
 }
+
+/** The way to the machine's terminal sessions, and where a new one starts. */
+async function terminal(ctx: ToolContext): Promise<{ exec: KernelExec; start: ShellStart }> {
+  const info = await ctx.call({ op: "info" });
+  const exec = machine(ctx, info);
+  const at = await places(ctx, info);
+  return { exec, start: { cwd: at.cwd, env: at.env } };
+}
+
+async function resolve(ctx: ToolContext, info: NotebookInfo, p: string): Promise<string> {
+  return resolvePath(p, await places(ctx, info));
+}
+
+async function readWhole(exec: KernelExec, path: string): Promise<{ data: Buffer; stat: Stat }> {
+  try {
+    return await readFile(exec, path);
+  } catch (e) {
+    if (e instanceof FileTooBig) throw new Denied(`${e.message} Change it with a command in Bash instead.`);
+    throw e;
+  }
+}
+
+/** Cells as Read shows them, from `offset` (a cell index), at most `limit` of them. */
+function readCells(ctx: ToolContext, head: string, cells: CellInfo[], offset?: number, limit?: number): ToolResult {
+  const from = offset ?? 0;
+  const shown = cells.slice(from, limit ? from + limit : undefined);
+  if (!shown.length) return { text: `${head}\nNo cells in that range.` };
+  const att = new Attachments(ctx.images);
+  return att.result(`${head}\n\n${joinWithinBudget(shown, (c) => renderCell(c, true, att), "\n\n", att)}`);
+}
+
+/** In review mode, VM file changes wait for the user, like commands. */
+async function confirmFileChange(ctx: ToolContext, summary: string, detail: string): Promise<void> {
+  const d = check(ctx, "execute", null);
+  if (d.allow && d.askBeforeRun && !(await ctx.confirmRun(summary, detail))) throw new Denied("The user declined this change. Nothing was changed.");
+}
+
+async function finishWrite(exec: KernelExec, path: string, text: string, expect: Stat, done: string): Promise<ToolResult> {
+  const r = await writeFile(exec, path, Buffer.from(text, "utf8"), expect);
+  if ("conflict" in r) return { text: `${path} changed while it was being edited, so nothing was written. Read it again and redo the edit.`, isError: true };
+  return { text: done };
+}
+
+/**
+ * Change the open notebook (through its file's path): `edit` gets the cells as
+ * they are in the browser and returns what they should be. Reviews are awaited
+ * after the edit lock is released; then the file follows.
+ */
+async function changeNotebook(ctx: ToolContext, path: string, edit: (cells: NbCell[]) => NbCell[]): Promise<ToolResult> {
+  const applied = await ctx.exclusive("edit", async () => {
+    const before = fromCellInfo((await ctx.call({ op: "get_cells" })).cells);
+    let after: NbCell[];
+    try {
+      after = edit(before);
+    } catch (e) {
+      if (e instanceof EditError) throw new Denied(e.message);
+      throw e;
+    }
+    // Read showed embedded images as marks; a cell that keeps a mark keeps its image.
+    const old = new Map(before.map((c) => [c.id, hideDataUris(c.source).payloads]));
+    after = after.map((c) => {
+      const payloads = c.id ? old.get(c.id) : undefined;
+      return payloads?.length ? { ...c, source: restoreDataUris(c.source, payloads) } : c;
+    });
+    return applyCells(ctx, before, after, { concurrent: false });
+  });
+  const report = await describeApplied(ctx, applied, true);
+  const notes = await syncOutNotes(ctx);
+  if (report.noop) return withNotes(notes, { text: `No change: the notebook already reads like that (${path}).` });
+  return withNotes(notes, { text: report.lines.join("\n"), isError: report.failed || undefined });
+}
+
+/** Change another .ipynb file on the machine, cell by cell. */
+async function changeNotebookFile(ctx: ToolContext, exec: KernelExec, path: string, edit: (cells: NbCell[]) => NbCell[]): Promise<ToolResult> {
+  const { data, stat } = await readWhole(exec, path);
+  let parsed: ReturnType<typeof parseIpynb>;
+  try {
+    parsed = parseIpynb(data.toString("utf8"));
+  } catch (e) {
+    if (e instanceof NotebookFormatError) throw new Denied(`${path} is not a notebook this can edit by cells: ${e.message} Edit it as text with Bash.`);
+    throw e;
+  }
+  let after: NbCell[];
+  try {
+    after = edit(parsed.cells);
+  } catch (e) {
+    if (e instanceof EditError) throw new Denied(e.message);
+    throw e;
+  }
+  await confirmFileChange(ctx, `Edit the notebook file ${path} on the notebook's machine`, `${after.length} cells after the change`);
+  return finishWrite(exec, path, writeIpynb(parsed.doc, after), stat, `Edited ${path} (${after.length} cells).`);
+}
+
+function notebookEdit(a: { cell_id?: string; new_source?: string; cell_type?: CellType; edit_mode?: CellEdit["mode"]; index?: number }): CellEdit {
+  const need = (v: unknown, what: string) => {
+    if (v === undefined) throw new Denied(`${what} is required for edit_mode "${a.edit_mode ?? "replace"}".`);
+  };
+  switch (a.edit_mode ?? "replace") {
+    case "replace":
+      need(a.cell_id, "cell_id");
+      need(a.new_source, "new_source");
+      return { mode: "replace", cellId: a.cell_id!, source: a.new_source!, type: a.cell_type };
+    case "insert":
+      need(a.new_source, "new_source");
+      need(a.cell_type, "cell_type");
+      return { mode: "insert", afterId: a.cell_id, source: a.new_source!, type: a.cell_type! };
+    case "delete":
+      need(a.cell_id, "cell_id");
+      return { mode: "delete", cellId: a.cell_id! };
+    case "move":
+      need(a.cell_id, "cell_id");
+      need(a.index, "index");
+      return { mode: "move", cellId: a.cell_id!, index: a.index! };
+  }
+}
+
+/** Bring the notebook file up to date before the agent looks at the machine. */
+async function syncOutNotes(ctx: ToolContext): Promise<string[]> {
+  try {
+    return await syncOut(ctx);
+  } catch (e) {
+    return [`(The notebook file could not be updated: ${(e as Error).message})`];
+  }
+}
+
+/** Pick up what the agent's commands did to the notebook file. */
+async function syncInNotes(ctx: ToolContext): Promise<string[]> {
+  try {
+    return await syncIn(ctx);
+  } catch (e) {
+    return [`(Changes to the notebook file could not be checked: ${(e as Error).message})`];
+  }
+}
+
+function withNotes(notes: string[], r: ToolResult, where: "before" | "after" = "before"): ToolResult {
+  if (!notes.length) return r;
+  const block = notes.join("\n");
+  return { ...r, text: where === "before" ? `${block}\n\n${r.text}` : `${r.text}\n\n${block}` };
+}
+
+// ------------------------------------------------------------ outputs
 
 function numbered(lines: string[], from: number): string {
   return lines.map((l, k) => `${from + k}: ${l.length > 2000 ? `${l.slice(0, 1999)}…` : l}`).join("\n");
@@ -662,17 +855,6 @@ function waitWindow(ctx: ToolContext, seconds?: number): number {
   return Math.max(1_000, Math.min((seconds ?? Infinity) * 1000, ctx.waitMs - WAIT_MARGIN_MS));
 }
 
-function kernelExec(ctx: ToolContext): KernelExec {
-  return (code, waitMs) => ctx.call({ op: "execute", code, waitMs }, waitMs + 15_000);
-}
-
-async function requirePython(ctx: ToolContext): Promise<void> {
-  const info = await ctx.call({ op: "info" });
-  if (info.language !== "python") {
-    throw new Denied(`The terminal is reached through a Python kernel; this notebook's kernel runs ${info.language}. Use run_code with the language's own call (system() in R, run() in Julia).`);
-  }
-}
-
 export function duration(ms: number): string {
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1)} s`;
@@ -682,9 +864,9 @@ export function duration(ms: number): string {
 }
 
 /** Open the session (or find it again after a bridge restart), then read what it printed meanwhile. */
-async function catchUp(sh: ShellSession, exec: KernelExec, deadline: number): Promise<{ paused: boolean }> {
+async function catchUp(sh: ShellSession, exec: KernelExec, deadline: number, start: ShellStart): Promise<{ paused: boolean }> {
   if (sh.state === "new" || sh.state === "exited") {
-    await sh.open(exec, deadline);
+    await sh.open(exec, deadline, start);
     return { paused: false };
   }
   return sh.refresh(exec);
@@ -715,7 +897,7 @@ function shellResult(ctx: ToolContext, sh: ShellSession, r: Report): ToolResult 
   let head: string;
   let failed = false;
   if (r.state === "exited") {
-    head = `the shell exited${r.exitCode != null ? ` (exit code ${r.exitCode})` : ""}${where}; the next run_shell starts a new one`;
+    head = `the shell exited${r.exitCode != null ? ` (exit code ${r.exitCode})` : ""}${where}; the next Bash call starts a new one`;
   } else if (r.full !== undefined && cmd) {
     head = `exit code ${cmd.status}${cmd.status === 130 ? " (interrupted)" : ""} · ${duration(Date.now() - cmd.startedAt)}${where}`;
     failed = cmd.status !== 0;
@@ -763,13 +945,14 @@ async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: nu
   );
 }
 
-export function describeInfo(info: NotebookInfo, settings: ChatSettings, targets: string[]): string {
+export function describeInfo(info: NotebookInfo, settings: ChatSettings, targets: string[], file: string | null = null): string {
   const lines = [
     `Notebook: ${info.title} (${info.platform}) ${info.url}`,
+    file ? `Notebook file: ${file}` : "",
     `Cells: ${info.cellCount}. Kernel: ${info.kernel}. Language: ${info.language}.`,
     `Active cell: ${info.activeCellId ?? "none"}${info.selectedCellIds.length > 1 ? `; selected: ${info.selectedCellIds.join(", ")}` : ""}.`,
     `Mode: ${SCOPE_LABEL[settings.scope]}${settings.review ? " with review (each change waits for the user's approval)" : ""}.`,
-  ];
+  ].filter(Boolean);
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.join(", ") || "none selected"}.`);
   return lines.join("\n");
 }
@@ -796,7 +979,11 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
   try {
     return await (t as ToolDef<z.ZodType>).run(ctx, parsed.data);
   } catch (e) {
-    if (e instanceof Denied || e instanceof ShellError) return { text: e.message, isError: true };
+    if (e instanceof Denied || e instanceof VmError) return { text: e.message, isError: true };
+    if (e instanceof KernelBusy) {
+      return { text: "The kernel is busy running a cell, so the notebook's machine cannot be reached until it finishes. The notebook file itself can still be read and edited.", isError: true };
+    }
+    if (e instanceof Unreachable) return { text: `${e.message} The notebook file itself can still be read and edited.`, isError: true };
     return { text: `${name} failed: ${(e as Error).message}`, isError: true };
   }
 }

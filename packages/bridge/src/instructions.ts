@@ -7,43 +7,44 @@ import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type CellInfo, type ChatMe
 
 const PLATFORM_NAME = { colab: "Google Colab", kaggle: "Kaggle", jupyter: "Jupyter" } as const;
 
-export function playbook(info: NotebookInfo | null): string {
+export function playbook(info: NotebookInfo | null, file: string | null = null): string {
   const where = info ? PLATFORM_NAME[info.platform] : "Colab/Kaggle";
+  const nbFile = file ? `the file ${file}` : "an .ipynb file in the working directory (notebook_info names it)";
   return `<agent-in-notebook>
-You are helping the user with a ${where} notebook that is open in their browser. You reach it only through the tools of the MCP server named "notebook":
-- list_cells, read_cells, notebook_info: read the notebook and its outputs. Long outputs are shortened; read_output searches or pages through one cell's full output.
-- edit_cell (exact snippet replacement), update_cell (whole source), insert_cell, delete_cell, move_cell: change it.
-- run_cells, run_all, wait_for_cells, interrupt_kernel: execute it (Autonomous mode only).
-- run_shell, shell_wait, shell_input, shell_interrupt: a terminal on the machine the notebook runs on (Autonomous mode only). Use it as you would a terminal on your own computer: sessions persist (cd, env, venv), commands run as long as they need, prompts can be answered.
-- run_code, wait_for_code: run code on the kernel, with the notebook's variables, without adding a cell (Autonomous mode only).
+You are helping the user with a ${where} notebook open in their browser. You work on the machine the notebook runs on, through the tools of the MCP server named "notebook", as you would on your own computer:
+- Bash (with shell_wait, shell_input, shell_interrupt): a terminal there. Sessions persist (cd, env, venv), commands run as long as they need, prompts can be answered.
+- Read, Write, Edit, Glob, Grep: its files. Relative paths start in the notebook's working directory.
+- The notebook is ${nbFile}, kept in step with the browser: Read shows it as cells with their outputs, current even while a cell runs; Edit changes text inside a cell; NotebookEdit replaces, inserts, deletes or moves cells; Write replaces it whole (.ipynb JSON). Commands may change the file too (nbformat, jupytext, jq); the change reaches the browser. Cells are matched by their ids: keep them.
+- run_cells, run_all, wait_for_cells, interrupt_kernel: run the notebook's cells. read_output pages through a long output.
+- run_code, wait_for_code: run code on the kernel, with the notebook's variables, without adding a cell.
 - await_review: wait for the user's decision on a change awaiting review.
 
 Rules:
-1. The notebook is not a file on this computer. Never search for, create or edit an .ipynb file, and do not use your shell or file tools to work on the notebook.
-2. Address cells by id. Indexes shift when cells are added, moved or removed.
-3. Read a cell before changing it; the user edits the notebook too.
-4. Follow the mode given in <notebook-context>. The tools refuse what the mode forbids; do not work around a refusal, tell the user what you would do instead.
-5. With review on, every change is shown to the user as a diff. A rejected change was not applied: do not retry it unchanged.
-6. Code runs on the notebook's kernel in the cloud, not on this computer. The notebook's machine is reachable through its terminal (run_shell) and its kernel (run_code); your own shell and files are on another computer. Steps the notebook needs in order to run again from the top (installs it imports, downloads it reads, data preparation) go in cells, shell commands prefixed with "!"; everything else can happen in the terminal.
-7. Keep each code cell to one logical step. Use markdown cells for prose when the user asks for explanations or a write-up.
-8. When done, answer briefly in the user's language and name the cells you changed.
+1. Any shell or file tools of your own act on the user's computer, which holds nothing of this work. Use the notebook server's tools.
+2. Read the notebook before changing it; the user edits it too.
+3. Follow the mode given in <notebook-context>. The tools refuse what the mode forbids; do not work around a refusal, tell the user what you would do instead.
+4. With review on, every change to the notebook is shown to the user as a diff, and commands wait for approval. A rejected change was not applied: do not retry it unchanged.
+5. Steps the notebook needs in order to run again from the top (installs it imports, downloads it reads, data preparation) go in its cells, shell commands prefixed with "!"; everything else can happen in the terminal.
+6. Keep each code cell to one logical step. Use markdown cells for prose when the user asks for explanations or a write-up.
+7. When done, answer briefly in the user's language and name the cells you changed.
 </agent-in-notebook>`;
 }
 
 const OUTLINE_MAX_CELLS = 80;
 
 /** `outlineUnchanged`: the agent got this same outline with its previous message. */
-export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null, settings: ChatSettings, targets: string[], outlineUnchanged = false): string {
+/** `file`: the notebook's file on its machine. */
+export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null, settings: ChatSettings, targets: string[], outlineUnchanged = false, file: string | null = null): string {
   if (!info) {
     return `<notebook-context>\nNo notebook is attached right now (the tab may have navigated or reloaded). Tools will fail until it is back.\n</notebook-context>`;
   }
   const lines = [
-    `Notebook: ${info.title} (${PLATFORM_NAME[info.platform]})`,
+    `Notebook: ${info.title} (${PLATFORM_NAME[info.platform]})${file ? `, file ${file}` : ""}`,
     `Kernel: ${info.kernel}. Language: ${info.language}.`,
     `Mode: ${SCOPE_LABEL[settings.scope]}. ${SCOPE_HINT[settings.scope]}${settings.review ? " Review is ON: each change waits for the user's approval." : ""}`,
   ];
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.length ? targets.join(", ") : "none — ask the user to select one"}.`);
-  if (settings.notebookOnly) lines.push("Notebook only: requests to use your own tools on this computer (shell, file edits, web) are refused. Work through the notebook tools.");
+  if (settings.notebookOnly) lines.push("Notebook only: requests to use your own tools on the user's computer (shell, file edits, web) are refused. Work through the notebook server's tools.");
   lines.push(`Active cell: ${info.activeCellId ?? "none"}.`);
   if (cells && outlineUnchanged) {
     lines.push(`Outline: ${cells.length} cells, unchanged since your previous message.`);
@@ -52,7 +53,7 @@ export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null,
     for (const c of cells.slice(0, OUTLINE_MAX_CELLS)) {
       lines.push(`[${c.index}] ${c.id} ${c.type}: ${firstLine(c.source, 70) || "(empty)"}`);
     }
-    if (cells.length > OUTLINE_MAX_CELLS) lines.push(`… ${cells.length - OUTLINE_MAX_CELLS} more; call list_cells.`);
+    if (cells.length > OUTLINE_MAX_CELLS) lines.push(`… ${cells.length - OUTLINE_MAX_CELLS} more; Read the notebook file.`);
   }
   return `<notebook-context>\n${lines.join("\n")}\n</notebook-context>`;
 }

@@ -30,7 +30,22 @@ export function toolLabel(part: ToolPart): string {
 }
 
 const ACTION: Record<string, string> = {
+  Read: "Read",
+  read_output: "Read",
+  Glob: "Searched",
+  Grep: "Searched",
+  Edit: "Edited",
+  NotebookEdit: "Edited",
+  Write: "Wrote",
+  Bash: "Ran command",
+  shell_input: "Typed",
+  shell_wait: "Waited",
+  shell_interrupt: "Interrupted",
+  run_code: "Ran code",
+  wait_for_code: "Waited",
+  // Tools of earlier versions, still named in saved chats.
   list_cells: "Read",
+  run_shell: "Ran command",
   read_cells: "Read",
   notebook_info: "Read",
   update_cell: "Edited",

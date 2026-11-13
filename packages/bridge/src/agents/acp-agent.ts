@@ -68,7 +68,8 @@ export class AcpAgent {
     return this.stderr.trim();
   }
 
-  async start(cwd: string, mcpServers: McpServer[]): Promise<NewSessionResponse> {
+  /** `meta`: the agent's own session options (see AgentSpec.sessionMeta). */
+  async start(cwd: string, mcpServers: McpServer[], meta?: Record<string, unknown>): Promise<NewSessionResponse> {
     const child = spawn(this.launch.command, this.launch.args, {
       cwd,
       env: { ...process.env, ...this.launch.env },
@@ -127,7 +128,7 @@ export class AcpAgent {
         clientInfo: { name: "agent-in-notebook", title: "Agent in Notebook", version: BRIDGE_VERSION },
       });
       try {
-        return await this.conn!.agent.request("session/new", { cwd, mcpServers });
+        return await this.conn!.agent.request("session/new", { cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
       } catch (e) {
         const err = e as { code?: number; message?: string };
         if (err.code === -32000 || /auth/i.test(err.message ?? "")) {

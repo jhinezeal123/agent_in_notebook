@@ -174,30 +174,33 @@ describe.skipIf(!RUN)("Colab", () => {
   it("lets the agent read and write cells", async () => {
     dumpOnFailure("write");
     const before = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
+    const first = await nb.evaluate(() => (window as any).colab.global.notebook.cells[0].getId());
     await panel.getByRole("radio", { name: "Write" }).click();
     await panel.getByLabel("Review").uncheck();
+    // No runtime is connected: the notebook is still worked on as its file.
     await send(
       panel,
       script([
-        { tool: "list_cells", args: {} },
-        { tool: "insert_cell", args: { cell_type: "code", source: "print('from agent')", index: 1 } },
-        { tool: "insert_cell", args: { cell_type: "markdown", source: "## Added by the agent", index: 1 } },
+        { tool: "Read", args: { file_path: "colab-github-demo.ipynb" } },
+        { tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: first, edit_mode: "insert", cell_type: "code", new_source: "print('from agent')" } },
+        { tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: first, edit_mode: "insert", cell_type: "markdown", new_source: "## Added by the agent" } },
       ]),
     );
-    await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 60_000 }).toContain("RESULT insert_cell: Inserted markdown cell");
+    await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 60_000 }).toContain("RESULT NotebookEdit: Applied: new markdown cell");
+    expect(await panel.locator(".msg.agent").last().textContent()).toContain("RESULT Read: /content/colab-github-demo.ipynb: the notebook open in the browser");
     const cells = await nb.evaluate(() => (window as any).colab.global.notebook.cells.map((c: any) => [c.getType(), c.getText()]));
     expect(cells.length).toBe(before + 2);
     expect(cells[1]).toEqual(["text", "## Added by the agent"]);
     expect(cells[2]).toEqual(["code", "print('from agent')"]);
     // The fake agent writes a line after each call, so no two calls are adjacent and none are grouped.
-    await expect.poll(() => panel.locator(".tool-title").first().textContent()).toBe("notebook · list_cells");
+    await expect.poll(() => panel.locator(".tool-title").first().textContent()).toBe("notebook · Read");
   }, 120_000);
 
   it("inserts a code block from the transcript as a cell below the selected one", async () => {
     dumpOnFailure("insert");
     const before = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
     await send(panel, script([{ say: "Try this:\n\n```python\nprint('from the panel')\n```\n" }]));
-    const block = panel.locator(".msg.agent").last().locator(".code");
+    const block = panel.locator(".msg.agent").filter({ hasText: "Try this:" }).last().locator(".code");
     await block.waitFor({ timeout: 30_000 });
     expect(await block.locator(".code-lang").textContent()).toBe("python");
     await block.getByRole("button", { name: "Insert as cell" }).click();
@@ -214,8 +217,8 @@ describe.skipIf(!RUN)("Colab", () => {
     await send(
       panel,
       script([
-        { tool: "update_cell", args: { cell_id: cellId, source: "print('to be undone')" } },
-        { tool: "insert_cell", args: { cell_type: "markdown", source: "## temporary", index: 0 } },
+        { tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: cellId, new_source: "print('to be undone')" } },
+        { tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", edit_mode: "insert", cell_type: "markdown", new_source: "## temporary" } },
       ]),
     );
     const changes = panel.locator(".msg.agent").last().locator(".changes");
@@ -230,7 +233,7 @@ describe.skipIf(!RUN)("Colab", () => {
   it("shows a change in Colab's inline diff and applies it from the side panel", async () => {
     await panel.getByLabel("Review").check();
     const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells[2].getId());
-    await send(panel, script([{ tool: "update_cell", args: { cell_id: cellId, source: "print('reviewed')" } }]));
+    await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: cellId, new_source: "print('reviewed')" } }]));
     // Colab's own Accept / Reject UI appears in the cell...
     await nb.locator("colab-inline-cell-diff").waitFor({ timeout: 30_000 });
     // ...and the same review appears in the side panel.
@@ -238,7 +241,7 @@ describe.skipIf(!RUN)("Colab", () => {
     await card.waitFor({ timeout: 30_000 });
     expect(await card.locator(".row.a").first().textContent()).toContain("print('reviewed')");
     await card.getByRole("button", { name: "Apply" }).click();
-    await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 30_000 }).toContain("the user accepted the change");
+    await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 30_000 }).toContain("the user accepted it");
     expect(await nb.locator("colab-inline-cell-diff").count()).toBe(0);
     expect(await nb.evaluate((id) => (window as any).colab.global.notebook.cells.find((c: any) => c.getId() === id).getText(), cellId)).toBe("print('reviewed')");
     await expect.poll(() => panel.locator(".badge.accepted").count()).toBe(1);
@@ -246,7 +249,7 @@ describe.skipIf(!RUN)("Colab", () => {
 
   it("rejects from Colab's own buttons and removes a rejected new cell", async () => {
     const count = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
-    await send(panel, script([{ tool: "insert_cell", args: { cell_type: "code", source: "rejected = True", index: 0 } }]));
+    await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", edit_mode: "insert", cell_type: "code", new_source: "rejected = True" } }]));
     const diff = nb.locator("colab-inline-cell-diff");
     await diff.waitFor({ timeout: 30_000 });
     expect(await nb.evaluate(() => (window as any).colab.global.notebook.cells.length)).toBe(count + 1);
@@ -282,9 +285,10 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     await send(
       panel,
       "ECHO_MODEL\n" + script([
-        { tool: "edit_cell", args: { cell_id: "calc", old_text: "41", new_text: "99" } },
+        { tool: "notebook_info", args: {} },
+        { tool: "Edit", args: { file_path: "e2e.agent.ipynb", old_string: "41", new_string: "99" } },
         { tool: "run_cells", args: { cell_ids: ["calc"] } },
-        { tool: "insert_cell", args: { cell_type: "code", source: "raise ValueError('nope')", after_cell_id: "calc" } },
+        { tool: "NotebookEdit", args: { notebook_path: "e2e.agent.ipynb", cell_id: "calc", edit_mode: "insert", cell_type: "code", new_source: "raise ValueError('nope')" } },
         { tool: "run_all", args: {} },
       ]),
     );
@@ -292,6 +296,8 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     await expect.poll(last, { timeout: 90_000 }).toContain("RESULT run_all");
     const text = (await last())!;
     expect(text).toContain("[model smart]");
+    // The server's own copy of the notebook is left alone; the agent's file has another name.
+    expect(text).toMatch(/Notebook file: \S*e2e\.agent\.ipynb/);
     expect(text).toMatch(/RESULT run_cells: cell calc: ok \(exec 1\)\s*100/);
     expect(text).toContain("[error] ValueError: nope");
     const src = await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets.map((w: any) => w.model.sharedModel.getSource()));
@@ -299,17 +305,17 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
 
     // Review: our card appears in the cell; accepting in the page applies it.
     await panel.getByLabel("Review").check();
-    await send(panel, script([{ tool: "update_cell", args: { cell_id: "calc", source: "x = 1\nprint(x)" } }]));
+    await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "e2e.agent.ipynb", cell_id: "calc", new_source: "x = 1\nprint(x)" } }]));
     const card = nb.locator(".ainb-review");
     await card.waitFor({ timeout: 30_000 });
     expect(await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets[1].model.sharedModel.getSource())).toBe("x = 99\nprint(x + 1)");
     await card.getByRole("button", { name: "Accept" }).click();
-    await expect.poll(last, { timeout: 30_000 }).toContain("the user accepted the change");
+    await expect.poll(last, { timeout: 30_000 }).toContain("the user accepted it");
     expect(await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets[1].model.sharedModel.getSource())).toBe("x = 1\nprint(x)");
     expect(await card.count()).toBe(0);
 
     // Editing a cell while a review waits must preserve the user's new source.
-    await send(panel, script([{ tool: "update_cell", args: { cell_id: "calc", source: "x = 2\nprint(x)" } }]));
+    await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "e2e.agent.ipynb", cell_id: "calc", new_source: "x = 2\nprint(x)" } }]));
     await card.waitFor({ timeout: 30_000 });
     await nb.evaluate(() => {
       const cell = (window as any).jupyterapp.shell.currentWidget.content.widgets.find((w: any) => w.model.id === "calc");
@@ -335,7 +341,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     const last = () => panel.locator(".msg.agent").last().textContent();
 
     // Review is still on: the approval shows the exact command.
-    await send(panel, script([{ tool: "run_shell", args: { command: "echo should-not-run" } }]));
+    await send(panel, script([{ tool: "Bash", args: { command: "echo should-not-run" } }]));
     const prompt = panel.locator(".card.prompt.waiting");
     await prompt.waitFor({ timeout: 30_000 });
     expect(await prompt.locator(".card-detail").textContent()).toBe("echo should-not-run");
@@ -346,17 +352,18 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     if (!JUPYTER_URL) {
       // This Jupyter runs here; on Windows the kernel's machine has no terminal sessions to offer.
       if (process.platform !== "win32") return;
-      await send(panel, script([{ tool: "run_shell", args: { command: "echo hi" } }]));
+      await send(panel, script([{ tool: "Bash", args: { command: "echo hi" } }]));
       await expect.poll(last, { timeout: 60_000 }).toContain("need a Linux or macOS machine");
       return;
     }
     await send(
       panel,
       script([
-        { tool: "run_shell", args: { command: "cd /tmp && export GREETING=hi && echo ready" } },
-        { tool: "run_shell", args: { command: 'pwd; echo "$GREETING"; exit_code_test() { return 3; }; exit_code_test' } },
-        { tool: "run_shell", args: { command: "sleep 3; echo late", wait_seconds: 1 } },
+        { tool: "Bash", args: { command: "cd /tmp && export GREETING=hi && echo ready" } },
+        { tool: "Bash", args: { command: 'pwd; echo "$GREETING"; exit_code_test() { return 3; }; exit_code_test' } },
+        { tool: "Bash", args: { command: "sleep 3; echo late", wait_seconds: 1 } },
         { tool: "shell_wait", args: {} },
+        { tool: "Bash", args: { command: "cd - >/dev/null && python3 -c \"import json; p='e2e.agent.ipynb'; nb=json.load(open(p)); nb['cells'][0]['source']=['# E2E (from a command)']; json.dump(nb, open(p, 'w'))\"" } },
         { tool: "run_code", args: { code: "x * 3" } },
         { tool: "run_code", args: { code: "import time\ntime.sleep(3)\nprint('woke')", wait_seconds: 1 }, capture: { id: "run id (exec-\\d+)" } },
         { tool: "wait_for_code", args: { run_id: "{{id}}" } },
@@ -364,15 +371,45 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     );
     await expect.poll(last, { timeout: 120_000 }).toContain("RESULT wait_for_code");
     const text = (await last())!;
-    expect(text).toMatch(/RESULT run_shell: exit code 0 · \d+\.\d s\s*ready/);
-    expect(text).toMatch(/RESULT run_shell \(error\): exit code 3 · [^\n]*\s*\/tmp\s*hi/);
-    expect(text).toMatch(/RESULT run_shell: still running after/);
+    expect(text).toMatch(/RESULT Bash: exit code 0 · \d+\.\d s\s*ready/);
+    expect(text).toMatch(/The notebook file \S*e2e\.agent\.ipynb changed on the machine; this reached the notebook in the browser:\s*Applied: cell intro changed\./);
+    expect(text).toMatch(/RESULT Bash \(error\): exit code 3 · [^\n]*\s*\/tmp\s*hi/);
+    expect(text).toMatch(/RESULT Bash: still running after/);
     expect(text).toMatch(/RESULT shell_wait: exit code 0 · [3-9]\.\d s\s*late/);
     expect(text).toMatch(/RESULT run_code: ok\s*21/);
     expect(text).toMatch(/RESULT run_code: still running after [^\n]*\(run id exec-\d+\)/);
     expect(text).toMatch(/RESULT wait_for_code: ok\s*woke/);
-    expect(await widgets()).toEqual(before);
-  }, 240_000);
+    // The command's change reached the editor; nothing else changed, and no cell was added.
+    const after = await widgets();
+    expect(after[0]).toEqual(["intro", "# E2E (from a command)"]);
+    expect(after.slice(1)).toEqual(before.slice(1));
+
+    // While a cell keeps the kernel busy, the machine is still reached, through the server's terminal.
+    await send(
+      panel,
+      script([
+        {
+          tool: "NotebookEdit",
+          args: { notebook_path: "e2e.agent.ipynb", cell_id: "calc", edit_mode: "insert", cell_type: "code", new_source: "import time\ntime.sleep(25)\nprint('slept')" },
+          capture: { cell: "new code cell ([\\w-]+) inserted" },
+        },
+        { tool: "run_cells", args: { cell_ids: ["{{cell}}"], timeout_seconds: 2 } },
+        { tool: "Bash", args: { command: "echo while the cell runs" } },
+        { tool: "Write", args: { file_path: "/tmp/during.txt", content: "written during the cell" } },
+        { tool: "Read", args: { file_path: "/tmp/during.txt" } },
+        { tool: "wait_for_cells", args: { cell_ids: ["{{cell}}"], timeout_seconds: 60 } },
+      ]),
+    );
+    await expect.poll(last, { timeout: 120_000 }).toContain("RESULT wait_for_cells");
+    const during = (await last())!;
+    expect(during).toContain("Some cells are still running");
+    expect(during).toMatch(/RESULT Bash: exit code 0 · [^\n]*\s*while the cell runs/);
+    expect(during).toContain("RESULT Write: Wrote /tmp/during.txt (23 bytes).");
+    expect(during).toMatch(/RESULT Read:\s*1\twritten during the cell/);
+    expect(during).toMatch(/RESULT wait_for_cells: ### cell \[\d+\] id=[\w-]+ code exec=\d+\s*import time/);
+    expect(during).toContain("slept");
+    expect(during).not.toContain("kernel is busy");
+  }, 300_000);
 
   it("manages a custom ACP command and selects its model before chatting", async () => {
     await panel.getByRole("button", { name: "Manage agents", exact: true }).click();
