@@ -4,13 +4,21 @@ export type Platform = "colab" | "kaggle" | "jupyter";
 
 export type CellType = "code" | "markdown";
 
-/** One output of a code cell, flattened to text. Rich outputs keep only their mime types. */
+/** A raster image from a cell output, base64-encoded. */
+export interface OutputImage {
+  mime: "image/png" | "image/jpeg";
+  data: string;
+}
+
+/** One output of a code cell, flattened to text plus at most one image. */
 export interface CellOutput {
   kind: "stream" | "result" | "display" | "error";
   /** stdout / stderr for streams. */
   name?: string;
   text?: string;
-  /** Non-text mime types the output carried (image/png, text/html...), which the agent cannot see. */
+  /** A PNG/JPEG the output carried, which agents that read images can see. */
+  image?: OutputImage;
+  /** Other non-text mime types the output carried (text/html, image/svg+xml...), which the agent cannot see. */
   mimes?: string[];
   ename?: string;
   evalue?: string;

@@ -49,7 +49,7 @@ function setup() {
   const chat = new Chat(1, {
     id: "fake", name: "Fake", builtin: false, toolWaitMs: 50, loginHint: "",
     resolve: () => ({ launch: { command: "fake", args: [] } }),
-  }, { scope: "auto", review: true, targetCellIds: [] }, {
+  }, { scope: "auto", review: true, targetCellIds: [], notebookOnly: true }, {
     notebookOp, emit: vi.fn(), mcpServer: () => ({ name: "notebook", command: "fake", args: [], env: [] }), workspaceRoot,
   });
   chats.push(chat);

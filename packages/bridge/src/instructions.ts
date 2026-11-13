@@ -40,6 +40,7 @@ export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null,
     `Mode: ${SCOPE_LABEL[settings.scope]}. ${SCOPE_HINT[settings.scope]}${settings.review ? " Review is ON: each change waits for the user's approval." : ""}`,
   ];
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.length ? targets.join(", ") : "none — ask the user to select one"}.`);
+  if (settings.notebookOnly) lines.push("Notebook only: requests to use your own tools on this computer (shell, file edits, web) are refused. Work through the notebook tools.");
   lines.push(`Active cell: ${info.activeCellId ?? "none"}.`);
   if (cells) {
     lines.push(`Outline (${cells.length} cells):`);

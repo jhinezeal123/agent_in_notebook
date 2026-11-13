@@ -16,6 +16,7 @@ import {
   type NotebookOpName,
   type NotebookOpOf,
   type NotebookOpResults,
+  type OutputImage,
   type RunResult,
   type ToolAction,
 } from "@ainb/protocol";
@@ -33,11 +34,53 @@ export interface ToolContext {
   confirmRun(summary: string): Promise<boolean>;
   /** Longest a call may block on the user or a running cell. */
   waitMs: number;
+  /** The agent reads images in tool results, so plots are attached rather than described as hidden. */
+  images: boolean;
 }
 
 export interface ToolResult {
   text: string;
   isError?: boolean;
+  /** Plots and other raster outputs, sent as MCP image content after the text. */
+  images?: OutputImage[];
+}
+
+const IMAGES_MAX = 4;
+const IMAGES_BYTES_MAX = 3_000_000;
+
+/** Images gathered for one tool result, within a count and size limit. */
+class Attachments {
+  readonly images: OutputImage[] = [];
+  private bytes = 0;
+
+  constructor(private readonly enabled: boolean) {}
+
+  readonly attach = (image: OutputImage): string | null => {
+    if (!this.enabled) return null;
+    if (this.images.length >= IMAGES_MAX || this.bytes + image.data.length > IMAGES_BYTES_MAX) {
+      return `[${image.mime} output not attached: this result already carries ${this.images.length} images; read this cell on its own to see it]`;
+    }
+    this.images.push(image);
+    this.bytes += image.data.length;
+    return `[${image.mime} output: image ${this.images.length} attached to this result]`;
+  };
+
+  mark(): { count: number; bytes: number } {
+    return { count: this.images.length, bytes: this.bytes };
+  }
+
+  /** Drop images attached after `mark` (their cell was left out of the result). */
+  reset(mark: { count: number; bytes: number }): void {
+    this.images.length = mark.count;
+    this.bytes = mark.bytes;
+  }
+
+  result(text: string, isError?: boolean): ToolResult {
+    const out: ToolResult = { text };
+    if (isError) out.isError = true;
+    if (this.images.length) out.images = [...this.images];
+    return out;
+  }
 }
 
 interface ToolDef<S extends z.ZodType> {
@@ -65,7 +108,7 @@ const SOURCE_MAX = 20_000;
 /** Total text one read returns, so a big notebook cannot flood the agent's context. */
 export const READ_BUDGET = 60_000;
 
-function renderCell(c: CellInfo, withOutputs: boolean): string {
+function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): string {
   const exec = c.type === "code" ? ` exec=${c.executionCount ?? "-"}${c.running ? " RUNNING" : ""}` : "";
   const pending = c.pendingReview ? " (change awaiting user review)" : "";
   const long = c.source.length > SOURCE_MAX;
@@ -73,7 +116,7 @@ function renderCell(c: CellInfo, withOutputs: boolean): string {
   const note = long ? ` (source is ${c.source.length} characters, shown shortened; edit_cell needs text from the shown parts)` : "";
   let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}${note}\n${source}`;
   if (withOutputs && c.type === "code") {
-    const out = c.outputs?.length ? outputsToText(c.outputs, OUTPUT_MAX) : "";
+    const out = c.outputs?.length ? outputsToText(c.outputs, OUTPUT_MAX, att?.attach) : "";
     s += `\n--- output ---\n${out || "(no output)"}`;
   }
   return s;
@@ -83,12 +126,14 @@ function renderCell(c: CellInfo, withOutputs: boolean): string {
  * Join rendered cells until the budget is spent. The first cell is always
  * shown; the rest is named so the agent can ask for it.
  */
-function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, sep: string, budget = READ_BUDGET): string {
+function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, sep: string, att?: Attachments, budget = READ_BUDGET): string {
   const out: string[] = [];
   let used = 0;
   for (const [i, c] of cells.entries()) {
+    const mark = att?.mark();
     const text = render(c);
     if (i > 0 && used + text.length > budget) {
+      if (mark) att!.reset(mark);
       const rest = cells.slice(i);
       const first = rest[0]!;
       const last = rest.at(-1)!;
@@ -104,9 +149,9 @@ function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, se
   return out.join(sep);
 }
 
-function renderRun(r: RunResult): string {
+function renderRun(r: RunResult, att?: Attachments): string {
   const head = `cell ${r.cellId}: ${r.status}${r.executionCount != null ? ` (exec ${r.executionCount})` : ""}${r.message ? ` — ${r.message}` : ""}`;
-  const out = outputsToText(r.outputs, OUTPUT_MAX);
+  const out = outputsToText(r.outputs, OUTPUT_MAX, att?.attach);
   return out ? `${head}\n${out}` : head;
 }
 
@@ -162,18 +207,21 @@ export const TOOLS = [
   }),
   tool({
     name: "read_cells",
-    description: "Full source of cells, with their outputs. Pass cell_ids, or an index range; with neither, reads the whole notebook.",
+    description:
+      "Full source of cells, with their outputs (plots come back as images when you can read them). Pass cell_ids, or an index range; with neither, reads the whole notebook.",
     schema: z.object({
       cell_ids: z.array(z.string()).optional().describe("Cells to read."),
       start_index: z.number().int().min(0).optional(),
       end_index: z.number().int().min(0).optional().describe("Inclusive."),
       include_outputs: z.boolean().optional().describe("Default true."),
+      include_images: z.boolean().optional().describe("Attach plot images (at most 4 per call). Default true."),
     }),
     async run(ctx, a) {
       const includeOutputs = a.include_outputs ?? true;
       const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, start: a.start_index, end: a.end_index, includeOutputs });
       if (!cells.length) return { text: "No matching cells." };
-      return { text: joinWithinBudget(cells, (c) => renderCell(c, includeOutputs), "\n\n") };
+      const att = new Attachments(ctx.images && (a.include_images ?? true));
+      return att.result(joinWithinBudget(cells, (c) => renderCell(c, includeOutputs, att), "\n\n", att));
     },
   }),
   tool({
@@ -289,13 +337,15 @@ export const TOOLS = [
     async run(ctx, a) {
       check(ctx, "read", null);
       const deadline = Date.now() + Math.min((a.timeout_seconds ?? Infinity) * 1000, ctx.waitMs);
+      // Poll the running state only; outputs (images included) are fetched once at the end.
       for (;;) {
-        const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
-        if (!cells.some((c) => c.running) || Date.now() >= deadline) {
-          return { text: joinWithinBudget(cells, (c) => renderCell(c, true), "\n\n") };
-        }
+        const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids });
+        if (!cells.some((c) => c.running) || Date.now() >= deadline) break;
         await new Promise((r) => setTimeout(r, 1000));
       }
+      const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
+      const att = new Attachments(ctx.images);
+      return att.result(joinWithinBudget(cells, (c) => renderCell(c, true, att), "\n\n", att));
     },
   }),
   tool({
@@ -327,12 +377,13 @@ async function applyUpdate(ctx: ToolContext, id: string, source: string, review:
 async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: number): Promise<ToolResult> {
   const timeoutMs = Math.min((timeoutSeconds ?? Infinity) * 1000, ctx.waitMs);
   const { results } = await ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true }, timeoutMs + 15_000);
-  const text = results.map(renderRun).join("\n\n");
+  const att = new Attachments(ctx.images);
+  const text = results.map((r) => renderRun(r, att)).join("\n\n");
   const stillRunning = results.some((r) => r.status === "timeout");
-  return {
-    text: stillRunning ? `${text}\n\nSome cells are still running. Call wait_for_cells to keep waiting.` : text,
-    isError: results.some((r) => r.status === "error"),
-  };
+  return att.result(
+    stillRunning ? `${text}\n\nSome cells are still running. Call wait_for_cells to keep waiting.` : text,
+    results.some((r) => r.status === "error"),
+  );
 }
 
 export function describeInfo(info: NotebookInfo, settings: ChatSettings, targets: string[]): string {

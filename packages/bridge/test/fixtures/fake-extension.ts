@@ -5,6 +5,7 @@ import {
   RpcPeer,
   WIRE_VERSION,
   type CellInfo,
+  type CellOutput,
   type ChatMessage,
   type ChatSnapshot,
   type Envelope,
@@ -14,11 +15,13 @@ import {
   type RunResult,
 } from "@ainb/protocol";
 
+export const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 interface Cell {
   id: string;
   type: "code" | "markdown";
   source: string;
-  outputs: { kind: "stream"; name: string; text: string }[];
+  outputs: CellOutput[];
   executionCount: number | null;
 }
 
@@ -159,6 +162,8 @@ export class FakeNotebook {
             continue;
           }
           c.outputs = [{ kind: "stream", name: "stdout", text: `ran ${c.source}\n` }];
+          // "plot" cells draw a (tiny, valid) PNG, like matplotlib would.
+          if (c.source.includes("plot")) c.outputs.push({ kind: "display", text: "<Figure size 640x480>", image: { mime: "image/png", data: TINY_PNG } });
           results.push({ cellId: id, status: "ok", executionCount: c.executionCount, outputs: c.outputs });
         }
         return { results };

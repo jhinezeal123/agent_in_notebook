@@ -42,7 +42,7 @@ async function connectMcp(servers) {
 const app = agent({ name: "fake-agent" })
   .onRequest("initialize", () => ({
     protocolVersion: 1,
-    agentCapabilities: { mcpCapabilities: { http: false, sse: false } },
+    agentCapabilities: { mcpCapabilities: { http: false, sse: false }, promptCapabilities: { image: true } },
     authMethods: [],
   }))
   .onRequest("session/new", async ({ params }) => {
@@ -106,7 +106,9 @@ const app = agent({ name: "fake-agent" })
         });
         const mcp = s.mcp.find((c) => c.name === "notebook");
         const r = await mcp.client.callTool({ name: step.tool, arguments: step.args ?? {} }, undefined, { timeout: 600_000 });
-        const out = r.content.map((c) => c.text).join("");
+        const out = r.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+        const images = r.content.filter((c) => c.type === "image");
+        if (images.length) await say(`IMAGES ${images.length} ${images.map((i) => `${i.mimeType}:${i.data.length}`).join(",")}\n`);
         await client.notify("session/update", {
           sessionId: params.sessionId,
           update: { sessionUpdate: "tool_call_update", toolCallId: id, status: r.isError ? "failed" : "completed" },

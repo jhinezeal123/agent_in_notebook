@@ -17,9 +17,10 @@ export interface Prefs {
   agentId: string;
   scope: Scope;
   review: boolean;
+  notebookOnly: boolean;
 }
 
-export const DEFAULT_PREFS: Prefs = { agentId: "claude", scope: "write", review: true };
+export const DEFAULT_PREFS: Prefs = { agentId: "claude", scope: "write", review: true, notebookOnly: true };
 
 /** Methods the background answers itself; every other method goes to the bridge. */
 export interface LocalMethods {

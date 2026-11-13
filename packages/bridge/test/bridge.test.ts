@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { formatLaunchCommand, type AgentInfo, type ChatSettings, type ChatSnapshot, type Part } from "@ainb/protocol";
 import { Bridge } from "../src/server.js";
 import { keyHash } from "../src/store.js";
-import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
+import { FakeExtension, FakeNotebook, TINY_PNG } from "./fixtures/fake-extension.js";
 
 const TOKEN = "test-token-0123456789abcdef";
 const CLI = resolve(__dirname, "../dist/cli.js");
@@ -26,7 +26,7 @@ beforeAll(async () => {
     join(home, "agents.json"),
     JSON.stringify([
       { id: "fake", name: "Fake Agent", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 3 },
-      { id: "fake2", name: "Fake Agent 2", command: process.execPath, args: [FAKE_AGENT] },
+      { id: "fake2", name: "Fake Agent 2", command: process.execPath, args: [FAKE_AGENT], images: false },
     ]),
   );
   bridge = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {} });
@@ -476,9 +476,64 @@ describe("chats follow the notebook", () => {
   });
 });
 
+describe("plots and notebook-only mode", () => {
+  it("attaches plot images to run and read results", async () => {
+    const { ext, chatId } = await setup([{ type: "code", source: "plot(x)" }], { scope: "auto" });
+    let text = await turn(ext, chatId, script([{ tool: "run_cells", args: { cell_ids: ["c1"] } }]));
+    expect(text).toContain("<Figure size 640x480>\n[image/png output: image 1 attached to this result]");
+    expect(text).toContain(`IMAGES 1 image/png:${TINY_PNG.length}`);
+    text = await turn(ext, chatId, script([{ tool: "read_cells", args: { cell_ids: ["c1"], include_images: false } }]));
+    expect(text).toContain("[image/png output not shown]");
+    expect(text.match(/IMAGES /g)).toHaveLength(1);
+    ext.close();
+  });
+
+  it("caps images per result and keeps them away from agents that cannot read them", async () => {
+    const { ext, chatId } = await setup(Array.from({ length: 6 }, (_, i) => ({ type: "code" as const, source: `plot(${i})` })), { scope: "auto" });
+    const text = await turn(ext, chatId, script([{ tool: "run_all", args: {} }]));
+    expect(text).toContain("IMAGES 4 ");
+    expect(text).toContain("this result already carries 4 images; read this cell on its own to see it");
+    ext.close();
+
+    const nb = new FakeNotebook([{ type: "code", source: "plot(1)" }]);
+    const ext2 = new FakeExtension(nb, nextTab++);
+    await ext2.connect(port, TOKEN);
+    const snap = await ext2.request<ChatSnapshot>("chat.open", {
+      tabId: ext2.tabId,
+      agentId: "fake2", // images: false in agents.json, overriding what it declares
+      settings: { scope: "auto", review: false, targetCellIds: [] },
+      platform: "colab",
+    });
+    await ext2.waitFor(() => ext2.statuses.includes("idle"), 30_000, "agent start");
+    const text2 = await turn(ext2, snap.chatId, script([{ tool: "run_cells", args: { cell_ids: ["c1"] } }]));
+    expect(text2).toContain("[image/png output not shown]");
+    expect(text2).not.toContain("IMAGES");
+    ext2.close();
+  });
+
+  it("refuses the agent's own tools in notebook-only mode but still asks about notebook tools", async () => {
+    const { ext, chatId } = await setup([]); // notebookOnly defaults to on
+    let text = await turn(ext, chatId, script([{ permission: "Run shell: rm -rf ~" }]));
+    expect(text).toContain("PERMISSION: deny");
+    expect(ext.parts().some((p) => p.type === "notice" && p.text.includes('Refused "Run shell: rm -rf ~": Notebook only is on'))).toBe(true);
+    expect(ext.parts().some((p) => p.type === "prompt")).toBe(false);
+    text = await turn(ext, chatId, "ECHO_CONTEXT hi");
+    expect(text).toContain("Notebook only: requests to use your own tools");
+
+    const before = ext.statuses.length;
+    await ext.request("chat.send", { chatId, text: script([{ permission: "mcp__notebook__update_cell" }]) });
+    const prompt = () => ext.parts().find((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt");
+    await ext.waitFor(() => !!prompt(), 20_000, "notebook tool prompt");
+    await ext.request("chat.answer", { chatId, promptId: prompt()!.promptId, optionId: "allow" });
+    await ext.waitFor(() => ext.statuses.slice(before).includes("idle"), 20_000, "turn end");
+    expect(ext.agentText()).toContain("PERMISSION: allow");
+    ext.close();
+  });
+});
+
 describe("agent lifecycle", () => {
   it("relays the agent's own permission requests", async () => {
-    const { ext, chatId } = await setup([]);
+    const { ext, chatId } = await setup([], { notebookOnly: false });
     const before = ext.statuses.length;
     await ext.request("chat.send", { chatId, text: script([{ permission: "Run shell: ls" }]) });
     const prompt = () => ext.parts().find((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt");

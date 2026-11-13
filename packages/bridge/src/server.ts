@@ -372,6 +372,7 @@ function sanitizeSettings(s: Partial<ChatSettings> | undefined): ChatSettings {
     scope,
     review: typeof s?.review === "boolean" ? s.review : DEFAULT_SETTINGS.review,
     targetCellIds: Array.isArray(s?.targetCellIds) ? s!.targetCellIds.filter((x) => typeof x === "string").slice(0, 50) : [],
+    notebookOnly: typeof s?.notebookOnly === "boolean" ? s.notebookOnly : DEFAULT_SETTINGS.notebookOnly,
   };
 }
 

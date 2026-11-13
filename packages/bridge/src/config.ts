@@ -57,6 +57,8 @@ export interface CustomAgentConfig {
   env?: Record<string, string>;
   /** Longest a notebook tool call may block before returning "still pending". */
   toolWaitSeconds?: number;
+  /** Send plot images in tool results (default: what the agent declares over ACP). */
+  images?: boolean;
 }
 
 export function loadCustomAgents(): CustomAgentConfig[] {

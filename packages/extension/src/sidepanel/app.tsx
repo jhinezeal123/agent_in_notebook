@@ -100,7 +100,7 @@ export function App() {
     }
   }, []);
 
-  const settings: ChatSettings = chat?.settings ?? { scope: prefs.scope, review: prefs.review, targetCellIds: [] };
+  const settings: ChatSettings = chat?.settings ?? { scope: prefs.scope, review: prefs.review, targetCellIds: [], notebookOnly: prefs.notebookOnly };
   // A chat belongs to one notebook: when another notebook fills the tab, the
   // old chat is not shown and a chat for the new notebook is opened (or restored).
   const live = chat && chat.status !== "closed" && (!chat.notebookKey || !notebook?.key || chat.notebookKey === notebook.key) ? chat : null;
@@ -117,7 +117,7 @@ export function App() {
   }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, notebook?.key, prefs.agentId, live?.agentId, bridge?.agents]);
 
   const updateSettings = (s: ChatSettings) => {
-    setPrefs({ scope: s.scope, review: s.review });
+    setPrefs({ scope: s.scope, review: s.review, notebookOnly: s.notebookOnly });
     if (live) void run(client.request<ChatSnapshot>("chat.settings", { chatId: live.chatId, settings: s })).then((c) => c && setChat(c));
   };
 
@@ -312,6 +312,10 @@ function ModeBar({ settings, notebook, onChange }: { settings: ChatSettings; not
       <label class="toggle" title="Show each change as a diff to apply or reject">
         <input type="checkbox" checked={settings.review} onChange={(e) => onChange({ ...settings, review: (e.target as HTMLInputElement).checked })} />
         Review
+      </label>
+      <label class="toggle" title="Refuse the agent's requests to use its own tools on this computer (shell, file edits, web). Notebook content could try to talk the agent into them.">
+        <input type="checkbox" checked={settings.notebookOnly} onChange={(e) => onChange({ ...settings, notebookOnly: (e.target as HTMLInputElement).checked })} />
+        Notebook only
       </label>
       {settings.scope === "cell" && (
         <div class="targets">

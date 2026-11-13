@@ -60,6 +60,14 @@ Mỗi notebook có một khóa ổn định (`protocol/identity.ts: notebookKey`
 
 Kết quả đọc notebook (`read_cells`, `list_cells`, `wait_for_cells`) có ngân sách tổng khoảng 60k ký tự; phần còn lại được nêu tên kèm `start_index` để agent đọc tiếp.
 
+## Ảnh trong kết quả tool
+
+`normalizeIpynbOutput` giữ PNG/JPEG (base64, tối đa ~1,5 MB mỗi ảnh) trong `CellOutput.image`. Ở bridge, `Attachments` (`notebook/tools.ts`) gom ảnh cho một kết quả, tối đa 4 ảnh và 3 MB; trong text, chỗ của ảnh được thay bằng nhãn "image N attached". Relay stdio (`mcp-stdio.ts`) gửi chúng thành MCP image content sau phần text. Có gửi ảnh hay không do `AgentSpec.images` quyết định, nếu không đặt thì theo `promptCapabilities.image` agent khai báo khi `initialize`. `wait_for_cells` chỉ đọc trạng thái chạy khi chờ và lấy output một lần ở cuối, để không chuyển ảnh mỗi giây.
+
+## Notebook only
+
+`ChatSettings.notebookOnly` (mặc định bật). `Chat.onPermission` trả lời ngay bằng lựa chọn từ chối cho mọi yêu cầu quyền không thuộc tool notebook, và ghi một notice vào transcript. Tool notebook nhận ra qua tên (`isNotebookTool`) hoặc qua tool call cùng id đã được đánh dấu là notebook. `<notebook-context>` báo cho agent biết chế độ này.
+
 ## Bảo mật
 
 Xem README. Hai điểm thiết kế đáng nhớ:

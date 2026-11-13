@@ -382,9 +382,32 @@ export class Chat {
   private onPermission(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionResponse> {
     const title = req.toolCall.title ?? "The agent wants to use a tool";
     const detail = toolDetail(req.toolCall.rawInput ?? undefined, req.toolCall.content ?? undefined);
+    if (this.settings.notebookOnly && !this.isNotebookPermission(req)) {
+      // Refuse without asking; the user sees what was refused and how to allow it.
+      const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+      const msg = this.current ?? this.lastAgentMessage();
+      this.addPart(msg, {
+        type: "notice",
+        level: "info",
+        text: `Refused "${capText(title, 120)}": Notebook only is on. Turn it off to let the agent use its own tools on this computer.`,
+      });
+      return Promise.resolve(reject ? { outcome: { outcome: "selected", optionId: reject.optionId } } : { outcome: { outcome: "cancelled" } });
+    }
     return this.ask(title, detail, req.options.map((o) => ({ id: o.optionId, name: o.name, kind: o.kind })), signal).then((answer) =>
       answer === "cancelled" ? { outcome: { outcome: "cancelled" } } : { outcome: { outcome: "selected", optionId: answer } },
     );
+  }
+
+  /** A permission request for one of our notebook tools (some agents ask before any MCP call). */
+  private isNotebookPermission(req: RequestPermissionRequest): boolean {
+    const call = req.toolCall;
+    if (isNotebookTool(call.title ?? undefined, (call as any)._meta)) return true;
+    // The agent may have announced the call (with its real name) before asking.
+    for (const m of [this.current, this.messages.at(-1)]) {
+      const known = m && findTool(m, call.toolCallId);
+      if (known?.notebook) return true;
+    }
+    return false;
   }
 
   /** Show a question in the transcript and wait for the user's choice. */
@@ -454,7 +477,13 @@ export class Chat {
       get waitMs() {
         return Math.max(0, deadline - Date.now());
       },
+      images: this.acceptsImages(),
     };
+  }
+
+  /** Whether plot images go to this agent: its spec decides, else what it declared over ACP. */
+  acceptsImages(): boolean {
+    return this.spec.images ?? !!this.agent?.init?.agentCapabilities?.promptCapabilities?.image;
   }
 
   runTool(name: string, args: unknown): Promise<ToolResult> {
@@ -694,5 +723,6 @@ function toolDetail(rawInput?: unknown, content?: ToolCallContent[] | null, rawO
     parts.push(typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput, null, 2));
   }
   if (!parts.length) return undefined;
-  return capText(parts.join("\n\n"), TOOL_DETAIL_MAX);
+  // Image results echo back as long base64 strings; they mean nothing as text.
+  return capText(parts.join("\n\n").replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]"), TOOL_DETAIL_MAX);
 }

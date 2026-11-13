@@ -28,7 +28,8 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 - Mỗi notebook có cuộc trò chuyện riêng, được lưu lại: reload tab, đóng tab rồi mở lại, hay khởi động lại bridge đều thấy lại lịch sử (agent nhận tóm tắt). Mở notebook khác trong cùng tab thì chat của notebook cũ được lưu và đóng lại. Nút **＋ (New chat)** xóa lịch sử đã lưu của notebook đó.
 - Trang notebook reload khi một thay đổi đang chờ duyệt thì thay đổi đó được đánh dấu **Discarded** (không áp dụng) và agent được báo để đọc lại notebook.
 - Chọn model, effort, mode riêng của từng agent ngay trong side panel (lấy từ agent qua ACP).
-- Khi agent muốn dùng tool của chính nó (shell, đọc file…), yêu cầu xin quyền được chuyển lên side panel để bạn quyết.
+- Agent **nhìn thấy biểu đồ**: output dạng PNG/JPEG (matplotlib, seaborn…) được gửi kèm kết quả `run_cells`, `read_cells`, `wait_for_cells` dưới dạng ảnh, tối đa 4 ảnh mỗi lần gọi. Agent nào không đọc được ảnh thì chỉ nhận dòng ghi chú như trước.
+- **Notebook only** (bật mặc định): mọi yêu cầu xin quyền dùng tool riêng của agent trên máy bạn (shell, sửa file, web…) bị từ chối ngay, vì nội dung notebook có thể chứa lệnh nhằm dụ agent. Tool notebook vẫn hỏi bạn như thường. Tắt công tắc này thì các yêu cầu đó được chuyển lên side panel để bạn quyết. Lưu ý: tool mà agent tự chạy không cần xin quyền thì không bị chặn.
 
 ## Cài đặt
 
@@ -77,6 +78,8 @@ Các agent thêm qua giao diện cũng được lưu vào file `~/.agent-in-note
   { "id": "goose", "name": "Goose", "command": "goose", "args": ["acp"], "toolWaitSeconds": 120 }
 ]
 ```
+
+`images` (tùy chọn, `true`/`false`) quyết định có gửi ảnh biểu đồ cho agent không; mặc định theo khả năng đọc ảnh mà agent khai báo qua ACP. Đã kiểm chứng: Claude Code và Codex đọc được ảnh; OpenCode 2.1.2 (với model đang cấu hình khi thử) thì không, nên bị tắt sẵn. Muốn bật lại cho OpenCode (ví dụ khi dùng model đọc được ảnh), thêm một mục có cùng id để ghi đè agent có sẵn: `{ "id": "opencode", "name": "OpenCode", "command": "opencode", "args": ["acp"], "images": true }`.
 
 `toolWaitSeconds` là thời gian tối đa một tool call được chờ, ví dụ chờ bạn duyệt diff hoặc chờ cell chạy, trước khi trả "vẫn đang chờ" để agent gọi tiếp `await_review` / `wait_for_cells`. Codex chỉ cho tool MCP 60 giây nên bridge để mức 50 giây cho Codex.
 
