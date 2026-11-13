@@ -2,7 +2,7 @@
 // router for notebook ops to the right tab and frame, and the hub for side
 // panels.
 
-import { BRIDGE_DEFAULT_PORT, RpcPeer, WIRE_VERSION, type Envelope, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
+import { BRIDGE_DEFAULT_PORT, notebookKey, RpcPeer, WIRE_VERSION, type Envelope, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import type { BackgroundToContent, ContentToBackground, OpResponse } from "../shared/page-messages.js";
 import type { BridgeState, PanelEvent, PanelRequest, PanelResponse } from "../shared/panel-messages.js";
 
@@ -18,11 +18,27 @@ let rpc: RpcPeer | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryDelay = 1000;
 
+/** The bridge closes a connection with this code when a newer one replaces it. */
+const CLOSE_REPLACED = 4000;
+const REPLACED_MESSAGE =
+  "Another Chrome window or profile connected to the bridge, so this one stepped back. Connect again here to take over.";
+
 // ------------------------------------------------------------------ bridge
 
 async function loadConfig() {
   const { config } = (await chrome.storage.local.get("config")) as { config?: { port?: unknown; token?: unknown } };
   if (config && typeof config.port === "number") state.config = { port: config.port, token: String(config.token ?? "") };
+  // Remember a takeover across service-worker restarts (until the browser restarts),
+  // or two profiles would keep stealing the bridge from each other.
+  try {
+    const { replaced } = (await chrome.storage.session.get("replaced")) as { replaced?: boolean };
+    if (replaced) {
+      state.conn = "replaced";
+      state.error = REPLACED_MESSAGE;
+    }
+  } catch {
+    // storage.session unavailable
+  }
 }
 
 function setConn(conn: BridgeState["conn"], error?: string) {
@@ -32,7 +48,7 @@ function setConn(conn: BridgeState["conn"], error?: string) {
 }
 
 function scheduleReconnect() {
-  if (retryTimer || state.conn === "unpaired") return;
+  if (retryTimer || state.conn === "unpaired" || state.conn === "replaced") return;
   retryTimer = setTimeout(() => {
     retryTimer = null;
     connect();
@@ -41,6 +57,7 @@ function scheduleReconnect() {
 }
 
 function connect() {
+  if (state.conn === "replaced") return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   if (!state.config.token) {
     setConn("unpaired", "Paste the pairing token printed by the bridge.");
@@ -86,12 +103,15 @@ function connect() {
       // ignore malformed frames
     }
   };
-  socket.onclose = () => {
+  socket.onclose = (e) => {
     peer.failAll("bridge connection closed");
     if (ws === socket) {
       ws = null;
       rpc = null;
-      if (state.conn !== "unpaired") {
+      if (e.code === CLOSE_REPLACED) {
+        setConn("replaced", REPLACED_MESSAGE);
+        void chrome.storage.session?.set({ replaced: true }).catch(() => {});
+      } else if (state.conn !== "unpaired") {
         setConn("disconnected", state.conn === "connected" ? "Lost the connection to the bridge." : "The bridge is not running.");
         scheduleReconnect();
       }
@@ -104,6 +124,7 @@ function reconnect() {
   retryTimer = null;
   retryDelay = 1000;
   state.conn = "disconnected";
+  void chrome.storage.session?.remove("replaced").catch(() => {});
   const old = ws;
   ws = null;
   rpc = null;
@@ -112,6 +133,22 @@ function reconnect() {
 }
 
 // ------------------------------------------------------------------ notebook frames
+
+/**
+ * Add the notebook's stable key. It comes from the tab's top-level URL: on
+ * Kaggle the notebook lives in an iframe that does not know which notebook it is.
+ */
+async function withKey(tabId: number, info: NotebookInfo, tabUrl?: string): Promise<NotebookInfo> {
+  let url = tabUrl;
+  if (!url) {
+    try {
+      url = (await chrome.tabs.get(tabId)).url;
+    } catch {
+      url = undefined;
+    }
+  }
+  return { ...info, key: notebookKey(info.platform, url ?? info.url, info.docPath) };
+}
 
 async function runOp(tabId: number, op: NotebookOp): Promise<unknown> {
   let t = tabs.get(tabId);
@@ -127,6 +164,7 @@ async function runOp(tabId: number, op: NotebookOp): Promise<unknown> {
   }
   if (!res) throw new Error("The notebook page did not answer.");
   if (!res.ok) throw new Error(res.error);
+  if (op.op === "info") return withKey(tabId, res.result as NotebookInfo);
   return res.result;
 }
 
@@ -142,7 +180,7 @@ async function discover(tabId: number): Promise<{ frameId: number; info: Noteboo
     try {
       const r = await chrome.tabs.sendMessage(tabId, { type: "ainb.ping" } satisfies BackgroundToContent, { frameId: f.frameId });
       if (r?.attached) {
-        const entry = { frameId: f.frameId, info: r.info as NotebookInfo };
+        const entry = { frameId: f.frameId, info: await withKey(tabId, r.info as NotebookInfo) };
         tabs.set(tabId, entry);
         return entry;
       }
@@ -157,9 +195,12 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender) => {
   const tabId = sender.tab?.id;
   if (tabId === undefined || sender.frameId === undefined) return;
   if (msg.type === "ainb.attached") {
-    tabs.set(tabId, { frameId: sender.frameId, info: msg.info });
-    rpc?.emit("notebook.attached", { tabId, info: msg.info });
-    broadcast({ event: "notebook", params: { tabId, info: msg.info } });
+    const frameId = sender.frameId;
+    void withKey(tabId, msg.info, sender.tab?.url).then((info) => {
+      tabs.set(tabId, { frameId, info });
+      rpc?.emit("notebook.attached", { tabId, info });
+      broadcast({ event: "notebook", params: { tabId, info } });
+    });
   } else if (msg.type === "ainb.event") {
     const t = tabs.get(tabId);
     if (t && msg.event.type === "selection_changed") {

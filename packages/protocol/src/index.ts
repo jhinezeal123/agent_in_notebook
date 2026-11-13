@@ -6,3 +6,4 @@ export * from "./rpc.js";
 export * from "./text.js";
 export * from "./outputs.js";
 export * from "./launch.js";
+export * from "./identity.js";

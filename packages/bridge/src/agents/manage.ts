@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { parseLaunchCommand } from "@ainb/protocol";
 import { dataDir, loadCustomAgents, saveCustomAgent } from "../config.js";
@@ -38,5 +38,14 @@ export async function testAgent(commandLine: string) {
     return { name: agent.init?.agentInfo?.title ?? agent.init?.agentInfo?.name ?? "ACP agent", options: agent.options() };
   } finally {
     agent.dispose();
+    // The agent may still hold the directory for a moment on Windows; the
+    // bridge prunes leftovers at startup.
+    setTimeout(() => {
+      try {
+        rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      } catch {
+        // pruned later
+      }
+    }, 500).unref();
   }
 }

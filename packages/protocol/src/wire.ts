@@ -45,6 +45,9 @@ export interface AgentOption {
 
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
 
+/** `discarded`: the page reloaded or navigated away before the user decided; nothing was applied. */
+export type ReviewStatus = "pending" | "accepted" | "rejected" | "discarded";
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
@@ -74,7 +77,7 @@ export type Part =
       /** Option chosen, or "cancelled". Absent while waiting. */
       answer?: string;
     }
-  | { type: "review"; review: ReviewInfo; status: "pending" | "accepted" | "rejected" }
+  | { type: "review"; review: ReviewInfo; status: ReviewStatus }
   | { type: "notice"; level: "info" | "error"; text: string };
 
 export interface ChatMessage {
@@ -91,6 +94,8 @@ export interface ChatSnapshot {
   tabId: number;
   agentId: string;
   agentName: string;
+  /** The notebook this chat belongs to (absent for chats opened without one). */
+  notebookKey?: string;
   status: ChatStatus;
   error?: string;
   settings: ChatSettings;
@@ -109,7 +114,8 @@ export interface BridgeMethods {
   "agents.remove": { params: { id: string }; result: { removed: boolean } };
   "agents.test": { params: { launchCommand: string }; result: { name: string; options: AgentOption[] } };
   "chat.open": {
-    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform };
+    /** With a notebookKey the chat is saved and restored per notebook. */
+    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string };
     result: ChatSnapshot;
   };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };

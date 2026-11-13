@@ -25,6 +25,8 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 - Trên Kaggle/Jupyter, extension chèn thẻ diff vào ngay trên cell.
 - Đổi mode giữa chừng có hiệu lực ngay từ lời gọi tool tiếp theo của agent.
 - Đổi agent giữa cuộc trò chuyện được: agent mới nhận tóm tắt cuộc trò chuyện. Agent bị crash sẽ được khởi động lại kèm tóm tắt.
+- Mỗi notebook có cuộc trò chuyện riêng, được lưu lại: reload tab, đóng tab rồi mở lại, hay khởi động lại bridge đều thấy lại lịch sử (agent nhận tóm tắt). Mở notebook khác trong cùng tab thì chat của notebook cũ được lưu và đóng lại. Nút **＋ (New chat)** xóa lịch sử đã lưu của notebook đó.
+- Trang notebook reload khi một thay đổi đang chờ duyệt thì thay đổi đó được đánh dấu **Discarded** (không áp dụng) và agent được báo để đọc lại notebook.
 - Chọn model, effort, mode riêng của từng agent ngay trong side panel (lấy từ agent qua ACP).
 - Khi agent muốn dùng tool của chính nó (shell, đọc file…), yêu cầu xin quyền được chuyển lên side panel để bạn quyết.
 
@@ -90,7 +92,9 @@ jupyter notebook --JupyterNotebookApp.expose_app_in_browser=True
 
 - Bridge chỉ nghe trên `127.0.0.1`. WebSocket chỉ nhận origin `chrome-extension://` **và** đúng pairing token, nên trang web lạ không gọi vào được.
 - Mỗi chat có một token riêng cho MCP relay. Relay từ chối mọi request có header `Origin` (tức là đến từ trình duyệt).
-- Agent chạy trong thư mục riêng `~/.agent-in-notebook/workspaces/<chat>`. Bridge không sửa config của agent. Mọi yêu cầu xin quyền của agent đều tới tay bạn, và yêu cầu nào không được trả lời thì bị từ chối.
+- Agent chạy trong thư mục riêng `~/.agent-in-notebook/workspaces/<notebook>` (mỗi notebook một thư mục). Bridge không sửa config của agent.
+- Lịch sử chat được lưu ở `~/.agent-in-notebook/chats/` (tối đa 200 tin nhắn gần nhất mỗi notebook). Lịch sử và thư mục làm việc không được dùng trong 30 ngày sẽ bị xóa khi bridge khởi động.
+- Chỉ một cửa sổ/profile Chrome được nối với bridge tại một thời điểm. Khi profile khác kết nối, profile cũ dừng lại và không tự giành lại kết nối; bấm **Connect here** để lấy lại. Mọi yêu cầu xin quyền của agent đều tới tay bạn, và yêu cầu nào không được trả lời thì bị từ chối.
 - Page script chỉ gửi lên dữ liệu notebook và kết quả op, không thể gửi lệnh chat tới bridge.
 
 ## Phát triển

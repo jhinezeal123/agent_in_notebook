@@ -11,7 +11,8 @@ export interface NotebookAdapter {
   setSource(cellId: string, source: string): boolean;
   insertCell(index: number, type: CellType, source: string): Promise<string>;
   deleteCell(cellId: string): void;
-  moveCell(cellId: string, index: number): number;
+  /** Resolves to the index the cell ended up at. */
+  moveCell(cellId: string, index: number): number | Promise<number>;
   /** Run one code cell; resolves when it finishes or `timeoutMs` passes (the cell keeps running). */
   runCell(cellId: string, timeoutMs: number): Promise<RunResult>;
   interrupt(): boolean;
@@ -90,7 +91,7 @@ export class OpRunner {
         return { applied: false, reviewId };
       }
       case "move_cell":
-        return { index: a.moveCell(op.cellId, op.index) };
+        return { index: await a.moveCell(op.cellId, op.index) };
       case "run_cells": {
         const deadline = Date.now() + op.timeoutMs;
         const results: RunResult[] = [];

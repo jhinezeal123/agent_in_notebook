@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import {
+  capText,
   decide,
   firstLine,
   outputsToText,
@@ -19,7 +20,7 @@ import {
   type ToolAction,
 } from "@ainb/protocol";
 
-export type ReviewOutcome = "accepted" | "rejected" | "pending";
+export type ReviewOutcome = "accepted" | "rejected" | "pending" | "discarded";
 
 export interface ToolContext {
   settings(): ChatSettings;
@@ -59,16 +60,48 @@ function check(ctx: ToolContext, action: ToolAction, cellId: string | null) {
 }
 
 const OUTPUT_MAX = 6000;
+/** One cell's source shown to the agent; longer sources keep head and tail. */
+const SOURCE_MAX = 20_000;
+/** Total text one read returns, so a big notebook cannot flood the agent's context. */
+export const READ_BUDGET = 60_000;
 
 function renderCell(c: CellInfo, withOutputs: boolean): string {
   const exec = c.type === "code" ? ` exec=${c.executionCount ?? "-"}${c.running ? " RUNNING" : ""}` : "";
   const pending = c.pendingReview ? " (change awaiting user review)" : "";
-  let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}\n${c.source}`;
+  const long = c.source.length > SOURCE_MAX;
+  const source = long ? capText(c.source, SOURCE_MAX) : c.source;
+  const note = long ? ` (source is ${c.source.length} characters, shown shortened; edit_cell needs text from the shown parts)` : "";
+  let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}${note}\n${source}`;
   if (withOutputs && c.type === "code") {
     const out = c.outputs?.length ? outputsToText(c.outputs, OUTPUT_MAX) : "";
     s += `\n--- output ---\n${out || "(no output)"}`;
   }
   return s;
+}
+
+/**
+ * Join rendered cells until the budget is spent. The first cell is always
+ * shown; the rest is named so the agent can ask for it.
+ */
+function joinWithinBudget(cells: CellInfo[], render: (c: CellInfo) => string, sep: string, budget = READ_BUDGET): string {
+  const out: string[] = [];
+  let used = 0;
+  for (const [i, c] of cells.entries()) {
+    const text = render(c);
+    if (i > 0 && used + text.length > budget) {
+      const rest = cells.slice(i);
+      const first = rest[0]!;
+      const last = rest.at(-1)!;
+      out.push(
+        `… ${rest.length} more cell${rest.length === 1 ? "" : "s"} not shown to keep this short ([${first.index}]..[${last.index}]). ` +
+          `Ask for them with read_cells using start_index=${first.index}, or by cell_ids.`,
+      );
+      break;
+    }
+    out.push(text);
+    used += text.length + sep.length;
+  }
+  return out.join(sep);
 }
 
 function renderRun(r: RunResult): string {
@@ -88,6 +121,12 @@ function reviewText(outcome: ReviewOutcome, what: string, reviewId: string): Too
   if (outcome === "accepted") return { text: `${what}: the user accepted the change; it is applied.` };
   if (outcome === "rejected") {
     return { text: `${what}: the user REJECTED the change, so nothing was applied. Do not retry the same change; ask the user what they want instead.` };
+  }
+  if (outcome === "discarded") {
+    return {
+      text: `${what}: the notebook page reloaded or navigated away before the user decided, so the change was not applied. Read the notebook again before proposing it anew.`,
+      isError: true,
+    };
   }
   return {
     text: `${what}: the change is shown to the user and still awaiting review (review_id "${reviewId}"). Call await_review with this review_id to wait for the decision before depending on it.`,
@@ -113,12 +152,12 @@ export const TOOLS = [
     async run(ctx) {
       const { cells } = await ctx.call({ op: "get_cells" });
       if (!cells.length) return { text: "The notebook has no cells." };
-      const lines = cells.map((c) => {
+      const line = (c: CellInfo) => {
         const exec = c.type === "code" ? ` [${c.running ? "*" : (c.executionCount ?? " ")}]` : "";
         const lines = c.source ? c.source.split("\n").length : 0;
         return `[${c.index}] ${c.id} ${c.type}${exec} (${lines} lines)${c.pendingReview ? " (pending review)" : ""}: ${firstLine(c.source) || "(empty)"}`;
-      });
-      return { text: lines.join("\n") };
+      };
+      return { text: joinWithinBudget(cells, line, "\n") };
     },
   }),
   tool({
@@ -134,7 +173,7 @@ export const TOOLS = [
       const includeOutputs = a.include_outputs ?? true;
       const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, start: a.start_index, end: a.end_index, includeOutputs });
       if (!cells.length) return { text: "No matching cells." };
-      return { text: cells.map((c) => renderCell(c, includeOutputs)).join("\n\n") };
+      return { text: joinWithinBudget(cells, (c) => renderCell(c, includeOutputs), "\n\n") };
     },
   }),
   tool({
@@ -253,7 +292,7 @@ export const TOOLS = [
       for (;;) {
         const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
         if (!cells.some((c) => c.running) || Date.now() >= deadline) {
-          return { text: cells.map((c) => renderCell(c, true)).join("\n\n") };
+          return { text: joinWithinBudget(cells, (c) => renderCell(c, true), "\n\n") };
         }
         await new Promise((r) => setTimeout(r, 1000));
       }

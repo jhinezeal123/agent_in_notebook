@@ -1,7 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useMemo, useState } from "preact/hooks";
-import { diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo } from "@ainb/protocol";
+import { diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -134,8 +134,13 @@ function Prompt({ part, actions }: { part: Extract<Part, { type: "prompt" }>; ac
 }
 
 const REVIEW_TITLE: Record<ReviewInfo["kind"], string> = { update: "Change", insert: "New cell", delete: "Delete cell" };
+const REVIEW_BADGE: Record<Exclude<ReviewStatus, "pending">, { text: string; title?: string }> = {
+  accepted: { text: "Applied" },
+  rejected: { text: "Rejected" },
+  discarded: { text: "Discarded", title: "The notebook page reloaded before this change was decided; it was not applied." },
+};
 
-export function Review({ review, status, actions }: { review: ReviewInfo; status: "pending" | "accepted" | "rejected"; actions: PartActions }) {
+export function Review({ review, status, actions }: { review: ReviewInfo; status: ReviewStatus; actions: PartActions }) {
   const lines = useMemo(() => diffLines(review.before, review.after), [review]);
   const stats = diffStats(lines);
   const rows = useMemo(() => withContext(lines, review.kind === "update" ? 2 : 1_000_000), [lines, review.kind]);
@@ -155,7 +160,11 @@ export function Review({ review, status, actions }: { review: ReviewInfo; status
         <span class="stats">
           <span class="add">+{stats.added}</span> <span class="del">−{stats.removed}</span>
         </span>
-        {status !== "pending" && <span class={`badge ${status}`}>{status === "accepted" ? "Applied" : "Rejected"}</span>}
+        {status !== "pending" && (
+          <span class={`badge ${status}`} title={REVIEW_BADGE[status].title}>
+            {REVIEW_BADGE[status].text}
+          </span>
+        )}
       </div>
       {expanded && (
         <div class="diff">

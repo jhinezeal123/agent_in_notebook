@@ -121,7 +121,8 @@ button.icon:hover { background: var(--bg-3); }
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; }
 .badge.accepted { background: var(--add-bg); color: var(--ok); }
 .badge.rejected { background: var(--del-bg); color: var(--err); }
-.review.rejected .diff { opacity: 0.6; }
+.badge.discarded { background: var(--bg-3); color: var(--muted); }
+.review.rejected .diff, .review.discarded .diff { opacity: 0.6; }
 .diff { font-family: var(--mono); font-size: 12px; max-height: 300px; overflow: auto; border-top: 1px solid var(--border); }
 .row { display: flex; white-space: pre; }
 .row .sign { width: 16px; flex: none; text-align: center; color: var(--muted); user-select: none; }
@@ -169,7 +170,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .field { display: flex; flex-direction: column; gap: 3px; margin: 10px 0; font-size: 12px; color: var(--muted); }
 .field input { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); font-size: 13px; color: var(--fg); }
 .status { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
-.status.unpaired { color: var(--warn); }
+.status.unpaired, .status.replaced { color: var(--warn); }
 
 .agent-manager { width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); }
 .agent-manager::backdrop { background: rgba(0, 0, 0, .45); }

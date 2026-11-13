@@ -2,7 +2,8 @@
 
 import type { AgentInfo, ChatSettings, NotebookInfo, Scope } from "@ainb/protocol";
 
-export type ConnState = "disconnected" | "connecting" | "connected" | "unpaired";
+/** `replaced`: another browser window or profile took over the bridge; no automatic reconnect. */
+export type ConnState = "disconnected" | "connecting" | "connected" | "unpaired" | "replaced";
 
 export interface BridgeState {
   conn: ConnState;

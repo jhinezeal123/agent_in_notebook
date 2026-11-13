@@ -2,7 +2,7 @@
 // record shown to the user; the agent's own session is only its context.
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer, RequestPermissionRequest, RequestPermissionResponse, SessionNotification, ToolCallContent } from "@agentclientprotocol/sdk";
 import {
@@ -25,6 +25,7 @@ import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
 import { playbook, recap, turnContext } from "./instructions.js";
 import { callTool, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
+import { keyHash } from "./store.js";
 
 /** How the chat reaches the page and the side panel. */
 export interface ChatHost {
@@ -33,11 +34,25 @@ export interface ChatHost {
   /** MCP server entry handed to the agent; it relays tool calls back to this chat. */
   mcpServer(chatToken: string): McpServer;
   workspaceRoot: string;
+  /** Save the transcript (called debounced as it changes, and on close). */
+  persist?(chat: Chat): void;
+}
+
+export interface ChatOptions {
+  /** The notebook the chat belongs to; it names the agent's working directory and the saved transcript. */
+  notebookKey?: string;
+  /** Transcript carried over from an earlier chat (agent switch or restore). */
+  carried?: ChatMessage[];
+  /** System notice explaining where the carried transcript came from. */
+  note?: string;
 }
 
 const TOOL_DETAIL_MAX = 4000;
 const FLUSH_MS = 80;
 const OP_TIMEOUT_MS = 30_000;
+const PERSIST_MS = 1_000;
+/** Decided reviews kept so a late await_review still gets the answer. */
+const REVIEWS_KEPT = 200;
 
 interface ReviewState {
   outcome: ReviewOutcome;
@@ -52,6 +67,7 @@ export class Chat {
   error: string | undefined;
   messages: ChatMessage[] = [];
   notebook: NotebookInfo | null = null;
+  readonly notebookKey: string | undefined;
 
   private agent: AcpAgent | null = null;
   private starting: Promise<void> | null = null;
@@ -67,18 +83,23 @@ export class Chat {
   private prompts = new Map<string, (optionId: string) => void>();
   private dirty = new Set<ChatMessage>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set when the user starts over: the transcript must not be saved again. */
+  private forgotten = false;
 
   constructor(
     readonly tabId: number,
     readonly spec: AgentSpec,
     public settings: ChatSettings,
     private readonly host: ChatHost,
-    carried: ChatMessage[] = [],
+    opts: ChatOptions = {},
   ) {
+    this.notebookKey = opts.notebookKey;
+    const carried = opts.carried ?? [];
     if (carried.length) {
       this.messages = carried;
       this.pendingRecap = recap(carried);
-      this.system(`Switched to ${spec.name}. It gets a summary of the conversation so far.`);
+      this.system(opts.note ?? `Switched to ${spec.name}. It gets a summary of the conversation so far.`);
     }
   }
 
@@ -90,6 +111,7 @@ export class Chat {
       tabId: this.tabId,
       agentId: this.spec.id,
       agentName: this.spec.name,
+      notebookKey: this.notebookKey,
       status: this.status,
       error: this.error,
       settings: this.settings,
@@ -121,8 +143,16 @@ export class Chat {
       throw new Error(resolved.missing);
     }
     this.setStatus("starting");
-    const cwd = join(this.host.workspaceRoot, this.id);
+    // One working directory per notebook, so agents that key their own state by
+    // directory see the same place each time. Touched so pruning spares it.
+    const cwd = join(this.host.workspaceRoot, this.notebookKey ? keyHash(this.notebookKey) : this.id);
     mkdirSync(cwd, { recursive: true });
+    try {
+      const now = new Date();
+      utimesSync(cwd, now, now);
+    } catch {
+      // best effort
+    }
     const agent = new AcpAgent(resolved.launch, {
       onUpdate: (n) => this.onUpdate(n),
       onPermission: (req, signal) => this.onPermission(req, signal),
@@ -156,7 +186,9 @@ export class Chat {
     }
   }
 
-  close(): void {
+  /** Stop the agent. `forget` drops the transcript instead of saving it (the user started a new chat). */
+  close(opts: { forget?: boolean } = {}): void {
+    if (opts.forget) this.forgotten = true;
     this.closed = true;
     this.turn?.controller.abort();
     this.queue = [];
@@ -165,6 +197,7 @@ export class Chat {
     this.agent?.dispose();
     this.agent = null;
     this.setStatus("closed");
+    this.persistNow();
   }
 
   // ------------------------------------------------------------ turns
@@ -217,6 +250,8 @@ export class Chat {
       this.closeOpenTools(reply);
       this.current = null;
       this.turn = null;
+      this.rawInputs.clear();
+      this.orphanCalls = [];
       this.flush();
       const next = this.queue.shift();
       if (next !== undefined && !this.closed) void this.runTurn(next);
@@ -486,26 +521,48 @@ export class Chat {
         this.touch(msg);
         return;
       }
-      case "review_closed": {
-        const state = this.reviewState(event.reviewId);
-        state.outcome = event.accepted ? "accepted" : "rejected";
-        state.waiters.forEach((w) => w(state.outcome));
-        state.waiters.clear();
-        for (const m of this.messages) {
-          for (const p of m.parts) {
-            if (p.type === "review" && p.review.reviewId === event.reviewId) {
-              p.status = state.outcome as "accepted" | "rejected";
-              this.touch(m);
-            }
-          }
-        }
+      case "review_closed":
+        this.closeReview(event.reviewId, event.accepted ? "accepted" : "rejected");
         return;
-      }
       case "selection_changed":
         if (this.notebook) {
           this.notebook = { ...this.notebook, activeCellId: event.activeCellId, selectedCellIds: event.selectedCellIds };
         }
         return;
+    }
+  }
+
+  /**
+   * The page went away (reload, navigation): reviews it was showing are gone
+   * with it and can never be decided, so tell whoever waits on them.
+   */
+  onNotebookDetached(): void {
+    this.notebook = null;
+    for (const [id, state] of this.reviews) if (state.outcome === "pending") this.closeReview(id, "discarded");
+  }
+
+  private closeReview(reviewId: string, outcome: Exclude<ReviewOutcome, "pending">): void {
+    const state = this.reviewState(reviewId);
+    if (state.outcome !== "pending") return;
+    state.outcome = outcome;
+    state.waiters.forEach((w) => w(outcome));
+    state.waiters.clear();
+    for (const m of this.messages) {
+      for (const p of m.parts) {
+        if (p.type === "review" && p.review.reviewId === reviewId && p.status === "pending") {
+          p.status = outcome;
+          this.touch(m);
+        }
+      }
+    }
+    this.pruneReviews();
+  }
+
+  private pruneReviews(): void {
+    if (this.reviews.size <= REVIEWS_KEPT) return;
+    for (const [id, state] of this.reviews) {
+      if (this.reviews.size <= REVIEWS_KEPT) break;
+      if (state.outcome !== "pending") this.reviews.delete(id);
     }
   }
 
@@ -583,8 +640,24 @@ export class Chat {
   private flush(): void {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
+    if (!this.dirty.size) return;
     for (const m of this.dirty) this.host.emit("chat.message", { chatId: this.id, tabId: this.tabId, message: m });
     this.dirty.clear();
+    this.schedulePersist();
+  }
+
+  private schedulePersist(): void {
+    if (!this.host.persist || this.persistTimer || this.forgotten) return;
+    this.persistTimer = setTimeout(() => this.persistNow(), PERSIST_MS);
+    this.persistTimer.unref?.();
+  }
+
+  /** Save now (on close, or when the debounce fires). */
+  persistNow(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    if (this.forgotten) return;
+    this.host.persist?.(this);
   }
 
   private setStatus(status: ChatStatus, error?: string): void {

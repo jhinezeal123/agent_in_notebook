@@ -101,18 +101,20 @@ export function App() {
   }, []);
 
   const settings: ChatSettings = chat?.settings ?? { scope: prefs.scope, review: prefs.review, targetCellIds: [] };
-  const live = chat && chat.status !== "closed" ? chat : null;
+  // A chat belongs to one notebook: when another notebook fills the tab, the
+  // old chat is not shown and a chat for the new notebook is opened (or restored).
+  const live = chat && chat.status !== "closed" && (!chat.notebookKey || !notebook?.key || chat.notebookKey === notebook.key) ? chat : null;
 
   // ACP exposes model choices when the session opens, before any prompt.
   useEffect(() => {
     if (!connected || !prefsReady || tabId === null || loadedTab !== tabId || !notebook || live?.agentId === prefs.agentId) return;
     if (!bridge?.agents.some((a) => a.id === prefs.agentId && a.available)) return;
     let stale = false;
-    void client.request<ChatSnapshot>("chat.open", { tabId, agentId: prefs.agentId, settings, platform: notebook.platform }).then((snap) => {
+    void client.request<ChatSnapshot>("chat.open", { tabId, agentId: prefs.agentId, settings, platform: notebook.platform, notebookKey: notebook.key }).then((snap) => {
       if (!stale && tabRef.current === tabId && agentRef.current === snap.agentId) setChat(snap);
     }, (e) => { if (!stale) setError((e as Error).message); });
     return () => { stale = true; };
-  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, prefs.agentId, live?.agentId, bridge?.agents]);
+  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, notebook?.key, prefs.agentId, live?.agentId, bridge?.agents]);
 
   const updateSettings = (s: ChatSettings) => {
     setPrefs({ scope: s.scope, review: s.review });
@@ -121,7 +123,7 @@ export function App() {
 
   const openChat = async (agentId: string): Promise<ChatSnapshot | undefined> => {
     if (tabId === null || !notebook) return undefined;
-    const snap = await run(client.request<ChatSnapshot>("chat.open", { tabId, agentId, settings, platform: notebook.platform }));
+    const snap = await run(client.request<ChatSnapshot>("chat.open", { tabId, agentId, settings, platform: notebook.platform, notebookKey: notebook.key }));
     if (snap && tabRef.current === tabId && agentRef.current === agentId) setChat(snap);
     return snap;
   };
@@ -169,7 +171,7 @@ export function App() {
         {live && (
           <button
             class="icon"
-            title="New chat"
+            title="New chat (clears the saved conversation for this notebook)"
             aria-label="New chat"
             onClick={() => void run(client.request("chat.close", { chatId: live.chatId })).then(() => setChat(null))}
           >
@@ -430,7 +432,7 @@ function Setup({ bridge }: { bridge: BridgeState }) {
           setSaving(false);
         }}
       >
-        {bridge.conn === "connecting" ? "Connecting…" : "Connect"}
+        {bridge.conn === "connecting" ? "Connecting…" : bridge.conn === "replaced" ? "Connect here" : "Connect"}
       </button>
       <p class={`status ${bridge.conn}`}>
         {bridge.conn === "connecting" ? "Connecting…" : bridge.error ?? (bridge.conn === "unpaired" ? "Not paired yet." : "Not connected.")}

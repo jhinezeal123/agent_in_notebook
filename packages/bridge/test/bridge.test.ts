@@ -2,12 +2,13 @@
 // scripted ACP agent (child process) -> `ainb mcp` relay (child process of the
 // agent) -> bridge -> fake extension's notebook.
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { formatLaunchCommand, type AgentInfo, type ChatSettings, type ChatSnapshot, type Part } from "@ainb/protocol";
 import { Bridge } from "../src/server.js";
+import { keyHash } from "../src/store.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
 
 const TOKEN = "test-token-0123456789abcdef";
@@ -363,6 +364,114 @@ describe("review", () => {
     expect(text).toContain("The user declined to run these cells");
     expect(text).toContain("cell c1: ok");
     expect(nb.ran).toEqual(["c1"]);
+    ext.close();
+  });
+});
+
+describe("chats follow the notebook", () => {
+  async function openKeyed(target: Bridge, targetPort: number, key: string, cells: { type: "code" | "markdown"; source: string }[] = []) {
+    const nb = new FakeNotebook(cells);
+    const ext = new FakeExtension(nb, nextTab++);
+    await ext.connect(targetPort, TOKEN);
+    const snap = await ext.request<ChatSnapshot>("chat.open", {
+      tabId: ext.tabId,
+      agentId: "fake",
+      settings: { scope: "write", review: false, targetCellIds: [] },
+      platform: "colab",
+      notebookKey: key,
+    });
+    await ext.waitFor(() => ext.statuses.includes("idle"), 30_000, "agent start");
+    return { nb, ext, snap };
+  }
+
+  it("saves the conversation and restores it after the bridge restarts", async () => {
+    const key = `colab:/drive/restore-${Date.now()}`;
+    const { ext, snap } = await openKeyed(bridge, port, key);
+    await turn(ext, snap.chatId, "remember the word MANGO");
+    // Saved shortly after it changes, without waiting for the chat to close.
+    const file = join(process.env.AINB_HOME!, "chats", `${keyHash(key)}.json`);
+    await ext.waitFor(() => existsSync(file), 5_000, "transcript saved");
+    ext.close();
+
+    const second = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {} });
+    const secondPort = await second.listen();
+    try {
+      const { ext: ext2, snap: restored } = await openKeyed(second, secondPort, key);
+      expect(restored.chatId).not.toBe(snap.chatId);
+      expect(JSON.stringify(restored.messages)).toContain("remember the word MANGO");
+      expect(restored.messages.at(-1)?.role).toBe("system");
+      const text = await turn(ext2, restored.chatId, "what was the word");
+      expect(text).toContain("[saw recap]");
+      ext2.close();
+    } finally {
+      await second.close();
+    }
+  });
+
+  it("starts over on New chat, forgetting the saved conversation", async () => {
+    const key = `colab:/drive/forget-${Date.now()}`;
+    const { ext, snap } = await openKeyed(bridge, port, key);
+    await turn(ext, snap.chatId, "something to forget");
+    await ext.request("chat.close", { chatId: snap.chatId });
+    const fresh = await ext.request<ChatSnapshot>("chat.open", {
+      tabId: ext.tabId,
+      agentId: "fake",
+      settings: { scope: "write", review: false, targetCellIds: [] },
+      platform: "colab",
+      notebookKey: key,
+    });
+    expect(fresh.messages).toEqual([]);
+    expect(existsSync(join(process.env.AINB_HOME!, "chats", `${keyHash(key)}.json`))).toBe(false);
+    ext.close();
+  });
+
+  it("closes the chat when another notebook fills the tab", async () => {
+    const key = `colab:/drive/first-${Date.now()}`;
+    const { nb, ext, snap } = await openKeyed(bridge, port, key, [{ type: "code", source: "a = 1" }]);
+    await turn(ext, snap.chatId, "about the first notebook");
+    // Same notebook announced again (reload): the chat stays.
+    ext.rpc.emit("notebook.attached", { tabId: ext.tabId, info: { ...nb.info(), key } });
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await ext.request<ChatSnapshot>("chat.get", { tabId: ext.tabId }))?.status).toBe("idle");
+
+    ext.rpc.emit("notebook.attached", { tabId: ext.tabId, info: { ...nb.info(), key: "colab:/drive/second" } });
+    await ext.waitFor(() => ext.snapshots.some((s) => s.chatId === snap.chatId && s.status === "closed"), 5_000, "old chat closed");
+    await expect(ext.request("chat.send", { chatId: snap.chatId, text: "hi" })).rejects.toThrow(/no longer exists/);
+    const other = await ext.request<ChatSnapshot>("chat.open", {
+      tabId: ext.tabId,
+      agentId: "fake",
+      settings: { scope: "write", review: false, targetCellIds: [] },
+      platform: "colab",
+      notebookKey: "colab:/drive/second",
+    });
+    expect(JSON.stringify(other.messages)).not.toContain("about the first notebook");
+    ext.close();
+  });
+
+  it("discards a pending review when the page goes away", async () => {
+    const { nb, ext, chatId } = await setup([{ type: "code", source: "x = 1" }], { review: true });
+    const before = ext.statuses.length;
+    await ext.request("chat.send", { chatId, text: script([{ tool: "update_cell", args: { cell_id: "c1", source: "x = 9" } }]) });
+    await ext.waitFor(() => ext.parts().some((p) => p.type === "review"), 20_000, "review opened");
+    ext.rpc.emit("notebook.detached", { tabId: ext.tabId });
+    await ext.waitFor(() => ext.statuses.slice(before).includes("idle"), 20_000, "turn end");
+    expect(ext.agentText()).toContain("RESULT update_cell (error): Change to cell c1: the notebook page reloaded or navigated away");
+    const review = ext.parts().find((p): p is Extract<Part, { type: "review" }> => p.type === "review")!;
+    expect(review.status).toBe("discarded");
+    expect(nb.cells[0]!.source).toBe("x = 1");
+    ext.close();
+  });
+
+  it("keeps a read of a large notebook within budget and says how to get the rest", async () => {
+    const big = "y = 0\n".repeat(1500); // ~9k characters per cell
+    const { ext, chatId } = await setup([
+      { type: "code", source: "z".repeat(50_000) },
+      ...Array.from({ length: 12 }, () => ({ type: "code" as const, source: big })),
+    ]);
+    const text = await turn(ext, chatId, script([{ tool: "read_cells", args: {} }]));
+    expect(text).toContain("shown shortened");
+    expect(text).toMatch(/more cells not shown to keep this short \(\[\d+\]\.\.\[12\]\)\. Ask for them with read_cells using start_index=\d+/);
+    expect(text.length).toBeLessThan(80_000);
     ext.close();
   });
 });

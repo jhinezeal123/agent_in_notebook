@@ -41,6 +41,10 @@ export interface NotebookInfo {
   selectedCellIds: string[];
   kernel: KernelState;
   language: string;
+  /** Path of the document inside the notebook server (Jupyter), to tell notebooks apart. */
+  docPath?: string;
+  /** Stable identity of the notebook (see notebookKey), added by the extension from the tab URL. */
+  key?: string;
 }
 
 export interface RunResult {

@@ -13,6 +13,7 @@ import {
   RpcPeer,
   WIRE_VERSION,
   type BridgeMethods,
+  type ChatMessage,
   type ChatSettings,
   type Envelope,
   type ExtensionEvents,
@@ -23,6 +24,12 @@ import { Chat, type ChatHost } from "./chat.js";
 import { BRIDGE_VERSION, dataDir, removeCustomAgent } from "./config.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
+import { ChatStore, pruneDir } from "./store.js";
+
+/** Saved transcripts and agent working directories untouched this long are deleted at startup. */
+const KEEP_MS = 30 * 24 * 3600_000;
+/** Leftovers of "Test connection" (normally removed right away). */
+const PROBE_KEEP_MS = 3600_000;
 
 export interface BridgeOptions {
   port: number;
@@ -42,10 +49,20 @@ export class Bridge {
   private byToken = new Map<string, Chat>();
   private pingTimer: ReturnType<typeof setInterval>;
   private readonly log: (msg: string) => void;
+  private readonly store: ChatStore;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
     this.log = opts.log ?? ((m) => console.log(m));
+    this.store = new ChatStore(join(dataDir(), "chats"));
+    try {
+      this.store.prune(KEEP_MS);
+      const workspaces = join(dataDir(), "workspaces");
+      pruneDir(workspaces, KEEP_MS);
+      pruneDir(workspaces, PROBE_KEEP_MS, (name) => !name.startsWith("probe-"));
+    } catch (e) {
+      this.log(`Could not clean old data: ${(e as Error).message}`);
+    }
     this.server = createServer((req, res) => void this.onHttp(req, res));
     // Tool calls can wait on the user for minutes.
     this.server.requestTimeout = 0;
@@ -187,14 +204,26 @@ export class Bridge {
       guard<"chat.open">(async (p) => {
         const spec = findAgent(p.agentId);
         if (!spec) throw new Error(`Unknown agent ${p.agentId}`);
+        const key = typeof p.notebookKey === "string" && p.notebookKey ? p.notebookKey.slice(0, 2000) : undefined;
         const existing = this.chats.get(p.tabId);
-        if (existing && existing.spec.id === p.agentId && existing.status !== "closed") return existing.snapshot();
-        let carried = existing ? existing.messages : [];
-        if (existing) this.dropChat(existing);
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(), carried);
+        if (existing && existing.spec.id === p.agentId && existing.notebookKey === key && existing.status !== "closed") return existing.snapshot();
+        let carried: ChatMessage[] = [];
+        let note: string | undefined;
+        if (existing) {
+          this.dropChat(existing);
+          // Same notebook, other agent: hand the conversation over.
+          if (existing.notebookKey === key) carried = existing.messages;
+        }
+        if (!carried.length && key) {
+          const stored = this.store.load(key);
+          if (stored?.messages.length) {
+            carried = stored.messages;
+            note = `Restored the earlier conversation about this notebook. ${spec.name} starts a new session and gets a summary of it.`;
+          }
+        }
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(), { notebookKey: key, carried, note });
         this.chats.set(p.tabId, chat);
         this.byToken.set(chat.mcpToken, chat);
-        carried = [];
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
         return chat.snapshot();
       }),
@@ -213,8 +242,10 @@ export class Bridge {
     rpc.handle(
       "chat.close",
       guard<"chat.close">((p) => {
+        // "New chat": the user starts over, so the saved transcript goes too.
         const chat = this.chatById(p.chatId);
-        this.dropChat(chat);
+        this.dropChat(chat, { forget: true });
+        if (chat.notebookKey) this.store.remove(chat.notebookKey);
         return { closed: true };
       }),
     );
@@ -250,11 +281,19 @@ export class Bridge {
     });
     rpc.on("notebook.attached", (p: ExtensionEvents["notebook.attached"]) => {
       const chat = authed() ? this.chats.get(p.tabId) : undefined;
-      if (chat) chat.notebook = p.info;
+      if (!chat) return;
+      if (chat.notebookKey && p.info?.key && chat.notebookKey !== p.info.key) {
+        // Another notebook now fills this tab. The chat belongs to the old one:
+        // save and close it so its agent cannot edit the new notebook.
+        this.dropChat(chat);
+        this.ext?.rpc.emit("chat.snapshot", chat.snapshot());
+        return;
+      }
+      chat.notebook = p.info;
     });
     rpc.on("notebook.detached", (p: ExtensionEvents["notebook.detached"]) => {
       const chat = authed() ? this.chats.get(p.tabId) : undefined;
-      if (chat) chat.notebook = null;
+      chat?.onNotebookDetached();
     });
   }
 
@@ -263,8 +302,8 @@ export class Bridge {
     throw new Error("This chat no longer exists. Start a new one.");
   }
 
-  private dropChat(chat: Chat): void {
-    chat.close();
+  private dropChat(chat: Chat, opts: { forget?: boolean } = {}): void {
+    chat.close(opts);
     this.byToken.delete(chat.mcpToken);
     if (this.chats.get(chat.tabId) === chat) this.chats.delete(chat.tabId);
   }
@@ -277,6 +316,14 @@ export class Bridge {
         return this.ext.rpc.request("notebook.op", { tabId, op }, timeoutMs);
       },
       emit: (event, params) => this.ext?.rpc.emit(event, params),
+      persist: (chat) => {
+        if (!chat.notebookKey || !chat.messages.length) return;
+        try {
+          this.store.save({ key: chat.notebookKey, agentId: chat.spec.id, title: chat.notebook?.title, messages: chat.messages });
+        } catch (e) {
+          this.log(`Could not save the chat transcript: ${(e as Error).message}`);
+        }
+      },
       mcpServer: (chatToken): McpServer => ({
         name: "notebook",
         command: this.opts.mcpCommand.command,
