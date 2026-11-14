@@ -72,23 +72,34 @@ export async function openKaggleNotebook(
   let url = NEW_NOTEBOOK;
   let result: KaggleNotebookLaunch = { state: "opened" };
   if (recover) {
+    // Recovery only saves a sign-in. When it fails, offer to open Chrome without it.
+    const unavailable = (reason: string): KaggleNotebookLaunch =>
+      ({ state: "unavailable", message: `${reason} You can open Chrome without recovering the session.` });
     let base: string;
     try {
       base = await baseUrl();
     } catch (error) {
-      return { state: "unavailable", message: `OpenResearch is needed to recover the Kaggle session. ${error instanceof Error ? error.message : String(error)}` };
+      return unavailable(`OpenResearch is needed to recover the Kaggle session. ${error instanceof Error ? error.message : String(error)}`);
     }
-    const response = await fetch(`${base}/api/settings/kaggle/recover-cookie/notebook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account: account.id, chromeProfile: profile }),
-      signal: AbortSignal.timeout(190_000),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${base}/api/settings/kaggle/recover-cookie/notebook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account: account.id, chromeProfile: profile }),
+        signal: AbortSignal.timeout(190_000),
+      });
+    } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+      return unavailable(timedOut
+        ? "OpenResearch took too long to recover the Kaggle session."
+        : "Could not reach OpenResearch to recover the Kaggle session.");
+    }
     if (response.status === 404 || response.status === 405) {
-      return { state: "unavailable", message: "Update OpenResearch to recover the Kaggle session from this Chrome profile." };
+      return unavailable("Update OpenResearch to recover the Kaggle session from this Chrome profile.");
     }
     const receipt = await response.json().catch(() => null) as { stage?: string; note?: string; error?: string } | null;
-    if (!response.ok) throw new Error(receipt?.error ?? `OpenResearch could not recover the Kaggle session (HTTP ${response.status}).`);
+    if (!response.ok) return unavailable(receipt?.error ?? `OpenResearch could not recover the Kaggle session (HTTP ${response.status}).`);
     const note = receipt?.note ?? "OpenResearch could not recover the Kaggle session.";
     switch (receipt?.stage) {
       case "retry": case "unavailable": return { state: receipt.stage, message: note };
@@ -97,7 +108,7 @@ export async function openKaggleNotebook(
         result = { state: "sign-in", message: note };
         break;
       case "refreshed": case "auto_login": case "browser_open": break;
-      default: throw new Error("OpenResearch did not confirm the Kaggle session.");
+      default: return unavailable("OpenResearch did not confirm the Kaggle session.");
     }
   }
   await mkdir(profile, { recursive: true });
