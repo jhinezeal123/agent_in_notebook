@@ -84,10 +84,29 @@ export type SelectedChat = { kind: "notebook"; tabId: number } | { kind: "resear
 
 /** Kernel environment: what runs on a notebook's machine when it attaches. */
 export interface KernelSetup {
+  /** For notebooks whose project has no script of its own. */
   script: string;
   runOnAttach: boolean;
   colab: boolean;
   kaggle: boolean;
+  /** Scripts of single projects, by OpenResearch project id. */
+  projects?: Record<string, string>;
+}
+
+/** A project a notebook can join (New Chat, Move to project). */
+export interface ProjectChoice {
+  id: string;
+  name: string;
+  repoPath: string;
+  updatedAt: number;
+}
+
+/** What OpenResearch says about an agent it also runs (its sign-in), for the notebook agent of the same name. */
+export interface AgentLogin {
+  agentId: string;
+  name: string;
+  state: "ready" | "needsLogin" | "unknown" | "unsupported";
+  note?: string;
 }
 
 export const DEFAULT_KERNEL_SETUP: KernelSetup = { script: "", runOnAttach: false, colab: true, kaggle: true };

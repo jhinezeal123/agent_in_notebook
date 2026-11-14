@@ -40,7 +40,7 @@ export const NO_LOCAL_NOTEBOOKS: LocalNotebooks = {
 /** Panel requests passed to the bridge as they are. */
 const BRIDGE_METHODS = new Set([
   "agents.list", "agents.save", "agents.remove", "agents.test", "chat.get", "chat.send",
-  "chat.cancel", "chat.settings", "chat.option", "chat.answer", "chat.review", "chat.undo",
+  "chat.cancel", "chat.settings", "chat.option", "chat.answer", "chat.review", "chat.undo", "chat.saveNotebook",
 ]);
 
 /** A notebook in a Chrome tab has the tab's id, negated, so it never meets an editor id. */

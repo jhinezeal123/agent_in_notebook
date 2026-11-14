@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { Message, PendingPrompt, type PartActions } from "./parts.js";
@@ -162,6 +162,18 @@ export function App() {
     });
   };
 
+  /** Move the notebook to another project (a quick pick in the editor). */
+  const moveProject = () => {
+    if (!live?.notebookKey) return;
+    void run(client.request<ChatProject | null>("project.move", { notebookKey: live.notebookKey, title: notebook?.title, url: notebook?.url, platform: notebook?.platform, current: live.project?.id ?? null }));
+  };
+  const [saving, setSaving] = useState(false);
+  const saveNotebook = () => {
+    if (!live || saving) return;
+    setSaving(true);
+    void run(client.request("chat.saveNotebook", { chatId: live.chatId })).finally(() => setSaving(false));
+  };
+
   const actions: PartActions = useMemo(
     () => ({
       answer: (promptId, optionId) => live && void run(client.request("chat.answer", { chatId: live.chatId, promptId, optionId })),
@@ -246,6 +258,9 @@ export function App() {
                 onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
                 onMirror={() => tabId !== null && void run(client.request("notebook.mirror", { tabId }))}
                 onSettings={updateSettings}
+                project={live?.project}
+                onShowProject={() => live?.project?.id && void run(client.request("project.show", { projectId: live.project.id }))}
+                onMoveProject={moveProject}
               />
             }
             tools={
@@ -285,6 +300,13 @@ export function App() {
             </label>
             {live?.status === "starting" && <span class="muted">Starting {live.agentName}…</span>}
             {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
+            {live?.project && (
+              <span class="project-actions">
+                <button class="linkish" disabled={saving || live.project.state !== "ready"} title={`Save this notebook, with its outputs, to the artifacts of ${live.project.name}`} onClick={saveNotebook}>
+                  <Icon name="save" /> {saving ? "Saving…" : "Save to project"}
+                </button>
+              </span>
+            )}
           </div>
         </footer>
       )}
@@ -331,7 +353,7 @@ function Picker({ label, value, options, onChange, disabled, title }: {
 }
 
 /** What the chat is about, shown as context chips at the top of the input box. */
-function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror, onSettings }: {
+function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror, onSettings, project, onShowProject, onMoveProject }: {
   notebook: NotebookInfo;
   tabId: number | null;
   choices: NotebookChoice[];
@@ -339,6 +361,9 @@ function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror,
   onPick: (tabId: number) => void;
   onMirror: () => void;
   onSettings: (s: ChatSettings) => void;
+  project?: ChatProject;
+  onShowProject: () => void;
+  onMoveProject: () => void;
 }) {
   const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
   const pinned = settings.targetCellIds.length > 0;
@@ -361,6 +386,14 @@ function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror,
         <button class="ctx-btn" title="Open this notebook in VS Code: edits and runs go to the Chrome tab" aria-label="Open in VS Code" onClick={onMirror}>
           <Icon name="open" />
         </button>
+      )}
+      {project && (
+        <span class={`ctx-chip project p-${project.state}`} title={projectTitle(project)}>
+          <Icon name="folder" />
+          <button class="ctx-name ctx-link" disabled={!project.id} onClick={onShowProject}>{project.name}{project.state === "pending" ? "…" : ""}</button>
+          {project.state !== "ready" && project.state !== "pending" && <Icon name="warning" class="warn" />}
+          <button class="ctx-btn" title="Move to project…" aria-label="Move to project" onClick={onMoveProject}><Icon name="swap" /></button>
+        </span>
       )}
       {settings.scope === "cell" && (
         <span class="ctx-chip cells" title={pinned ? "The agent may change these pinned cells" : "The agent may change the selected cell"}>
@@ -607,6 +640,14 @@ function Setup({ bridge }: { bridge: BridgeState }) {
       </div>
     </div>
   );
+}
+
+function projectTitle(p: ChatProject): string {
+  const base = `OpenResearch project: ${p.name}${p.scratch ? " (where notebooks go when no project was chosen)" : ""}`;
+  if (p.state === "pending") return `${base}\nWaiting for OpenResearch…`;
+  if (p.state === "missing") return `${base}\n${p.error ?? "This project no longer exists."} Move the notebook to another project.`;
+  if (p.state === "unavailable") return `${base}\nProject context unavailable: ${p.error ?? "OpenResearch is not running."}`;
+  return `${base}\nThe agent knows its experiments, runs and artifacts. Click to show it in the side bar.`;
 }
 
 function choiceLabel(c: NotebookChoice): string {

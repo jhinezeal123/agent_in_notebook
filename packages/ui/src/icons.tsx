@@ -15,6 +15,10 @@ const PATHS = {
   sparkle: "M8 2.5 9.3 6.7 13.5 8 9.3 9.3 8 13.5 6.7 9.3 2.5 8 6.7 6.7Z",
   warning: "M8 2.5 14 13H2ZM8 6.5v3M8 11.2v.3",
   cell: "M2.5 3.5h11v9h-11zM5 6.5h6M5 9.5h4",
+  folder: "M2 4.5A1 1 0 0 1 3 3.5h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z",
+  swap: "M3 5.5h9M9.5 3l2.5 2.5L9.5 8M13 10.5H4M6.5 8 4 10.5 6.5 13",
+  save: "M3 2.5h8l2 2v9H3ZM5.5 2.5v3h5v-3M5 13.5v-4h6v4",
+  flask: "M6 2.5h4M6.5 2.5v4L3 12.5a1 1 0 0 0 .9 1.5h8.2a1 1 0 0 0 .9-1.5L9.5 6.5v-4M5 10h6",
 } as const;
 
 export type IconName = keyof typeof PATHS;

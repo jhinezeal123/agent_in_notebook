@@ -30,6 +30,11 @@ export interface OrxOptions {
   log: (msg: string) => void;
   onStatus: (status: ResearchStatus) => void;
   onRun: (run: ResearchRun) => void;
+  /**
+   * Something of a project changed (its record, an experiment, a run, its
+   * artifacts); undefined: anything may have (the event stream reconnected).
+   */
+  onProjectChange?: (projectId: string | undefined) => void;
   /** Find orx (default: research.json, AINB_ORX, PATH, the usual install places). */
   locate?: () => OrxLaunch | { missing: string };
   /** Ports where an OpenResearch already running may answer (default: its default port). */
@@ -172,6 +177,8 @@ export class Orx {
     };
     const req = get(`${url}/api/events`, { headers: { accept: "text/event-stream" } }, (res) => {
       if (res.statusCode !== 200) { res.resume(); lost(); return; }
+      // Events missed while the stream was down are not replayed.
+      this.opts.onProjectChange?.(undefined);
       res.setEncoding("utf8");
       let buffer = "";
       res.on("data", (chunk: string) => {
@@ -197,12 +204,25 @@ export class Orx {
       if (line.startsWith("event:")) type = line.slice(6).trim();
       else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
     }
-    if (type !== "run.updated" || !data.length) return;
+    if (!data.length) return;
+    let body: Record<string, any>;
     try {
-      const run = toRun((JSON.parse(data.join("\n")) as { run?: unknown }).run);
-      if (run) this.opts.onRun(run);
+      body = JSON.parse(data.join("\n"));
     } catch {
-      // not JSON: skip
+      return; // not JSON: skip
+    }
+    const changed = (id: unknown) => this.opts.onProjectChange?.(typeof id === "string" ? id : undefined);
+    switch (type) {
+      case "run.updated": {
+        const run = toRun(body?.run);
+        if (run) this.opts.onRun(run);
+        changed(body?.run?.projectId);
+        return;
+      }
+      case "project.updated": changed(body?.project?.id); return;
+      case "experiment.updated": changed(body?.experiment?.projectId); return;
+      case "files.updated": changed(body?.projectId); return;
+      case "resync.required": this.opts.onProjectChange?.(undefined); return;
     }
   }
 }

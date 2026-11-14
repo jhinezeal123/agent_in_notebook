@@ -50,6 +50,12 @@ describe("decide", () => {
     expect(decide(s({ scope: "cell" }), "read", null, [])).toMatchObject({ allow: true });
   });
 
+  it("saves to the project in Write and Autonomous, asking first with Review on", () => {
+    expect(decide(s({ scope: "cell" }), "save", null, [])).toMatchObject({ allow: false });
+    expect(decide(s({ scope: "write", review: false }), "save", null, [])).toEqual({ allow: true, review: false, askBeforeRun: false });
+    expect(decide(s({ scope: "auto", review: true }), "save", null, [])).toEqual({ allow: true, review: false, askBeforeRun: true });
+  });
+
   it("cell scope only edits target cells", () => {
     expect(decide(s({ scope: "cell", review: false }), "update", "a", ["a"])).toEqual({ allow: true, review: false, askBeforeRun: false });
     const denied = decide(s({ scope: "cell" }), "update", "b", ["a"]);

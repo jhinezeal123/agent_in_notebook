@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import type { AcpPreset, Harness } from "@orx/api";
 import type { AgentInfo } from "@ainb/protocol";
-import type { KaggleAccount, KaggleNotebookLaunch, KernelSetup, SettingsSection } from "./messages.js";
+import type { KaggleAccount, KaggleNotebookLaunch, KernelSetup, ProjectChoice, SettingsSection } from "./messages.js";
 import { ComputeTab } from "./compute.js";
 import { ResearchGate } from "./root.js";
 import { useNotebooks } from "./sidebar.js";
@@ -165,11 +165,27 @@ function AddAgent({ onDone }: { onDone: () => void }) {
 
 function NotebookAgents() {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const load = () => hostRequest<{ agents: AgentInfo[] }>("agents.list", { refresh: true }).then((r) => setAgents(r.agents), () => setAgents([]));
   useEffect(() => { void load(); }, []);
+  // Agents added in OpenResearch before (or by its own app) are not here yet: copy their launch commands.
+  const copyFromResearch = async () => {
+    setNote(null);
+    try {
+      const found = await hostRequest<{ id: string; name: string; launchCommand: string }[]>("agents.fromResearch");
+      const have = new Set((agents ?? []).map((a) => a.command));
+      const missing = found.filter((f) => !have.has(f.launchCommand));
+      for (const f of missing) await hostRequest("agents.save", { name: f.name, launchCommand: f.launchCommand });
+      setNote(missing.length ? `Added ${missing.map((f) => f.name).join(", ")}.` : found.length ? "The research chats' agents are all here already." : "OpenResearch has no added agents.");
+      await load();
+    } catch (e) {
+      setNote(errorText(e));
+    }
+  };
   return (
     <section className="sec">
-      <div className="sec-head"><h3>Notebook chats</h3></div>
+      <div className="sec-head"><h3>Notebook chats</h3><Button small onClick={() => void copyFromResearch()}><Icon name="plus" /> Copy from research chats</Button></div>
+      {note && <p className="muted small">{note}</p>}
       <div className="rows">
         {(agents ?? []).map((a) => (
           <div key={a.id} className="srow">
@@ -310,6 +326,10 @@ function Environment() {
 function Kernel() {
   const notebooks = useNotebooks().filter((n) => n.place === "chrome");
   const [setup, setSetup] = useState<KernelSetup | null>(null);
+  const [projects, setProjects] = useState<ProjectChoice[]>([]);
+  // "": the script for every notebook whose project has none of its own.
+  const [scope, setScope] = useState("");
+  useEffect(() => { hostRequest<ProjectChoice[]>("projects.list").then((l) => setProjects([...l].sort((a, b) => b.updatedAt - a.updatedAt)), () => {}); }, []);
   const [saved, setSaved] = useState(false);
   const [target, setTarget] = useState<number | null>(null);
   const [output, setOutput] = useState<string | null>(null);
@@ -323,6 +343,8 @@ function Kernel() {
     setSaved(false);
     void hostRequest("kernel.set", next).then(() => setSaved(true));
   };
+  const script = scope ? setup.projects?.[scope] ?? "" : setup.script;
+  const setScript = (text: string) => update(scope ? { projects: { ...setup.projects, [scope]: text } } : { script: text });
   const run = async () => {
     if (target === null) return;
     setBusy(true);
@@ -341,8 +363,18 @@ function Kernel() {
     <>
       <h2>Kernel Environment</h2>
       <p className="muted">Colab and Kaggle forget everything between sessions. This script runs in the notebook machine's terminal to set it up again.</p>
-      <Item label="Setup script" hint="Shell commands, run before the agent starts work. Example: clone your repository and install its requirements.">
-        <textarea className="inp mono script" value={setup.script} placeholder={"git clone https://github.com/you/repo /content/repo\npip install -q -r /content/repo/requirements.txt"} onInput={(e) => update({ script: e.currentTarget.value })} />
+      {!!projects.length && (
+        <Item label="For" hint="A project can have its own script; its notebooks run that one instead of the one for all notebooks.">
+          <div className="row">
+            <select className="inp narrow" value={scope} onChange={(e) => setScope(e.currentTarget.value)}>
+              <option value="">All notebooks</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}{setup.projects?.[p.id]?.trim() ? " (own script)" : ""}</option>)}
+            </select>
+          </div>
+        </Item>
+      )}
+      <Item label="Setup script" hint={scope ? "Leave it empty to use the script for all notebooks." : "Shell commands, run before the agent starts work. Example: clone your repository and install its requirements."}>
+        <textarea className="inp mono script" value={script} placeholder={"git clone https://github.com/you/repo /content/repo\npip install -q -r /content/repo/requirements.txt"} onInput={(e) => setScript(e.currentTarget.value)} />
       </Item>
       <Item label="Run on attach">
         <label className="chk"><input type="checkbox" checked={setup.runOnAttach} onChange={(e) => update({ runOnAttach: e.currentTarget.checked })} /> Run the setup script when a Colab or Kaggle notebook connects to the bridge</label>
@@ -355,7 +387,7 @@ function Kernel() {
             <select className="inp narrow" value={target ?? ""} onChange={(e) => setTarget(Number(e.currentTarget.value))}>
               {notebooks.map((n) => <option key={n.tabId} value={n.tabId}>{n.title}</option>)}
             </select>
-            <Button primary disabled={busy || !setup.script.trim()} onClick={() => void run()}><Icon name="play" /> {busy ? "Running…" : "Run setup"}</Button>
+            <Button primary disabled={busy || !(setup.script.trim() || Object.values(setup.projects ?? {}).some((s) => s.trim()))} onClick={() => void run()}><Icon name="play" /> {busy ? "Running…" : "Run setup"}</Button>
           </div>
         ) : <p className="muted small">Open a Colab or Kaggle notebook in Chrome to run it now.</p>}
         {output !== null && <pre className="log">{output}</pre>}

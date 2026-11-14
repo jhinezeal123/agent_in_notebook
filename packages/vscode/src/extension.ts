@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import { OpRunner, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
+import { OpRunner, type ChatProject, type ChatSnapshot, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import { DEFAULT_PREFS, type PanelEvent, type PanelRequest, type PanelResponse, type Prefs } from "../../ui/src/panel-messages.js";
 import type { SelectedChat, StudioView } from "../../studio/src/messages.js";
 import { BridgeLink } from "./bridge.js";
@@ -28,6 +28,7 @@ export function activate(context: vscode.ExtensionContext): void {
     new FolderTree(studio, CODE),
     new FolderTree(studio, ARTIFACTS),
     vscode.commands.registerCommand("ainb.pickProject", () => studio.pickProjectToShow()),
+    vscode.commands.registerCommand("ainb.saveNotebookToProject", () => panel.projectCommand("chat.saveNotebook")),
     vscode.commands.registerCommand("ainb.open", () => vscode.commands.executeCommand("ainb.chat.focus")),
     vscode.commands.registerCommand("ainb.newChat", () => studio.open({ view: "newchat" })),
     vscode.commands.registerCommand("ainb.openSettings", () => studio.open({ view: "settings" })),
@@ -66,6 +67,10 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   /** Notebooks (Chrome tab and notebook) the kernel setup already ran on. */
   private readonly setupRan = new Set<string>();
   private setupLog?: vscode.OutputChannel;
+  /** The project of each notebook chat as last reported, by the panel's notebook id. */
+  private readonly chatProjects = new Map<number, { chatId: string; project: ChatProject }>();
+  /** Chrome notebooks already seen, so only a newly opened one joins a project (Kaggle launcher). */
+  private readonly seenNotebooks = new Set<string>();
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.bridge = new BridgeLink(context.extension.packageJSON.version, (event) => {
@@ -86,6 +91,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       this.core.onBrowser(event);
       if ("notebook" in event) {
         this.mirrors.browserChanged(event.notebook.tabId, event.notebook.info);
+        this.joinLaunchedProject(event.notebook.info);
         this.autoSetup(event.notebook.tabId, event.notebook.info);
       }
     }, (event) => {
@@ -103,6 +109,11 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       selectedChat: () => this.selected,
       selectChat: (chat) => this.selectChat(chat),
       runKernelSetup: (tabId) => this.runSetup(tabId),
+      notebookChatWorktree: (tabId) => {
+        const p = this.chatProjects.get(tabId)?.project;
+        return p?.id && p.worktree ? { projectId: p.id, path: p.worktree } : null;
+      },
+      linkNotebook: (key, projectId, info) => this.bridge.request("notebook.link", { notebookKey: key, projectId, ...info }) as Promise<{ project: ChatProject }>,
       stopBridge: () => this.bridge.stop(),
     });
     this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event), (tab, info) => this.mirrors.open(tab, info));
@@ -257,6 +268,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private post(event: PanelEvent): void {
     void this.view?.webview.postMessage(event);
+    if (event.event === "bridge" && event.params.method === "chat.snapshot") this.followProject(event.params.params as ChatSnapshot);
     if (event.event === "notebooks") this.studio.broadcast("notebooks", event.params);
     // The chat follows the notebook in front, unless a research chat is shown.
     else if (event.event === "activeTab" && this.selected?.kind !== "research") {
@@ -268,11 +280,70 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.selected = chat;
     // Showing a research chat opens its project (the right side bar follows).
     this.studio.chatSelected(chat);
+    // So does a notebook chat: its notebook belongs to a project.
+    const known = chat?.kind === "notebook" ? this.chatProjects.get(chat.tabId) : undefined;
+    if (known?.project.id && known.project.state === "ready") void this.studio.openProject(known.project.id);
   }
 
-  /** Show a chat in this panel: about a notebook (with this agent, when given), or a research chat. */
-  private async selectChat(chat: SelectedChat & { agentId?: string }): Promise<void> {
+  /** A notebook chat's project became known or changed: the right side bar shows it while that chat is in front. */
+  private followProject(snap: ChatSnapshot): void {
+    if (!snap?.project || snap.status === "closed") return;
+    const before = this.chatProjects.get(snap.tabId)?.project;
+    this.chatProjects.set(snap.tabId, { chatId: snap.chatId, project: snap.project });
+    if (this.selected?.kind !== "notebook" || this.selected.tabId !== snap.tabId) return;
+    if (snap.project.id && snap.project.state === "ready") void this.studio.openProject(snap.project.id);
+    // The chat got (or handed off) its worktree: the Code view shows it.
+    if (before?.worktree !== snap.project.worktree) this.studio.chatSelected(this.selected);
+  }
+
+  /** A Kaggle notebook opened from the launcher joins the project it was opened for. */
+  private joinLaunchedProject(info: NotebookInfo | null): void {
+    if (!info?.key || this.seenNotebooks.has(info.key)) return;
+    this.seenNotebooks.add(info.key);
+    if (info.platform !== "kaggle") return;
+    const projectId = this.studio.claimKaggleProject();
+    if (!projectId) return;
+    void this.bridge.request("notebook.link", { notebookKey: info.key, projectId, title: info.title, url: info.url, platform: info.platform }).then(
+      (r) => vscode.window.showInformationMessage(`${info.title || "The Kaggle notebook"} joined the project ${(r as { project: ChatProject }).project.name}.`),
+      (e: Error) => vscode.window.showWarningMessage(`The Kaggle notebook could not join its project: ${e.message}`),
+    );
+  }
+
+  /** Save to project, for the notebook chat in front (the command palette). */
+  async projectCommand(method: "chat.saveNotebook"): Promise<void> {
+    const tabId = this.selected?.kind === "notebook" ? this.selected.tabId : null;
+    const chat = tabId === null ? undefined : this.chatProjects.get(tabId);
+    if (!chat) {
+      void vscode.window.showWarningMessage("Open a notebook chat first.");
+      return;
+    }
+    try {
+      const r = await this.handle(method, { chatId: chat.chatId });
+      if (r) void vscode.window.showInformationMessage(`Saved the notebook to ${(r as { path: string }).path}.`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Agent in Notebook: ${(e as Error).message}`);
+    }
+  }
+
+  /** Move a notebook to another project, chosen in a quick pick. */
+  private async moveProject(p: { notebookKey?: unknown; title?: string; url?: string; platform?: NotebookInfo["platform"]; current?: string | null }): Promise<ChatProject | null> {
+    if (typeof p.notebookKey !== "string") throw new Error("This chat's notebook has no stable address, so it cannot join a project.");
+    const projectId = await this.studio.pickProjectFor(p.title ?? "this notebook", p.current ?? null);
+    if (!projectId) return null;
+    const { project } = await this.bridge.request("notebook.link", { notebookKey: p.notebookKey, projectId, title: p.title, url: p.url, platform: p.platform }) as { project: ChatProject };
+    await this.studio.openProject(project.id ?? projectId);
+    return project;
+  }
+
+  /** Show a chat in this panel: about a notebook (with this agent, when given, in this project), or a research chat. */
+  private async selectChat(chat: SelectedChat & { agentId?: string; projectId?: string }): Promise<void> {
     if (chat.kind === "notebook") {
+      if (chat.projectId) {
+        const info = await this.core.info(chat.tabId);
+        if (!info?.key) throw new Error("This notebook has no stable address, so it cannot join a project.");
+        await this.bridge.request("notebook.link", { notebookKey: info.key, projectId: chat.projectId, title: info.title, url: info.url, platform: info.platform });
+        await this.studio.openProject(chat.projectId);
+      }
       this.setSelected({ kind: "notebook", tabId: chat.tabId });
       await this.core.handle("notebooks.select", { tabId: chat.tabId });
       if (chat.agentId) {
@@ -287,8 +358,12 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   /** Run the kernel setup script on a notebook's machine (a Chrome tab's has a negative id). */
-  private runSetup(tabId: number): Promise<{ output: string; exitCode: number | null; running: boolean }> {
-    const { script } = this.studio.kernelSetup();
+  private async runSetup(tabId: number, projectId?: string | null): Promise<{ output: string; exitCode: number | null; running: boolean }> {
+    if (projectId === undefined) {
+      const info = await this.core.info(tabId);
+      projectId = info?.key ? await this.notebookProject(info.key) : null;
+    }
+    const { script } = this.studio.kernelSetup(projectId);
     const target = isChrome(tabId) ? { tabId, browserTab: chromeTab(tabId) } : { tabId };
     return this.bridge.request("notebook.setup", { ...target, script }) as Promise<{ output: string; exitCode: number | null; running: boolean }>;
   }
@@ -297,16 +372,21 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private autoSetup(chromeTabId: number, info: NotebookInfo | null): void {
     if (!info?.key || (info.platform !== "colab" && info.platform !== "kaggle")) return;
     if (info.kernel !== "idle" && info.kernel !== "busy") return;
-    const setup = this.studio.kernelSetup();
-    if (!setup.runOnAttach || !setup.script.trim() || !setup[info.platform]) return;
+    const general = this.studio.kernelSetup();
+    if (!general.runOnAttach || !general[info.platform]) return;
     const key = `${chromeTabId}:${info.key}`;
     if (this.setupRan.has(key)) return;
     this.setupRan.add(key);
     const title = info.title || "the notebook";
-    void vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Setting up the machine of ${title}…` },
-      () => this.runSetup(-chromeTabId),
-    ).then((r) => {
+    void this.notebookProject(info.key).then((projectId) => {
+      // The notebook's project may have its own script; else the one for all notebooks.
+      if (!this.studio.kernelSetup(projectId).script.trim()) return null;
+      return vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Setting up the machine of ${title}…` },
+        () => this.runSetup(-chromeTabId, projectId),
+      );
+    }).then((r) => {
+      if (!r) return;
       const log = (this.setupLog ??= vscode.window.createOutputChannel("Agent in Notebook: Kernel setup"));
       log.appendLine(`--- ${title} (${new Date().toLocaleString()})`);
       log.appendLine(r.output);
@@ -321,6 +401,15 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       this.setupRan.delete(key);
       void vscode.window.showWarningMessage(`Kernel setup did not run on ${title}: ${e.message}`);
     });
+  }
+
+  /** The project a notebook belongs to, as the bridge last linked it (null when unknown). */
+  private async notebookProject(key: string): Promise<string | null> {
+    try {
+      return (await this.bridge.request("notebook.project", { notebookKey: key }) as { projectId: string | null }).projectId;
+    } catch {
+      return null;
+    }
   }
 
   private find(tabId: number) { return [...this.notebooks.values()].find((notebook) => notebook.tabId === tabId); }
@@ -360,6 +449,13 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         return this.connect();
       }
       case "clipboard.copy": return vscode.env.clipboard.writeText((params as { text: string }).text);
+      case "project.move": return this.moveProject(params as Record<string, never>);
+      case "project.show": {
+        const id = (params as { projectId?: unknown })?.projectId;
+        if (typeof id === "string") await this.studio.openProject(id);
+        await vscode.commands.executeCommand("ainb.project.focus").then(undefined, () => {});
+        return;
+      }
       case "link.open": {
         const target = (params as { url?: unknown })?.url;
         return typeof target === "string" ? openChatLink(target, this.documentUri()) : false;

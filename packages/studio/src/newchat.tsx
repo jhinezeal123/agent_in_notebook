@@ -9,6 +9,7 @@ import { useWorkspace } from "@orx/workspace";
 import { TARGET_LABELS } from "@orx/computeTargets";
 import type { Harness, PaperHit, Project } from "@orx/api";
 import type { AgentInfo } from "@ainb/protocol";
+import type { AgentLogin, ProjectChoice } from "./messages.js";
 import { ResearchGate, useResearchStatus } from "./root.js";
 import { useNotebooks } from "./sidebar.js";
 import { hostRequest } from "./tunnel.js";
@@ -194,9 +195,27 @@ function NotebookStart() {
   const [tabId, setTabId] = useState<number | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [agentId, setAgentId] = useState("");
+  const [projects, setProjects] = useState<ProjectChoice[]>([]);
+  // "": Scratch, the project for notebooks that belong to none yet.
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [logins, setLogins] = useState<AgentLogin[]>([]);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => { hostRequest<{ agents: AgentInfo[] }>("agents.list").then((r) => { setAgents(r.agents); setAgentId((a) => a || r.agents.find((x) => x.available)?.id || ""); }, () => {}); }, []);
+  useEffect(() => {
+    void Promise.all([hostRequest<ProjectChoice[]>("projects.list").catch(() => []), hostRequest<string | null>("project.current").catch(() => null)]).then(([list, current]) => {
+      const sorted = [...list].sort((a, b) => b.updatedAt - a.updatedAt);
+      setProjects(sorted);
+      setProjectId((p) => p ?? (current && sorted.some((x) => x.id === current) ? current : ""));
+    });
+    hostRequest<AgentLogin[]>("agents.logins").then(setLogins, () => {});
+  }, []);
   useEffect(() => { if (tabId === null && notebooks[0]) setTabId(notebooks[0].tabId); }, [notebooks.length]);
   const PLACE = { colab: "Colab tab in Chrome", kaggle: "Kaggle tab in Chrome", jupyter: "Jupyter tab in Chrome", vscode: "open in VS Code" } as const;
+  const login = logins.find((l) => l.agentId === agentId);
+  const start = () => {
+    setError(null);
+    void hostRequest("chat.select", { kind: "notebook", tabId, agentId, ...(projectId ? { projectId } : {}) }).then(() => hostRequest("close"), (e) => setError(errorText(e)));
+  };
   return (
     <>
       <section className="sec">
@@ -208,14 +227,27 @@ function NotebookStart() {
             ))}
           </div>
         ) : <Banner tone="info">No notebook is open. Open one on Colab or Kaggle in Chrome (with the Agent in Notebook extension), or an .ipynb file in VS Code.</Banner>}
-        <label className="field half"><span className="lab">Agent</span>
-          <select className="inp" value={agentId} onChange={(e) => setAgentId(e.currentTarget.value)}>
-            {agents.map((a) => <option key={a.id} value={a.id} disabled={!a.available}>{a.name}{a.available ? "" : " (not installed)"}</option>)}
-          </select>
-        </label>
+        <div className="two">
+          <label className="field"><span className="lab">Project</span>
+            <select className="inp" value={projectId ?? ""} onChange={(e) => setProjectId(e.currentTarget.value)}>
+              <option value="">Scratch (no project yet)</option>
+              {projects.filter((p) => p.name !== "Scratch").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <span className="muted small">The agent reads the project's code, experiments and results, and saves the notebook to its artifacts. A notebook already in a project moves to this one.</span>
+          </label>
+          <label className="field"><span className="lab">Agent</span>
+            <select className="inp" value={agentId} onChange={(e) => setAgentId(e.currentTarget.value)}>
+              {agents.map((a) => <option key={a.id} value={a.id} disabled={!a.available}>{a.name}{a.available ? "" : " (not installed)"}</option>)}
+            </select>
+            {login && login.state !== "ready" && login.state !== "unsupported" && (
+              <span className="muted small">{login.state === "needsLogin" ? `OpenResearch says ${login.name} is not signed in. Sign in once and both chats use it.` : `OpenResearch could not tell whether ${login.name} is signed in.`}{login.note ? ` ${login.note}` : ""}</span>
+            )}
+          </label>
+        </div>
       </section>
+      {error && <Banner tone="error">{error}</Banner>}
       <footer className="foot"><Button onClick={() => void hostRequest("close")}>Cancel</Button>
-        <Button primary disabled={tabId === null || !agentId} onClick={() => void hostRequest("chat.select", { kind: "notebook", tabId, agentId }).then(() => hostRequest("close"))}>Start chat</Button></footer>
+        <Button primary disabled={tabId === null || !agentId} onClick={start}>Start chat</Button></footer>
     </>
   );
 }

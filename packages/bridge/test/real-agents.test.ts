@@ -27,6 +27,7 @@ beforeAll(async () => {
     port: 0,
     token: TOKEN,
     mcpCommand: { command: process.execPath, args: [resolve(__dirname, "../dist/cli.js"), "mcp"] },
+    research: { knownPorts: [], locate: () => ({ missing: "OpenResearch is not used in these tests." }) },
     log: (m) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${m}`),
   });
   port = await bridge.listen();

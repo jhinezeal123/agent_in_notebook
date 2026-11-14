@@ -27,8 +27,11 @@ export interface ChatSettings {
 
 export const DEFAULT_SETTINGS: ChatSettings = { scope: "write", review: true, targetCellIds: [], notebookOnly: true };
 
-/** `execute`: run code or a command on the notebook's machine without a cell, or change a file there. */
-export type ToolAction = "read" | "update" | "insert" | "delete" | "move" | "run" | "execute" | "interrupt";
+/**
+ * `execute`: run code or a command on the notebook's machine without a cell, or change a file there.
+ * `save`: write a document (a notebook copy, a note) to the project's artifacts on this computer.
+ */
+export type ToolAction = "read" | "update" | "insert" | "delete" | "move" | "run" | "execute" | "interrupt" | "save";
 
 export type PolicyDecision =
   | { allow: true; review: boolean; askBeforeRun: boolean }
@@ -82,6 +85,11 @@ export function decide(
         };
       }
       return { allow: true, review: action === "move" ? false : review, askBeforeRun: false };
+    case "save":
+      if (scope === "cell") {
+        return { allow: false, reason: "Mode is 'Edit cell': saving to the project is not allowed. Tell the user what you would save instead." };
+      }
+      return { allow: true, review: false, askBeforeRun: review };
     case "run":
     case "execute":
     case "interrupt":

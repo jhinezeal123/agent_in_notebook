@@ -3,11 +3,12 @@
 // channel); a short context block rides every turn, so mode changes reach the
 // agent without restarting it.
 
-import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type CellInfo, type ChatMessage, type ChatSettings, type NotebookInfo } from "@ainb/protocol";
+import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type CellInfo, type ChatMessage, type ChatProject, type ChatSettings, type NotebookInfo } from "@ainb/protocol";
+import type { BriefExperiment, BriefRun, ProjectBrief } from "./research/links.js";
 
 const PLATFORM_NAME = { colab: "Google Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
-export function playbook(info: NotebookInfo | null, file: string | null = null): string {
+export function playbook(info: NotebookInfo | null, file: string | null = null, project = false): string {
   const where = info ? PLATFORM_NAME[info.platform] : "Colab/Kaggle";
   const nbFile = file ? `the file ${file}` : "an .ipynb file in the working directory (notebook_info names it)";
   const editor = info?.platform === "vscode" ? "VS Code" : "the browser";
@@ -31,7 +32,8 @@ Rules:
 4. With review on, every change to the notebook is shown to the user as a diff, and commands wait for approval. A rejected change was not applied: do not retry it unchanged.
 5. Steps the notebook needs in order to run again from the top (installs it imports, downloads it reads, data preparation) go in its cells, shell commands prefixed with "!"; everything else can happen in the terminal.
 6. Keep each code cell to one logical step. Use markdown cells for prose when the user asks for explanations or a write-up.
-7. When done, answer briefly in the user's language and name the cells you changed.
+7. When done, answer briefly in the user's language and name the cells you changed.${project ? `
+8. This notebook belongs to an OpenResearch project (see <project-context>), kept on the user's computer. When the project has a GitHub repository, its code is cloned on the notebook's machine on a branch of this chat's (see <project-code>): change and run it there with your usual tools, and commit; the bridge pushes after each of your turns. Another branch: git fetch there. The project's shared artifacts (on the user's computer, seen by the user and every chat of the project) are reached only through the MCP server named "project": artifact_list, artifact_read (to_vm copies a file to the machine), artifact_write (text, or from_vm: a file on the machine). Write to the shared artifacts only the results and outputs the user asked for (a report, a figure, a table of metrics); code, working notes and scratch files stay in the repository on the machine. save_notebook saves this notebook with its outputs there; run_result reads a run's result or log.` : ""}
 </agent-in-notebook>`;
 }
 
@@ -87,4 +89,84 @@ export function recap(messages: ChatMessage[], maxChars = 6000): string {
   let body = items.join("\n\n");
   if (body.length > maxChars) body = capText(body, maxChars);
   return `<earlier-conversation>\nThis chat started before you joined; here is what happened so far. The notebook may have changed since — read it again before acting.\n\n${body}\n</earlier-conversation>`;
+}
+
+/** Project context is capped at about this many characters. */
+const PROJECT_CONTEXT_MAX = 8000;
+
+const PROJECT_TOOLS =
+  'Tools (MCP server "project"): artifact_list, artifact_read, artifact_write (the shared artifacts: only results the user asked for); ' +
+  "save_notebook (this notebook, with outputs, to the shared artifacts); run_result (a run's result or log).";
+
+function experimentLine(e: BriefExperiment): string {
+  const name = e.title && e.title !== e.slug ? `${e.slug} "${e.title}"` : e.slug;
+  const desc = e.description ? ` — ${firstLine(e.description, 100)}` : "";
+  return `${name} [${e.status}] branch ${e.branch}${e.parent ? `, from ${e.parent}` : ""}${desc}`;
+}
+
+function runLine(r: BriefRun): string {
+  const when = r.endedAt ? ` ${new Date(r.endedAt).toISOString().slice(0, 16).replace("T", " ")}` : "";
+  const result = r.result ? `: ${firstLine(r.result.replace(/[#*`|]/g, " ").replace(/\s+/g, " ").trim(), 160)}` : "";
+  return `run ${r.id} of ${r.experiment} [${r.status}]${when}${result}`;
+}
+
+function sizeText(n: number): string {
+  return n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
+}
+
+/** What the agent is told about the notebook's project: on the session's first turn, after a compaction, after a move. */
+export function projectContext(b: ProjectBrief, note?: string): string {
+  const head = [
+    `Project: ${b.name} (OpenResearch id ${b.id}).${b.paperId ? ` Paper: arXiv ${b.paperId}.` : ""}${b.githubUrl ? ` Repository: ${b.githubUrl}.` : ""}`,
+    "It is on the user's computer. Paths are relative to the project; artifacts/ is its shared artifacts (artifact_read).",
+    PROJECT_TOOLS,
+  ];
+  if (note) head.unshift(note);
+  const sections: string[] = [];
+  for (const d of b.docs) sections.push(`## ${d.name} (first lines)\n${d.head}`);
+  sections.push(
+    b.experiments.length
+      ? `## Experiments (${b.experiments.length}${b.experiments.length >= 30 ? "+, newest" : ""})\n${b.experiments.map((e) => `- ${experimentLine(e)}`).join("\n")}`
+      : "## Experiments\nNone yet.",
+  );
+  if (b.runs.length) sections.push(`## Latest runs\n${b.runs.map((r) => `- ${runLine(r)}`).join("\n")}`);
+  sections.push(
+    b.artifacts.length
+      ? `## Shared artifacts (${b.artifactsTotal}${b.artifactsTotal > b.artifacts.length ? `, newest ${b.artifacts.length}` : ""})\n${b.artifacts.map((a) => `- artifacts/${a.path} (${sizeText(a.size)})`).join("\n")}`
+      : "## Artifacts\nNone yet.",
+  );
+  let body = `${head.join("\n")}\n\n${sections.join("\n\n")}`;
+  if (body.length > PROJECT_CONTEXT_MAX) body = `${capText(body, PROJECT_CONTEXT_MAX - 80)}\n(shortened: project_overview shows all of it)`;
+  return `<project-context>\n${body}\n</project-context>`;
+}
+
+/** What changed in the project since the agent was last told, or null when nothing it was told changed. */
+export function projectUpdate(before: ProjectBrief, after: ProjectBrief): string | null {
+  const lines: string[] = [];
+  const old = new Map(before.experiments.map((e) => [e.id, e]));
+  for (const e of after.experiments) {
+    const was = old.get(e.id);
+    if (!was) lines.push(`New experiment: ${experimentLine(e)}`);
+    else if (was.status !== e.status) lines.push(`Experiment ${e.slug}: ${was.status} → ${e.status}`);
+  }
+  const oldRuns = new Map(before.runs.map((r) => [r.id, r]));
+  for (const r of after.runs) {
+    const was = oldRuns.get(r.id);
+    if (!was || was.status !== r.status || was.result !== r.result) lines.push(`${was ? "Run changed" : "New run"}: ${runLine(r)}`);
+  }
+  const files = new Set(before.artifacts.map((a) => a.path));
+  const added = after.artifacts.filter((a) => !files.has(a.path));
+  if (added.length) lines.push(`New shared artifacts: ${added.slice(0, 10).map((a) => `artifacts/${a.path}`).join(", ")}${added.length > 10 ? ` and ${added.length - 10} more` : ""}`);
+  if (before.name !== after.name) lines.push(`The project is now called ${after.name}.`);
+  if (!lines.length) return null;
+  return `<project-update>\nChanges in project ${after.name} since your previous message:\n${lines.join("\n")}\n</project-update>`;
+}
+
+/** The project could not be read: say so (once per state), so the agent knows why its project tools fail. */
+export function projectUnavailable(project: ChatProject): string {
+  const why =
+    project.state === "missing"
+      ? `OpenResearch has no project "${project.name}" any more; the user can move this notebook to another project.`
+      : `Project context unavailable (OpenResearch starting or not running)${project.error ? `: ${project.error}` : "."} The project tools say when it is back.`;
+  return `<project-context>\nProject: ${project.name}. ${why}\n</project-context>`;
 }

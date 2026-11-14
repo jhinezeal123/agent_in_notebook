@@ -80,6 +80,10 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("ECHO_MODEL")) await say(`[model ${model}]`);
     const ctx = text.match(/<notebook-context>[\s\S]*?<\/notebook-context>/);
     if (ctx && text.includes("ECHO_CONTEXT")) await say(ctx[0]);
+    if (text.includes("ECHO_PROJECT")) {
+      const blocks = text.match(/<project-(context|update|code)>[\s\S]*?<\/project-(context|update|code)>/g) ?? [];
+      await say(blocks.length ? blocks.join("\n") : "[no project block]");
+    }
     if (text.split("\n").at(-1) === "CRASH") process.exit(3);
     // A handoff recap may contain earlier scripts; only execute this turn's input.
     const m = text.split("\n").at(-1).match(/SCRIPT: (\[.*\])/);
@@ -124,9 +128,9 @@ const app = agent({ name: "fake-agent" })
         const id = `tc${++n}`;
         await client.notify("session/update", {
           sessionId: params.sessionId,
-          update: { sessionUpdate: "tool_call", toolCallId: id, title: `mcp__notebook__${step.tool}`, kind: "other", status: "in_progress", rawInput: step.args },
+          update: { sessionUpdate: "tool_call", toolCallId: id, title: `mcp__${step.server ?? "notebook"}__${step.tool}`, kind: "other", status: "in_progress", rawInput: step.args },
         });
-        const mcp = s.mcp.find((c) => c.name === "notebook");
+        const mcp = s.mcp.find((c) => c.name === (step.server ?? "notebook"));
         const args = JSON.parse(JSON.stringify(step.args ?? {}).replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? ""));
         const r = await mcp.client.callTool({ name: step.tool, arguments: args }, undefined, { timeout: 600_000 });
         const out = r.content.filter((c) => c.type === "text").map((c) => c.text).join("");

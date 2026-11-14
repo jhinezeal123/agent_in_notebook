@@ -353,6 +353,8 @@ export class FakeVm {
   cwd = "/content";
   /** What `script NAME` typed into the shell does (change files, say). */
   scripts = new Map<string, (vm: FakeVm) => string>();
+  /** Any other command (the bridge's own scripts): its output and exit status; undefined is "command not found". */
+  run?: (command: string) => { output: string; status: number } | undefined;
   private clock = 1;
 
   handle(code: string): ExecResult {
@@ -562,9 +564,15 @@ export class FakeVm {
         sh.exit = Number(rest[0] ?? 0);
         sh.log += "exit\r\n";
         return;
-      default:
+      default: {
+        const r = this.run?.(command);
+        if (r) {
+          sh.log += r.output.replace(/\n/g, "\r\n");
+          return this.prompt(sh, r.status);
+        }
         sh.log += `bash: ${word}: command not found\r\n`;
         return this.prompt(sh, 127);
+      }
     }
   }
 }

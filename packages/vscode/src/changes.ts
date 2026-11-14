@@ -82,6 +82,46 @@ function baseUri(set: ChangeSet, path: string): vscode.Uri {
   return vscode.Uri.from({ scheme: BASE_SCHEME, path: `/${path}`, query: JSON.stringify({ root: set.root, sha: set.baseSha }) });
 }
 
+function gitOut(root: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", ["-C", root, ...args], { maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(stdout.trim())));
+  });
+}
+
+const NAME_STATUS: Record<string, ChangedStatus> = { A: "added", M: "modified", D: "deleted", R: "renamed", T: "modified", C: "added" };
+
+/**
+ * What a notebook chat changed in its worktree, read with git here: against
+ * the commit its branch started from (the bridge wrote it to the worktree's
+ * git folder, `ainb-base`), untracked files included. Null: not a worktree
+ * the bridge made.
+ */
+export async function localChanges(root: string): Promise<Omit<ChangeSet, "root"> | null> {
+  const baseFile = await gitOut(root, ["rev-parse", "--path-format=absolute", "--git-path", "ainb-base"]).catch(() => "");
+  if (!baseFile) return null;
+  let base: string;
+  try {
+    base = (await vscode.workspace.fs.readFile(vscode.Uri.file(baseFile))).toString().trim();
+  } catch {
+    return null;
+  }
+  const [baseSha, baselineBranch] = base.split(/\s+/);
+  if (!baseSha) return null;
+  const [branch, diff, untracked] = await Promise.all([
+    gitOut(root, ["branch", "--show-current"]).catch(() => ""),
+    gitOut(root, ["diff", "--name-status", "-M", baseSha]),
+    gitOut(root, ["ls-files", "--others", "--exclude-standard"]),
+  ]);
+  const files: ChangedFile[] = [];
+  for (const line of diff.split("\n").filter(Boolean)) {
+    const [code, a, b] = line.split("\t");
+    const status = NAME_STATUS[code![0]!] ?? "modified";
+    files.push(status === "renamed" && b ? { path: b, status, oldPath: a } : { path: a!, status });
+  }
+  for (const path of untracked.split("\n").filter(Boolean)) files.push({ path, status: "untracked" });
+  return { branch: branch || null, baselineBranch: baselineBranch || baseSha.slice(0, 7), baseSha, files };
+}
+
 /** Read-only documents of files at the base commit, and the git letters on change entries. */
 export function registerChangeProviders(): vscode.Disposable {
   const base: vscode.TextDocumentContentProvider = {

@@ -65,12 +65,15 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 
 Ngoài chat về notebook, app có **chat Research** dựa trên [OpenResearch](https://github.com/jhinezeal123/OpenResearch) (chương trình `orx`). Agent tạo thử nghiệm (mỗi thử nghiệm là một nhánh git), gửi lần chạy nền lên máy khác (Kaggle SSH, SSH, Vast, Modal…) và đọc paper. Tất cả nằm trong VS Code:
 
-- **Thanh Research** (biểu tượng Agent in Notebook ở thanh Activity Bar bên trái) có các mục:
-  - Notebooks: notebook đang mở;
-  - Projects: project và các chat của từng project;
-  - Experiments: cây thử nghiệm của project, có trạng thái lần chạy mới nhất; bấm vào một thử nghiệm để mở trang chi tiết; nút terminal mở log của lần chạy;
-  - Compute: các máy chạy đã cài.
-- **Khung chat** nằm ở thanh bên phải. Khung này hiện chat Notebook hoặc chat Research, tùy chat bạn chọn ở thanh Research.
+- **Thanh bên trái** (biểu tượng Agent in Notebook ở Activity Bar): **Notebooks**, các notebook đang mở. Bấm một notebook để chat về nó. Nút trên tiêu đề mở Compute.
+- **Thanh bên phải**, mục **Research Project**, nói về **project hiện tại**:
+  - thanh tên project (bấm để đổi project);
+  - **Chats**: các chat Research của project;
+  - **Notebook chats**: các notebook thuộc project. Notebook đang mở có chấm xanh. Bấm một notebook đang đóng thì nó được mở lại (Colab/Kaggle trong trình duyệt, `.ipynb` trong VS Code);
+  - **Experiments**: cây thử nghiệm, có trạng thái lần chạy mới nhất. Bấm một thử nghiệm để mở trang chi tiết. Nút terminal mở log;
+  - **Chat Worktree**: worktree riêng của chat đang mở (chat Research hoặc chat Notebook); không có chat nào của project thì là repo của project. Nút **Changes** liệt kê file chat đã đổi so với lúc tách nhánh;
+  - **Shared Artifacts**: thư mục kết quả chung của project (chỉ trên máy bạn, không thuộc git), mọi chat đều thấy.
+- **Khung chat** cũng ở thanh bên phải. Khung này hiện chat Notebook hoặc chat Research, tùy chat bạn chọn.
 - **New Chat** (nút ＋): chọn kiểu chat (Research hoặc Notebook), rồi chọn điểm bắt đầu:
   - thư mục trống;
   - project có sẵn;
@@ -85,6 +88,31 @@ Ngoài chat về notebook, app có **chat Research** dựa trên [OpenResearch](
   - Có thể bật tự chạy khi một notebook Colab/Kaggle kết nối kernel. Script chạy một lần cho mỗi notebook.
   - Script chạy quá 90 giây thì vẫn tiếp tục trên máy, và agent xem được bằng `shell_wait` với phiên `setup`.
 - Thanh trạng thái hiện số lần chạy đang chạy. Khi một lần chạy xong hoặc lỗi, VS Code báo kèm nút mở thử nghiệm đó.
+
+### Notebook trong project
+
+Mỗi notebook thuộc về **một project** của OpenResearch. Notebook chưa chọn project thì vào project **Scratch** (thư mục `~/OpenResearch/scratch`, tạo một lần, không đẩy lên GitHub).
+
+- **Chọn project**: ở New Chat › Notebook chat (mặc định là project hiện tại), hoặc bấm nút ⇄ cạnh tên project trong khung chat (**Move to project…**). Bấm tên project thì thanh bên phải mở project đó. Notebook Kaggle mở từ Compute thì tự vào project đang hiện.
+- **Agent biết project**: đầu cuộc chat, agent nhận tóm tắt project: README/AGENTS.md, các thử nghiệm, vài lần chạy gần nhất, danh sách artifact. Khi project thay đổi (lần chạy xong, artifact mới), lượt sau agent nhận phần thay đổi. OpenResearch chưa chạy thì agent được báo là chưa có ngữ cảnh project, và chat vẫn dùng bình thường.
+- **Tool `project`** (MCP server thứ hai của chat Notebook), cổng giữa máy notebook và **shared artifacts** trên máy bạn:
+  - `artifact_list`, `artifact_read` (chữ, hoặc hình gửi kèm; `to_vm` chép file xuống máy notebook), `artifact_write` (từ nội dung chữ, hoặc `from_vm` chép một file trên máy notebook lên; tối đa 50 MB). Agent được dặn **chỉ ghi kết quả và output bạn yêu cầu** vào shared artifacts; code, ghi chú làm việc, file tạm thì để trong repo trên máy notebook;
+  - `save_notebook`: lưu notebook kèm output vào `artifacts/notebooks/<tên>.ipynb`;
+  - `run_result`: kết quả hoặc log của một lần chạy thử nghiệm (cần OpenResearch đang chạy);
+  - mode **Edit cell** không cho ghi; **Review** bật thì hỏi trước; ghi đè file chat khác hoặc bạn đã ghi thì luôn hỏi. Không đọc file bí mật (`.env`, `*.pem`, `id_*`, file khóa);
+  - project đã từng mở thì bridge nhớ đường dẫn repo, GitHub và thư mục artifacts của nó, nên đồng bộ code và shared artifacts vẫn chạy khi OpenResearch tắt.
+- **Code của project nằm trên máy notebook** (project phải có repo GitHub). Agent sống trên VM và không đụng tới máy bạn:
+  - Trước lượt chat đầu tiên, bridge tự tạo (bằng `git worktree add`) cho notebook chat một **nhánh riêng** `notebook/<tên>-<mã>` trong một **worktree riêng** ở `~/.agent-in-notebook/worktrees/`, rồi đẩy nhánh lên GitHub.
+  - Bridge đặt **token GitHub của OpenResearch** (`gh auth token`) lên VM, vào một file chỉ git đọc (`~/.ainb-git-credentials`). Token không đi qua cell hay cuộc chat, và được che thành `***` trong mọi thứ agent đọc. Sau đó VM `git clone` nhánh đó vào thư mục làm việc (ví dụ `/content/<repo>`), ở phiên terminal `project`.
+  - Agent sửa, chạy và commit code ngay trên VM bằng tool quen thuộc của nó; cần nhánh khác thì tự `git fetch`. Shared artifacts và kết quả thử nghiệm thì qua tool `project` của bridge.
+  - **Sau mỗi lượt**, VM commit phần còn lại và push nhánh; bridge kéo về worktree trên máy bạn. Mục **Chat Worktree** ở thanh bên phải hiện worktree đó; nút **Changes** liệt kê file đã đổi. File trên 50 MB ở lại trên VM.
+  - Colab bị thay máy mới thì lượt sau tự clone lại. Phần chưa push trên máy cũ thì mất.
+  - Kaggle cần bật Internet trong cài đặt notebook thì mới clone được.
+  - Project không có GitHub (như Scratch): code không lên máy notebook; chat vẫn dùng được shared artifacts.
+- **Save to project** (nút dưới ô chat, hoặc lệnh trong Command Palette): lưu notebook kèm output vào artifacts của project. Muốn chat Research làm tiếp thì mở một chat Research trong project; nó thấy nhánh `notebook/…` và notebook đã lưu.
+- **Kernel Environment** theo project: mỗi project có thể có script riêng. Notebook chạy script của project mình, không có thì chạy script chung.
+- **Settings › Agents**: nút **Copy from research chats** thêm vào chat Notebook các agent ACP đã thêm trong OpenResearch. New Chat báo khi OpenResearch thấy agent chưa đăng nhập.
+- Biến môi trường của OpenResearch không bao giờ được gửi lên máy notebook.
 
 Cách hoạt động:
 - Bridge tự bật `orx up --headless` khi cần, rồi tắt nó cùng lúc với chính mình. Nếu OpenResearch đã chạy sẵn (cổng 4791) thì bridge dùng luôn bản đó.

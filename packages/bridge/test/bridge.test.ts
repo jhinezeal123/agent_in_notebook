@@ -14,6 +14,8 @@ import { FakeExtension, FakeNotebook, TINY_PNG } from "./fixtures/fake-extension
 const TOKEN = "test-token-0123456789abcdef";
 const CLI = resolve(__dirname, "../dist/cli.js");
 const FAKE_AGENT = resolve(__dirname, "fixtures/fake-agent.mjs");
+/** Tests never reach an OpenResearch running on this computer. */
+const NO_ORX = { knownPorts: [], locate: () => ({ missing: "OpenResearch is not used in these tests." }) };
 
 let bridge: Bridge;
 let port: number;
@@ -29,7 +31,7 @@ beforeAll(async () => {
       { id: "fake2", name: "Fake Agent 2", command: process.execPath, args: [FAKE_AGENT], images: false },
     ]),
   );
-  bridge = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {} });
+  bridge = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: NO_ORX, log: () => {} });
   port = await bridge.listen();
 });
 
@@ -82,7 +84,7 @@ describe("pairing", () => {
 
   it("stops when started in the background and VS Code has been gone for a while", async () => {
     let stops = 0;
-    const background = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {}, onShutdown: () => stops++, stopWithoutEditorMs: 1500 });
+    const background = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: NO_ORX, log: () => {}, onShutdown: () => stops++, stopWithoutEditorMs: 1500 });
     const bgPort = await background.listen();
     const editor = new FakeExtension(new FakeNotebook([{ type: "code", source: "x = 1" }]));
     const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "y = 2" }]));
@@ -505,7 +507,7 @@ describe("chats follow the notebook", () => {
     await ext.waitFor(() => existsSync(file), 5_000, "transcript saved");
     ext.close();
 
-    const second = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, log: () => {} });
+    const second = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: NO_ORX, log: () => {} });
     const secondPort = await second.listen();
     try {
       const { ext: ext2, snap: restored } = await openKeyed(second, secondPort, key);

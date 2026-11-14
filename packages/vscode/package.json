@@ -83,11 +83,11 @@
         },
         {
           "id": "ainb.code",
-          "name": "Code"
+          "name": "Chat Worktree"
         },
         {
           "id": "ainb.artifacts",
-          "name": "Artifacts"
+          "name": "Shared Artifacts"
         }
       ]
     },
@@ -190,6 +190,12 @@
         "title": "Show Another Project",
         "category": "Agent in Notebook",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "ainb.saveNotebookToProject",
+        "title": "Save Notebook to Project",
+        "category": "Agent in Notebook",
+        "icon": "$(save)"
       },
       {
         "command": "ainb.code.newFile",

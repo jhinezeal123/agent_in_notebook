@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { buildHistoryNodes, layoutLineage, type HistoryRow } from "@orx/components/experimentLineageModel";
 import type { ChatSession, Project } from "@orx/api";
+import type { NotebookChatSummary } from "@ainb/protocol";
 import { pickProject } from "./messages.js";
 import { ResearchGate } from "./root.js";
 import { Pane, useSelectedChat } from "./sidebar.js";
@@ -45,6 +46,7 @@ function ProjectInner() {
     <div className="sidebar">
       <ProjectBar project={project} />
       <ChatList project={project} closed={!!closed.chats} onToggle={toggle} />
+      <NotebookChats project={project} closed={!!closed.notebooks} onToggle={toggle} />
       <Pane id="experiments" title="Experiments" open={!closed.experiments} onToggle={toggle}>
         <ExperimentTree project={project} />
       </Pane>
@@ -110,6 +112,43 @@ function ChatList({ project, closed, onToggle }: { project: Project; closed: boo
       })}
       {sessions.isSuccess && !chats.length && (
         <p className="empty">No chats yet. <a href="#" onClick={(e) => { e.preventDefault(); void newChat(); }}>Start one</a>.</p>
+      )}
+    </Pane>
+  );
+}
+
+const PLATFORM: Record<string, string> = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" };
+
+/** The project's notebook chats (Agent in Notebook); a click shows the chat, or opens its notebook. */
+function NotebookChats({ project, closed, onToggle }: { project: Project; closed: boolean; onToggle: (id: string) => void }) {
+  const selected = useSelectedChat();
+  const chats = useQuery({
+    queryKey: ["ainb", "notebookChats", project.id],
+    queryFn: () => hostRequest<NotebookChatSummary[]>("notebookChats.list", { projectId: project.id }),
+    refetchInterval: 20_000,
+  });
+  // A chat opened, closed or moved: the list changes with it.
+  useEffect(() => { void chats.refetch(); }, [selected?.kind, selected?.kind === "notebook" ? selected.tabId : null]);
+  const open = (c: NotebookChatSummary) => void hostRequest("notebookChat.open", c).then(() => chats.refetch(), (e) => void hostRequest("message", { level: "error", text: errorText(e) }));
+  return (
+    <Pane id="notebooks" title="Notebook chats" open={!closed} onToggle={onToggle}>
+      {chats.isError && <p className="empty error">{errorText(chats.error)}</p>}
+      {(chats.data ?? []).map((c) => {
+        const on = selected?.kind === "notebook" && c.tabId !== undefined && selected.tabId === c.tabId;
+        const where = c.platform ? PLATFORM[c.platform] ?? c.platform : "";
+        return (
+          <div key={c.notebookKey} className={`item${on ? " sel" : ""}`} style={{ paddingLeft: 20 }} onClick={() => open(c)}
+            title={`${c.title ?? "Notebook"}${where ? ` (${where})` : ""}${c.tabId === undefined ? "\n\nNot open now: click to open the notebook" : ""}`}>
+            <Icon name="notebook" />
+            <span className="lbl">{c.title || "Notebook"}</span>
+            <span className="tail">
+              {c.tabId !== undefined ? <span className="dot" style={{ background: "var(--st-running)" }} title="Open now" /> : <span className="dsc">{where ? `${where} · ` : ""}{ago(c.updatedAt)}</span>}
+            </span>
+          </div>
+        );
+      })}
+      {chats.isSuccess && !chats.data.length && (
+        <p className="empty">No notebook chats yet. Start one from New Chat.</p>
       )}
     </Pane>
   );

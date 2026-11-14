@@ -29,16 +29,30 @@ export async function runSetup(
   waitMs: number,
 ): Promise<SetupResult> {
   if (!script.trim()) throw new Error("The setup script is empty.");
+  return runInSession(call, target, SETUP_SESSION, script, waitMs);
+}
+
+/**
+ * Run a script in a terminal session of the bridge's own on the notebook's
+ * machine (the setup, the project's code sync), and wait for it a while.
+ */
+export async function runInSession(
+  call: (op: NotebookOp, timeoutMs?: number) => Promise<unknown>,
+  target: string,
+  session: string,
+  script: string,
+  waitMs: number,
+): Promise<SetupResult> {
   const info = (await call({ op: "info" })) as NotebookInfo;
   if (!reachable(info)) throw new Error(`This notebook's kernel runs ${info.language}; the setup runs only through a Python kernel.`);
   const exec: KernelExec = (code, wait) => call({ op: "machine_exec", code, waitMs: wait }, wait + 15_000) as ReturnType<KernelExec>;
   let shells = sessions.get(target);
   if (!shells) sessions.set(target, (shells = new ShellSessions()));
   const deadline = Date.now() + waitMs;
-  return shells.exclusive(SETUP_SESSION, async (sh) => {
+  return shells.exclusive(session, async (sh) => {
     if (sh.state === "new" || sh.state === "exited") await sh.open(exec, deadline);
     else await sh.refresh(exec);
-    if (sh.state === "running") throw new Error("The previous setup is still running on the notebook's machine.");
+    if (sh.state === "running") throw new Error(`The previous ${session === SETUP_SESSION ? "setup" : "command"} is still running on the notebook's machine (terminal session "${session}").`);
     await sh.start(exec, script);
     const cmd = sh.command!;
     const { paused } = await sh.pollUntil(exec, () => !!cmd.end, deadline);

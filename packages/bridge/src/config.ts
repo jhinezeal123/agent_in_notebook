@@ -61,6 +61,8 @@ export interface ResearchConfig {
    * yourself (its database, Kaggle runtime, account profiles).
    */
   env?: Record<string, string>;
+  /** The OpenResearch project notebook chats go to when none was chosen. */
+  scratchProjectId?: string;
 }
 
 export function loadResearchConfig(): ResearchConfig {
@@ -73,14 +75,26 @@ export function loadResearchConfig(): ResearchConfig {
       const env = Object.fromEntries(Object.entries(cfg.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
       if (Object.keys(env).length) out.env = env;
     }
+    if (typeof cfg?.scratchProjectId === "string" && cfg.scratchProjectId) out.scratchProjectId = cfg.scratchProjectId;
     return out;
   } catch {
     return {};
   }
 }
 
+/** Write research.json, keeping fields this version does not know. */
 export function saveResearchConfig(cfg: ResearchConfig): void {
-  writeFileSync(join(dataDir(), "research.json"), JSON.stringify(cfg, null, 2));
+  const file = join(dataDir(), "research.json");
+  let old: Record<string, unknown> = {};
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) old = raw;
+  } catch {
+    // none yet
+  }
+  const known = ["orxPath", "env", "scratchProjectId"];
+  const kept = Object.fromEntries(Object.entries(old).filter(([k]) => !known.includes(k)));
+  writeFileSync(file, JSON.stringify({ ...kept, ...cfg }, null, 2));
 }
 
 /** A user-defined ACP agent from agents.json. */

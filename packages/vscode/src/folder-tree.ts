@@ -5,7 +5,7 @@
 
 import { basename, relative, sep } from "node:path";
 import * as vscode from "vscode";
-import { CHANGE_SCHEME, changeItem, changeUri, openChange, toFile, type ChangeSet, type ChangedFile } from "./changes.js";
+import { CHANGE_SCHEME, changeItem, changeUri, localChanges, openChange, toFile, type ChangeSet, type ChangedFile } from "./changes.js";
 import type { OrxProject, Studio } from "./studio-host.js";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -23,6 +23,8 @@ export interface Place {
   pending?: boolean;
   /** The research chat whose worktree this is. */
   sessionId?: string;
+  /** A notebook chat's worktree (made by the bridge): its changes are read with git here. */
+  local?: boolean;
 }
 
 /** One of the project's folders, shown as a tree. */
@@ -37,24 +39,31 @@ export interface FolderSpec {
 }
 
 /**
- * The code the research chat in front works on: its own worktree (made on
- * its first turn, on its experiment branch); else, and with no research chat
- * of this project in front, the project's repository.
+ * Chat Worktree: the code the chat in front works on, its own worktree (a
+ * research chat's, made by OpenResearch on its first turn, on its experiment
+ * branch; a notebook chat's, made by the bridge, on the branch the notebook's
+ * machine pushes to); else, with no chat of this project in front, the
+ * project's repository.
  */
 export const CODE: FolderSpec = {
   view: "ainb.code",
   followsChat: true,
   changes: true,
   async locate(project, studio) {
-    const chat = studio.researchChatOf(project.id);
-    const checkout = await studio.codeCheckout(project.id, chat).catch(() => null);
+    const chat = studio.chatWorktreeOf(project.id);
+    if (chat?.kind === "notebook") {
+      const branch = await localChanges(chat.path).then((c) => c?.branch ?? null, () => null);
+      return { path: chat.path, description: `${branch ?? "notebook branch"} · notebook chat's worktree`, local: true };
+    }
+    const checkout = await studio.codeCheckout(project.id, chat?.sessionId ?? null).catch(() => null);
     if (!checkout) return { path: project.repoPath, description: "project repository" };
     const worktree = checkout.root === "worktree";
     return {
       path: checkout.path,
       description: `${checkout.branch ?? "detached"} · ${worktree ? "this chat's worktree" : "project repository"}`,
+      // A research chat makes its worktree on its first turn: look again.
       pending: !!chat && !worktree,
-      ...(worktree && chat ? { sessionId: chat } : {}),
+      ...(worktree && chat ? { sessionId: chat.sessionId } : {}),
     };
   },
 };
@@ -204,11 +213,11 @@ export class FolderTree implements vscode.TreeDataProvider<vscode.Uri>, vscode.T
     const place = this.place;
     let set: ChangeSet | null = null;
     let state: ChangesState;
-    if (!place?.sessionId) {
+    if (!place?.sessionId && !place?.local) {
       state = place?.pending ? "pending" : "noChat";
     } else {
       try {
-        const found = await this.studio.worktreeChanges(place.sessionId);
+        const found = place.local ? await localChanges(place.path) : await this.studio.worktreeChanges(place.sessionId!);
         set = found && { ...found, root: place.path };
         state = !set ? "pending" : set.files.length ? "some" : "clean";
       } catch {

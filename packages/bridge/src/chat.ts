@@ -7,12 +7,14 @@ import { join } from "node:path";
 import type { McpServer, RequestPermissionRequest, RequestPermissionResponse, SessionNotification, ToolCallContent } from "@agentclientprotocol/sdk";
 import {
   capText,
+  firstLine,
   chatImageDataUrl,
   isChatImageMime,
   type AgentOption,
   type AppliedChange,
   type CellInfo,
   type ChatMessage,
+  type ChatProject,
   type ChatSettings,
   type ChatSnapshot,
   type ChatStatus,
@@ -31,11 +33,18 @@ import {
 } from "@ainb/protocol";
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
-import { playbook, recap, turnContext } from "./instructions.js";
+import { playbook, projectContext, projectUnavailable, projectUpdate, recap, turnContext } from "./instructions.js";
 import { RecentRuns } from "./notebook/exec.js";
 import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
-import { callTool, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
+import { callTool, Denied, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
+import { PROJECT_TOOLS, saveNotebook, type ProjectToolContext } from "./project/tools.js";
+import { redactTokens, remoteOf } from "./project/github.js";
+import { CodeSync } from "./project/vmrepo.js";
+import type { ProjectBrief, ProjectLinks, ProjectResolution } from "./research/links.js";
+import type { ProjectCache } from "./store.js";
+import { ensureWorktree } from "./project/worktree.js";
+import { describeFailure, type OrxProject, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
 
 /** How the chat reaches its notebook and the chat UI. */
@@ -44,9 +53,23 @@ export interface ChatHost {
   emit(event: string, params: unknown): void;
   /** MCP server entry handed to the agent; it relays tool calls back to this chat. */
   mcpServer(chatToken: string): McpServer;
+  /** The MCP server of the project tools, for chats that belong to a project. */
+  projectMcpServer?(chatToken: string): McpServer;
+  /** The notebook's OpenResearch project; absent for chats without a notebook key. */
+  project?: ChatProjectHost;
   workspaceRoot: string;
   /** Save the transcript: debounced as it changes (in the background), and on close (`sync`). */
   persist?(chat: Chat, sync: boolean): void;
+}
+
+/** How a chat reaches its notebook's OpenResearch project. */
+export interface ChatProjectHost {
+  links: ProjectLinks;
+  research: ResearchProjects;
+  /** Ask OpenResearch about the notebook's project (`wait`: give it time to start). */
+  resolve(wait: boolean): Promise<ProjectResolution>;
+  /** The project as the notebook last saw it, for when OpenResearch does not answer. */
+  cached(): ProjectCache | null;
 }
 
 export interface ChatOptions {
@@ -58,6 +81,8 @@ export interface ChatOptions {
   note?: string;
   /** Undo journal of the carried transcript, by message id. */
   journal?: Record<string, AppliedChange[]>;
+  /** The notebook's project as known when the chat opens. */
+  project?: ChatProject;
 }
 
 const TOOL_DETAIL_MAX = 4000;
@@ -128,6 +153,23 @@ export class Chat {
   private shells = new ShellSessions();
   /** The notebook's file on its machine. */
   private mirror = new NotebookMirror();
+  /** The notebook's OpenResearch project, as last known. */
+  project: ChatProject | undefined;
+  /** The project brief the agent was last given (to send only what changed). */
+  private lastBrief: ProjectBrief | null = null;
+  /** The "project unavailable" note last sent, so it is not repeated. */
+  private lastProjectNote = "";
+  /** The notebook moved to another project: the agent gets the new one's full context. */
+  private projectMoved = false;
+  /** Artifacts this chat wrote (it may replace them without asking). */
+  private readonly createdArtifacts = new Set<string>();
+  /** The project's code on the notebook's machine (a clone of the chat's branch). */
+  private readonly code: CodeSync | null;
+  /** The project as OpenResearch last described it. */
+  private lastOrx: ProjectCache | null = null;
+  /** What the agent was last told about the code, and what the user was. */
+  private lastCodeNote = "";
+  private lastCodeShown = "";
   /** Parts of each message as last sent to the extension, to send only what changed. */
   private sent = new Map<string, SentPart[]>();
 
@@ -139,6 +181,8 @@ export class Chat {
     opts: ChatOptions = {},
   ) {
     this.notebookKey = opts.notebookKey;
+    this.project = opts.project;
+    this.code = host.project && opts.notebookKey ? new CodeSync((op, ms) => this.call(op as never, ms) as Promise<unknown>, opts.notebookKey) : null;
     for (const [id, changes] of Object.entries(opts.journal ?? {})) if (Array.isArray(changes) && changes.length) this.journal.set(id, changes);
     const carried = opts.carried ?? [];
     // Offer undo only where the journal to do it is still at hand.
@@ -169,6 +213,7 @@ export class Chat {
       messages: this.messages,
       notebook: this.notebook,
       usage: this.usage,
+      ...(this.project ? { project: this.project } : {}),
     };
   }
 
@@ -219,7 +264,9 @@ export class Chat {
     });
     this.agent = agent;
     try {
-      await agent.start(cwd, [this.host.mcpServer(this.mcpToken)], this.spec.sessionMeta);
+      const servers = [this.host.mcpServer(this.mcpToken)];
+      if (this.host.project && this.host.projectMcpServer) servers.push(this.host.projectMcpServer(this.mcpToken));
+      await agent.start(cwd, servers, this.spec.sessionMeta);
       if (this.closed) {
         agent.dispose();
         return;
@@ -288,6 +335,7 @@ export class Chat {
         this.addPart(reply, { type: "notice", level: "info", text: `The agent stopped early (${res.stopReason}). Say "continue" to go on.` });
       }
       this.setStatus("idle");
+      void this.syncCode(firstLine(text, 72));
     } catch (e) {
       if (this.closed) return;
       const msg = (e as Error).message ?? String(e);
@@ -334,7 +382,7 @@ export class Chat {
           : [];
     const blocks: string[] = [];
     const rules = this.sessionFresh || this.rulesDue;
-    if (rules) blocks.push(playbook(this.notebook, file));
+    if (rules) blocks.push(playbook(this.notebook, file, !!this.host.project));
     this.rulesDue = false;
     if (this.pendingRecap) blocks.push(this.pendingRecap);
     if (this.undoNotes.length) {
@@ -345,9 +393,173 @@ export class Chat {
     const outline = cells ? JSON.stringify(cells.map((c) => [c.id, c.type, c.source])) : "";
     const unchanged = !!cells && !rules && !this.pendingRecap && outline === this.lastOutline;
     this.lastOutline = outline;
+    const project = await this.projectBlock(rules || !!this.pendingRecap);
+    if (project) blocks.push(project);
+    const code = await this.codeBlock(rules || !!this.pendingRecap);
+    if (code) blocks.push(code);
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file));
     blocks.push(text);
     return blocks.join("\n\n");
+  }
+
+  // ------------------------------------------------------------ project
+
+  /**
+   * What the agent is told about the project this turn: everything on a
+   * fresh session (or after a compaction or a move), else what changed since
+   * its last message, else nothing. Never waits on OpenResearch to start.
+   */
+  private async projectBlock(full: boolean): Promise<string | null> {
+    if (!this.host.project) return null;
+    const res = await this.host.project.resolve(false).catch((e): ProjectResolution | null => {
+      if (this.project) this.project = { ...this.project, state: "unavailable", error: describeFailure(e) };
+      return null;
+    });
+    if (res) this.setProject(res);
+    this.lastOrx = res?.orx ? { id: res.orx.id, name: res.orx.name, repoPath: res.orx.repoPath, githubUrl: res.orx.githubUrl ?? null, artifactsDir: res.orx.artifactsDir } : this.host.project?.cached() ?? null;
+    if (res?.orx) {
+      try {
+        const brief = await this.host.project.links.brief(res.orx);
+        const before = this.lastBrief;
+        let text: string | null;
+        if (full || this.projectMoved || !before || before.id !== brief.id) {
+          const note = this.projectMoved ? `The user moved this notebook to the project ${brief.name}. What you were told about another project no longer applies.` : undefined;
+          text = projectContext(brief, note);
+        } else text = brief.digest === before.digest ? null : projectUpdate(before, brief);
+        this.lastBrief = brief;
+        this.projectMoved = false;
+        this.lastProjectNote = "";
+        return text;
+      } catch (e) {
+        if (this.project) this.project = { ...this.project, state: "unavailable", error: describeFailure(e) };
+      }
+    }
+    if (!this.project) return null;
+    const note = projectUnavailable(this.project);
+    if (!full && note === this.lastProjectNote) return null;
+    this.lastProjectNote = note;
+    return note;
+  }
+
+  /**
+   * The project's code on the notebook's machine: cloned (the chat's branch)
+   * before the first turn, and again if the machine was replaced. The agent
+   * is told where, when that changes; the user sees it once.
+   */
+  private async codeBlock(full: boolean): Promise<string | null> {
+    const orx = this.lastOrx;
+    if (!this.code || !orx || !this.notebookKey) return null;
+    const key = this.notebookKey;
+    const title = this.notebook?.title?.replace(/\.ipynb$/i, "") || "notebook";
+    if (!this.code.current && remoteOf(orx)) this.show("Putting the project's code on the notebook's machine…", "preparing");
+    const st = await this.code.ensure(orx, async () => {
+      const wt = await ensureWorktree(orx.repoPath, orx.id, key, title);
+      this.showWorktree(orx.id, wt.path);
+      return wt;
+    });
+    let note: string;
+    if (st.state === "ready") {
+      const p = st.place;
+      note = [
+        "<project-code>",
+        `The project's code is cloned on the notebook's machine at ${p.dir}: git, branch ${p.branch}, remote origin on GitHub (signed in, you may push this branch).`,
+        "Change and run the code there with your usual tools; commit when a step is done. After each of your turns the bridge commits what is left and pushes the branch, " +
+          "and it reaches the user's computer (files over 50 MB stay on the machine). Do not rewrite the branch's history or push other branches.",
+        "</project-code>",
+      ].join("\n");
+      this.show(`The project's code is on the notebook's machine at ${p.dir} (branch ${p.branch}).`, `${p.dir}\n${p.branch}`);
+    } else {
+      note = `<project-code>\n${st.why}\n</project-code>`;
+      this.show(st.state === "error" ? `Project code: ${st.why}` : st.why, st.why);
+    }
+    if (!full && note === this.lastCodeNote) return null;
+    this.lastCodeNote = note;
+    return note;
+  }
+
+  /** A notice about the code, once for each state. */
+  private show(text: string, key: string): void {
+    if (key === this.lastCodeShown) return;
+    this.lastCodeShown = key;
+    this.system(text);
+  }
+
+  /** After a turn: what changed on the machine goes to the branch and the user's computer. */
+  private async syncCode(subject: string): Promise<void> {
+    if (!this.code?.current) return;
+    const r = await this.code.syncBack(`Notebook chat: ${subject}`).catch((e: Error) => ({ changed: false, text: `Could not save the code from the notebook's machine: ${e.message}` }));
+    if (this.closed || !r) return;
+    if (r.text) this.system(r.text);
+    if (r.changed && this.project?.id) this.host.project?.links.markDirty(this.project.id);
+  }
+
+  /** The project as OpenResearch just described it; a change reaches the chat UI. */
+  setProject(res: ProjectResolution, moved = false): void {
+    const before = this.project;
+    if (moved || (before?.id && res.project.id && before.id !== res.project.id)) this.projectMoved = true;
+    this.project = res.project;
+    if (res.notice) this.system(res.notice);
+    if (JSON.stringify(before) !== JSON.stringify(res.project)) this.host.emit("chat.snapshot", this.snapshot());
+  }
+
+  /**
+   * The project, giving OpenResearch time to answer, else as the notebook
+   * last saw it; a tool that needs it fails with why it is not there.
+   */
+  private async requireProject(): Promise<ProjectCache> {
+    const host = this.host.project;
+    if (!host) throw new Denied("This chat has no project: its notebook has no stable address.");
+    const res = await host.resolve(true);
+    this.setProject(res);
+    if (res.orx) return { id: res.orx.id, name: res.orx.name, repoPath: res.orx.repoPath, githubUrl: res.orx.githubUrl ?? null, artifactsDir: res.orx.artifactsDir };
+    const p = res.project;
+    if (p.state === "missing") throw new Denied(p.error ?? `The project ${p.name} no longer exists.`);
+    const cached = host.cached();
+    if (cached) return cached;
+    throw new Denied(`The project is not available right now: ${p.error ?? "OpenResearch is not running."}`);
+  }
+
+  private projectToolContext(): ProjectToolContext {
+    const host = this.host.project;
+    if (!host) throw new Denied("This chat has no project: its notebook has no stable address.");
+    const ctx = this.toolContext();
+    return Object.assign(ctx, {
+      research: host.research,
+      links: host.links,
+      project: () => this.requireProject(),
+      created: this.createdArtifacts,
+      confirm: async (summary: string, detail: string, yes: string, no: string) => {
+        const answer = await this.ask(summary, detail, [
+          { id: "yes", name: yes, kind: "allow_once" },
+          { id: "no", name: no, kind: "reject_once" },
+        ], undefined, ctx.waitMs);
+        if (answer === "expired") throw new Denied("The question expired. Nothing was done. Ask the user before trying again.");
+        return answer === "yes";
+      },
+    });
+  }
+
+  /** The chat's worktree became known: the Chat Worktree view shows it. */
+  private showWorktree(projectId: string, path: string): void {
+    if (!this.project || this.project.id !== projectId || this.project.worktree === path) return;
+    this.project = { ...this.project, worktree: path };
+    this.host.emit("chat.snapshot", this.snapshot());
+  }
+
+  runProjectTool(name: string, args: unknown): Promise<ToolResult> {
+    this.markNotebookCall(name, args, "project");
+    try {
+      return callTool(this.projectToolContext(), name, args, PROJECT_TOOLS).then(hideTokens);
+    } catch (e) {
+      return Promise.resolve({ text: (e as Error).message, isError: true });
+    }
+  }
+
+  /** "Save notebook to project" in the chat. */
+  async saveNotebookNow(): Promise<string> {
+    const r = await saveNotebook(this.projectToolContext(), { user: true });
+    this.system(`Saved the notebook to ${r.path} in ${r.project.name}.`);
+    return r.path;
   }
 
   async cancel(): Promise<boolean> {
@@ -613,8 +825,9 @@ export class Chat {
   }
 
   runTool(name: string, args: unknown): Promise<ToolResult> {
-    this.markNotebookCall(name, args);
-    return callTool(this.toolContext(), name, args);
+    this.markNotebookCall(name, args, "notebook");
+    // The GitHub token is on the machine (for git): what the agent reads never shows it.
+    return callTool(this.toolContext(), name, args).then(hideTokens);
   }
 
   /**
@@ -622,7 +835,7 @@ export class Chat {
    * generic "execute" running code that calls the tool), so the bridge tags the
    * agent's in-flight call when one of our tools is actually reached.
    */
-  private markNotebookCall(name: string, args: unknown): void {
+  private markNotebookCall(name: string, args: unknown, server: "notebook" | "project"): void {
     const msg = this.current;
     if (!msg) return;
     const inFlight = msg.parts.filter(
@@ -633,7 +846,7 @@ export class Chat {
     const argsJson = JSON.stringify(args ?? {});
     const byInput = inFlight.filter((p) => {
       const raw = this.rawInputs.get(p.toolCallId) ?? "";
-      return raw.includes(`notebook.${name}`) || raw.includes(`notebook__${name}`) || (raw === argsJson && argsJson !== "{}");
+      return raw.includes(`${server}.${name}`) || raw.includes(`${server}__${name}`) || (raw === argsJson && argsJson !== "{}");
     });
     // Otherwise a call not yet tied to any notebook tool. The agent announces
     // over ACP and calls over MCP, two pipes, so the call can arrive first: then
@@ -959,12 +1172,12 @@ function findTool(msg: ChatMessage, id: string) {
   return msg.parts.find((p): p is Extract<Part, { type: "tool" }> => p.type === "tool" && p.toolCallId === id);
 }
 
-/** Our MCP server is registered as "notebook"; agents spell the tool name differently. */
-function isNotebookTool(title: string | undefined, meta: unknown): boolean {
+/** Our MCP servers are registered as "notebook" and "project"; agents spell the tool name differently. */
+export function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__notebook__|notebook[_./:]|\bnotebook\b.*\(|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review)\b/i.test(t)) return true;
+  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review|artifact_\w+|run_result|save_notebook)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
-  return typeof toolName === "string" && toolName.includes("notebook");
+  return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }
 
 function toolDetail(rawInput?: unknown, content?: ToolCallContent[] | null, rawOutput?: unknown): string | undefined {
@@ -983,4 +1196,10 @@ function toolDetail(rawInput?: unknown, content?: ToolCallContent[] | null, rawO
   if (!parts.length) return undefined;
   // Image results echo back as long base64 strings; they mean nothing as text.
   return capText(parts.join("\n\n").replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]"), TOOL_DETAIL_MAX);
+}
+
+/** A tool's result with the GitHub token hidden (it is on the notebook's machine for git). */
+function hideTokens(r: ToolResult): ToolResult {
+  const text = redactTokens(r.text);
+  return text === r.text ? r : { ...r, text };
 }

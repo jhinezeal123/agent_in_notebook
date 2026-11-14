@@ -9,8 +9,8 @@
 
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import type { ResearchStatus } from "@ainb/protocol";
-import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KaggleAccount, type KaggleNotebookLaunch, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
+import { notebookKey, type ChatProject, type NotebookChatSummary, type ResearchStatus } from "@ainb/protocol";
+import { DEFAULT_KERNEL_SETUP, pickProject, type AgentLogin, type FromHost, type HostEvents, type KaggleAccount, type KaggleNotebookLaunch, type KernelSetup, type NotebookEntry, type ProjectChoice, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
 import type { ChangeSet, ChangedFile } from "./changes.js";
 import { listKaggleAccounts, openKaggleNotebook } from "./kaggle-notebooks.js";
 import { OrxTunnel } from "./orx-tunnel.js";
@@ -24,16 +24,24 @@ export interface StudioDeps {
   bridge(method: string, params?: unknown, force?: boolean): Promise<unknown>;
   notebooks(): NotebookEntry[];
   selectedChat(): SelectedChat | null;
+  /** A notebook chat's worktree in its project, once it has one. */
+  notebookChatWorktree(tabId: number): { projectId: string; path: string } | null;
   /** Show this chat in the chat panel (a notebook chat with this agent, when given). */
   selectChat(chat: SelectedChat & { agentId?: string }): Promise<void>;
   /** Run the kernel setup on a notebook's machine now. */
   runKernelSetup(tabId: number): Promise<{ output: string; exitCode: number | null; running: boolean }>;
+  /** Put a notebook in an OpenResearch project. */
+  linkNotebook(key: string, projectId: string, info: { title?: string; url?: string; platform?: string }): Promise<{ project: ChatProject }>;
   stopBridge(): Promise<void>;
 }
 
 const KERNEL_KEY = "kernelSetup";
 const PROJECT_KEY = "researchProject";
 const KAGGLE_ACCOUNTS_KEY = "kaggleAccounts";
+/** A Kaggle notebook opened from the launcher joins the current project if it connects within this long. */
+const KAGGLE_JOIN_MS = 15 * 60_000;
+/** OpenResearch's harness ids for the notebook agents of the same tool. */
+const HARNESS_OF: Record<string, string> = { claude: "claude-code", codex: "codex", opencode: "opencode", cursor: "cursor", gemini: "gemini" };
 
 /** What the extension needs of an OpenResearch project. */
 export interface OrxProject {
@@ -69,6 +77,8 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly statusItem: vscode.StatusBarItem;
   /** Live runs: their project, and whether they still wait in their provider's queue. */
   private running = new Map<string, { projectId: string; queued: boolean }>();
+  /** The project a Kaggle notebook being opened from the launcher joins. */
+  private kaggleProject?: { id: string; until: number };
 
   constructor(private readonly deps: StudioDeps) {
     this.statusItem = vscode.window.createStatusBarItem("ainb.research", vscode.StatusBarAlignment.Right, 100);
@@ -110,10 +120,17 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     if (chat?.kind === "research") void this.openProject(chat.projectId);
   }
 
-  /** The research chat in the chat panel, when it is this project's. */
-  researchChatOf(projectId: string): string | null {
+  /**
+   * The chat in the chat panel, when it is this project's: a research chat
+   * (its session; OpenResearch knows its worktree), or a notebook chat with
+   * its worktree.
+   */
+  chatWorktreeOf(projectId: string): { kind: "research"; sessionId: string } | { kind: "notebook"; path: string } | null {
     const chat = this.deps.selectedChat();
-    return chat?.kind === "research" && chat.projectId === projectId ? chat.sessionId : null;
+    if (chat?.kind === "research") return chat.projectId === projectId ? { kind: "research", sessionId: chat.sessionId } : null;
+    if (chat?.kind !== "notebook") return null;
+    const own = this.deps.notebookChatWorktree(chat.tabId);
+    return own?.projectId === projectId ? { kind: "notebook", path: own.path } : null;
   }
 
   /**
@@ -168,6 +185,65 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     if (!picked) return;
     if (picked.id) await this.openProject(picked.id);
     else this.open({ view: "newchat" });
+  }
+
+  /** Choose the project a notebook joins (null: cancelled). */
+  async pickProjectFor(title: string, current: string | null): Promise<string | null> {
+    await this.baseUrl();
+    const list = (await this.projects()).sort((a, b) => b.updatedAt - a.updatedAt);
+    const items: (vscode.QuickPickItem & { id?: string })[] = list.map((p) => ({ label: `${p.id === current ? "$(check)" : "$(folder)"} ${p.name}`, detail: p.repoPath, id: p.id }));
+    const picked = await vscode.window.showQuickPick(items, { title: `Move ${title} to a project`, placeHolder: "The agent gets the project's context and saves to its artifacts", matchOnDetail: true });
+    return picked?.id ?? null;
+  }
+
+  /** The project a Kaggle notebook opened from the launcher joins, once. */
+  claimKaggleProject(): string | null {
+    const p = this.kaggleProject;
+    this.kaggleProject = undefined;
+    return p && p.until > Date.now() ? p.id : null;
+  }
+
+  /** Open a notebook chat of a project: in front when its notebook is open, else its notebook. */
+  private async openNotebookChat(c: Partial<NotebookChatSummary>): Promise<void> {
+    if (typeof c.tabId === "number") return this.deps.selectChat({ kind: "notebook", tabId: c.tabId });
+    const url = typeof c.url === "string" ? c.url : "";
+    if (c.platform === "vscode" && url) {
+      const document = await vscode.workspace.openNotebookDocument(vscode.Uri.parse(url));
+      await vscode.window.showNotebookDocument(document, { preview: false });
+      return;
+    }
+    if (/^https:\/\//.test(url)) {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+      return;
+    }
+    throw new Error("This notebook is not open, and its address is not known. Open it in Chrome or VS Code.");
+  }
+
+  /** Sign-in state of the agents OpenResearch also runs; none while it is not running. */
+  private async agentLogins(): Promise<AgentLogin[]> {
+    if (this.status.state !== "ready" || !this.status.url) return [];
+    const res = await fetch(`${this.status.url}/api/harnesses`);
+    if (!res.ok) return [];
+    const harnesses = ((await res.json()) as { harnesses?: { id: string; name: string; authState?: AgentLogin["state"]; agentNote?: string }[] }).harnesses ?? [];
+    const out: AgentLogin[] = [];
+    for (const [agentId, harnessId] of Object.entries(HARNESS_OF)) {
+      const h = harnesses.find((x) => x.id === harnessId);
+      if (h) out.push({ agentId, name: h.name, state: h.authState ?? "unknown", ...(h.agentNote ? { note: h.agentNote } : {}) });
+    }
+    return out;
+  }
+
+  /** The ACP agents added in OpenResearch, to add as notebook agents too. */
+  private async researchAcpAgents(): Promise<{ id: string; name: string; launchCommand: string }[]> {
+    const base = await this.baseUrl();
+    const res = await fetch(`${base}/api/harnesses/acp`);
+    if (!res.ok) throw new Error(`OpenResearch answered HTTP ${res.status}.`);
+    const body = (await res.json()) as { harnesses?: unknown[] } | unknown[];
+    const list = (Array.isArray(body) ? body : body.harnesses ?? []) as { id?: string; name?: string; executable?: string; arguments?: string[] }[];
+    const quote = (a: string) => (/^[A-Za-z0-9_./:=@-]+$/.test(a) ? a : `"${a.replace(/(["\\])/g, "\\$1")}"`);
+    return list
+      .filter((h) => typeof h.id === "string" && typeof h.executable === "string" && h.executable)
+      .map((h) => ({ id: h.id!, name: h.name || h.id!, launchCommand: [h.executable!, ...(Array.isArray(h.arguments) ? h.arguments : [])].map(quote).join(" ") }));
   }
 
   /** A run changed: count the live ones, and say when one ends. */
@@ -311,13 +387,21 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
         return status;
       }
       case "open": this.open(p as unknown as StudioView); return;
-      case "chat.select": return this.deps.selectChat(p as unknown as SelectedChat & { agentId?: string });
+      case "chat.select": return this.deps.selectChat(p as unknown as SelectedChat & { agentId?: string; projectId?: string });
       case "close": return; // a side bar view or the chat panel stays
       case "chat.selected": return this.deps.selectedChat();
       case "project.current": return this.openedProject();
       case "project.open": return typeof p.projectId === "string" ? this.openProject(p.projectId) : undefined;
       case "project.pick": return this.pickProjectToShow();
       case "notebooks.list": return this.deps.notebooks();
+      case "projects.list": return (await this.projects().catch(() => [])).map((x): ProjectChoice => ({ id: x.id, name: x.name, repoPath: x.repoPath, updatedAt: x.updatedAt }));
+      case "notebookChats.list": {
+        const r = await this.deps.bridge("chats.list", { projectId: String(p.projectId) }) as { chats: NotebookChatSummary[] };
+        return r.chats;
+      }
+      case "notebookChat.open": return this.openNotebookChat(p as Partial<NotebookChatSummary>);
+      case "agents.logins": return this.agentLogins().catch(() => []);
+      case "agents.fromResearch": return this.researchAcpAgents();
       case "kaggle.accounts":
       case "kaggle.openNotebook": {
         if (vscode.env.remoteName) throw new Error("Open Agent in Notebook in a local VS Code window to use the Kaggle Chrome launcher.");
@@ -333,6 +417,9 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
         const key = `${account.id}:${recover}`;
         const current = this.kaggleLaunches.get(key);
         if (current) return current;
+        // The notebook it opens joins the project shown in the right side bar.
+        const joins = this.status.state === "ready" ? await this.currentProject().catch(() => null) : null;
+        this.kaggleProject = joins ? { id: joins.id, until: Date.now() + KAGGLE_JOIN_MS } : undefined;
         const profiles = vscode.Uri.joinPath(this.deps.context.globalStorageUri, "kaggle-chrome");
         const launch = openKaggleNotebook(account, profiles.fsPath, config.get<string>("chromePath", "").trim(), () => this.baseUrl(), recover)
           .finally(() => this.kaggleLaunches.delete(key));
@@ -413,8 +500,11 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     terminal.show();
   }
 
-  kernelSetup(): KernelSetup {
-    return { ...DEFAULT_KERNEL_SETUP, ...this.deps.context.globalState.get<KernelSetup>(KERNEL_KEY) };
+  /** The kernel setup; with a project, its own script when it has one. */
+  kernelSetup(projectId?: string | null): KernelSetup {
+    const setup = { ...DEFAULT_KERNEL_SETUP, ...this.deps.context.globalState.get<KernelSetup>(KERNEL_KEY) };
+    const own = projectId ? setup.projects?.[projectId] : undefined;
+    return own?.trim() ? { ...setup, script: own } : setup;
   }
 
   dispose(): void {

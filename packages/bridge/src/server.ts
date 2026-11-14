@@ -27,16 +27,21 @@ import {
   type ParamsOf,
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
-import { Chat, type ChatHost } from "./chat.js";
+import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
 import { BRIDGE_VERSION, dataDir, loadResearchConfig, removeCustomAgent, saveResearchConfig } from "./config.js";
 import { Orx, type OrxOptions } from "./research/orx.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
+import { PROJECT_TOOLS } from "./project/tools.js";
+import { ProjectLinks } from "./research/links.js";
+import { describeFailure, ResearchProjects } from "./research/projects.js";
 import { forgetSetup, runSetup } from "./notebook/setup.js";
 import { ChatStore, pruneDir } from "./store.js";
 
 /** Saved transcripts and agent working directories untouched this long are deleted at startup. */
 const KEEP_MS = 30 * 24 * 3600_000;
+/** Which project a notebook belongs to is kept longer than its conversation. */
+const META_KEEP_MS = 180 * 24 * 3600_000;
 /** Leftovers of "Test connection" (normally removed right away). */
 const PROBE_KEEP_MS = 3600_000;
 
@@ -89,6 +94,8 @@ export class Bridge {
   private readonly store: ChatStore;
   /** OpenResearch, run hidden for the editor's research views; started on first use. */
   readonly orx: Orx;
+  /** The OpenResearch projects notebooks belong to. */
+  readonly links: ProjectLinks;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
@@ -99,9 +106,11 @@ export class Bridge {
       log: (m) => this.log(m),
       onStatus: (status) => this.toEditor("research.status", status),
       onRun: (run) => this.toEditor("research.run", run),
+      onProjectChange: (projectId) => this.links?.markDirty(projectId),
     });
+    this.links = new ProjectLinks(this.store, new ResearchProjects(this.orx, (m) => this.log(m)), (m) => this.log(m));
     try {
-      this.store.prune(KEEP_MS);
+      this.store.prune(KEEP_MS, META_KEEP_MS);
       const workspaces = join(dataDir(), "workspaces");
       pruneDir(workspaces, KEEP_MS);
       pruneDir(workspaces, PROBE_KEEP_MS, (name) => !name.startsWith("probe-"));
@@ -294,7 +303,11 @@ export class Bridge {
         const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
         const existing = this.chats.get(p.tabId);
         const sameTarget = !!existing && sameAs(this.targets.get(existing), target);
-        if (existing && sameTarget && existing.spec.id === p.agentId && existing.notebookKey === key && existing.status !== "closed") return existing.snapshot();
+        const override = typeof p.projectId === "string" && p.projectId ? p.projectId : undefined;
+        if (existing && sameTarget && existing.spec.id === p.agentId && existing.notebookKey === key && existing.status !== "closed") {
+          if (key && override && override !== existing.project?.id) await this.linkNotebook(key, override);
+          return existing.snapshot();
+        }
         let carried: ChatMessage[] = [];
         let journal: Record<string, AppliedChange[]> | undefined;
         let note: string | undefined;
@@ -314,15 +327,37 @@ export class Bridge {
             note = `Restored the earlier conversation about this notebook. ${spec.name} starts a new session and gets a summary of it.`;
           }
         }
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target), { notebookKey: key, carried, note, journal });
+        const info = target.kind === "browser" ? this.browserNotebooks.get(target.tabId) : undefined;
+        // The bridge decides the notebook's project (its meta file); the editor only overrides it.
+        const project = key ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key), { notebookKey: key, carried, note, journal, project });
         this.chats.set(p.tabId, chat);
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
         this.byToken.set(chat.mcpToken, chat);
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
+        if (key) void this.refreshProject(chat);
         return chat.snapshot();
       }),
     );
+    rpc.handle(
+      "notebook.link",
+      guard<"notebook.link">(async (p) => {
+        if (typeof p.notebookKey !== "string" || !p.notebookKey || typeof p.projectId !== "string" || !p.projectId) throw new Error("A notebook and a project are needed.");
+        const project = await this.linkNotebook(p.notebookKey.slice(0, 2000), p.projectId, { title: p.title, url: p.url, platform: p.platform });
+        return { project };
+      }),
+    );
+    rpc.handle("notebook.project", guard<"notebook.project">((p) => ({ projectId: this.store.loadMeta(String(p.notebookKey))?.projectId ?? this.links.projects.scratchId() ?? null })));
+    rpc.handle(
+      "chats.list",
+      guard<"chats.list">((p) => {
+        const open = new Map([...this.chats.values()].filter((c) => c.notebookKey).map((c) => [c.notebookKey!, c.tabId]));
+        const chats = this.links.list(String(p.projectId)).map((c) => (open.has(c.notebookKey) ? { ...c, tabId: open.get(c.notebookKey) } : c));
+        return { chats };
+      }),
+    );
+    rpc.handle("chat.saveNotebook", guard<"chat.saveNotebook">(async (p) => ({ path: await this.chatById(p.chatId).saveNotebookNow() })));
     rpc.handle("chat.get", guard<"chat.get">((p) => this.chats.get(p.tabId)?.snapshot() ?? null));
     rpc.handle(
       "chat.send",
@@ -418,6 +453,13 @@ export class Bridge {
           continue;
         }
         chat.notebook = p.info;
+        if (chat.notebookKey && p.info?.key === chat.notebookKey) {
+          try {
+            this.store.saveMeta(chat.notebookKey, { title: p.info.title, url: p.info.url, platform: p.info.platform });
+          } catch (e) {
+            this.log(`Could not save what is known of the notebook: ${(e as Error).message}`);
+          }
+        }
       }
     });
     rpc.on("notebook.detached", (p: ExtensionEvents["notebook.detached"]) => {
@@ -474,8 +516,45 @@ export class Bridge {
     return connection.rpc.request("notebook.op", { tabId: target.tabId, op }, timeoutMs);
   }
 
-  private chatHost(target: Target): ChatHost {
+  /** Ask OpenResearch about a chat's project (it may take a while to start), and show the answer. */
+  private async refreshProject(chat: Chat): Promise<void> {
+    if (!chat.notebookKey) return;
+    try {
+      chat.setProject(await this.links.resolve(chat.notebookKey, true));
+    } catch (e) {
+      this.log(`Could not find the project of ${chat.notebook?.title ?? "a notebook"}: ${describeFailure(e)}`);
+    }
+  }
+
+  /** Move a notebook to another project; its open chats follow from their next turn. */
+  private async linkNotebook(key: string, projectId: string, info: { title?: string; url?: string; platform?: NotebookInfo["platform"] } = {}) {
+    const res = await this.links.link(key, projectId, info);
+    for (const chat of this.chats.values()) if (chat.notebookKey === key) chat.setProject(res, true);
+    return res.project;
+  }
+
+  private chatHost(target: Target, key?: string): ChatHost {
+    const project: ChatProjectHost | undefined = key
+      ? {
+          links: this.links,
+          research: this.links.projects,
+          resolve: (wait) => this.links.resolve(key, wait),
+          cached: () => this.links.cached(key),
+        }
+      : undefined;
     return {
+      project,
+      projectMcpServer: (chatToken): McpServer => ({
+        name: "project",
+        command: this.opts.mcpCommand.command,
+        args: this.opts.mcpCommand.args,
+        env: [
+          { name: "AINB_URL", value: `http://127.0.0.1:${this.port}` },
+          { name: "AINB_CHAT_TOKEN", value: chatToken },
+          { name: "AINB_MCP_SERVER", value: "project" },
+          ...(process.platform === "win32" && process.env.SystemRoot ? [{ name: "SystemRoot", value: process.env.SystemRoot }] : []),
+        ],
+      }),
       workspaceRoot: join(dataDir(), "workspaces"),
       notebookOp: (_tabId, op, timeoutMs) => this.notebookOp(target, op as NotebookOp, timeoutMs),
       emit: (event, params) => this.toEditor(event, params),
@@ -533,6 +612,11 @@ export class Bridge {
     if (url.pathname === "/mcp/list") return json(res, 200, { tools: listTools() });
     if (url.pathname === "/mcp/call") {
       const result = await chat.runTool(String(body.name), body.arguments ?? {});
+      return json(res, 200, result);
+    }
+    if (url.pathname === "/mcp/project/list") return json(res, 200, { tools: listTools(PROJECT_TOOLS) });
+    if (url.pathname === "/mcp/project/call") {
+      const result = await chat.runProjectTool(String(body.name), body.arguments ?? {});
       return json(res, 200, result);
     }
     return json(res, 404, { error: "not found" });

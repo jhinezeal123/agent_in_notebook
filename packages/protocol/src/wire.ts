@@ -122,6 +122,40 @@ export interface ChatSnapshot {
   notebook: NotebookInfo | null;
   /** How full the agent's context is, when the agent reports it. */
   usage?: ChatUsage;
+  /** The OpenResearch project the notebook belongs to (absent for chats opened without a notebook). */
+  project?: ChatProject;
+}
+
+/**
+ * The OpenResearch project a notebook chat belongs to. `pending`: being
+ * resolved (OpenResearch is starting, or Scratch is being made); `missing`:
+ * OpenResearch says the project no longer exists; `unavailable`: OpenResearch
+ * could not be reached, so whether it exists is not known.
+ */
+export interface ChatProject {
+  /** Null while a new notebook waits for its Scratch project. */
+  id: string | null;
+  name: string;
+  state: "ready" | "pending" | "missing" | "unavailable";
+  /** The project notebooks go to when no other was chosen. */
+  scratch?: boolean;
+  error?: string;
+  /** The notebook chat's worktree on the user's computer, once made (the Chat Worktree view shows it). */
+  worktree?: string;
+}
+
+/** A notebook chat as the bridge keeps it for a project (chats.list). */
+export interface NotebookChatSummary {
+  notebookKey: string;
+  title?: string;
+  url?: string;
+  platform?: Platform;
+  agentId?: string;
+  updatedAt: number;
+  /** Has a saved conversation. */
+  messages: boolean;
+  /** Open in an editor tab now (its id), else absent. */
+  tabId?: number;
 }
 
 /** Context use the agent reported over ACP (usage_update). */
@@ -198,9 +232,17 @@ export interface BridgeMethods {
      * notebook in that Chrome tab: the chat stays with the editor, its
      * notebook operations go to the browser extension.
      */
-    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string; browserTab?: number };
+    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string; browserTab?: number; projectId?: string };
     result: ChatSnapshot;
   };
+  /** Move a notebook (and its chat) to another OpenResearch project; takes effect from its next turn. */
+  "notebook.link": { params: { notebookKey: string; projectId: string; title?: string; platform?: Platform; url?: string }; result: { project: ChatProject } };
+  /** The project a notebook was linked to (null: none yet, it goes to Scratch), without asking OpenResearch. */
+  "notebook.project": { params: { notebookKey: string }; result: { projectId: string | null } };
+  /** The notebook chats of a project, newest first. */
+  "chats.list": { params: { projectId: string }; result: { chats: NotebookChatSummary[] } };
+  /** Save the chat's notebook (with outputs) to its project's artifacts/notebooks. */
+  "chat.saveNotebook": { params: { chatId: string }; result: { path: string } };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };
   "chat.send": { params: { chatId: string; text: string }; result: { accepted: boolean } };
   "chat.cancel": { params: { chatId: string }; result: { cancelled: boolean } };

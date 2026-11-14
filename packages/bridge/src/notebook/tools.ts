@@ -114,20 +114,21 @@ class Attachments {
   }
 }
 
-interface ToolDef<S extends z.ZodType> {
+export interface ToolDef<S extends z.ZodType, C = ToolContext> {
   name: string;
   description: string;
   schema: S;
-  run(ctx: ToolContext, args: z.infer<S>): Promise<ToolResult>;
+  run(ctx: C, args: z.infer<S>): Promise<ToolResult>;
 }
 
-function tool<S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> {
+export function tool<S extends z.ZodType, C = ToolContext>(def: ToolDef<S, C>): ToolDef<S, C> {
   return def;
 }
 
-class Denied extends Error {}
+/** A refusal or a mistake the agent can act on: its message is the tool's answer. */
+export class Denied extends Error {}
 
-function check(ctx: ToolContext, action: ToolAction, cellId: string | null) {
+export function check(ctx: ToolContext, action: ToolAction, cellId: string | null) {
   const d = decide(ctx.settings(), action, cellId, ctx.targets());
   if (!d.allow) throw new Denied(d.reason);
   return d;
@@ -661,7 +662,7 @@ export const TOOLS = [
 // ------------------------------------------------------------ files
 
 /** The machine is reached through a Python kernel; returns the way to it. */
-function machine(ctx: ToolContext, info: NotebookInfo): KernelExec {
+export function machine(ctx: ToolContext, info: NotebookInfo): KernelExec {
   if (!reachable(info)) {
     throw new Denied(
       `The notebook's machine is reached through its Python kernel; this kernel runs ${info.language}. ` +
@@ -679,7 +680,7 @@ async function terminal(ctx: ToolContext): Promise<{ exec: KernelExec; start: Sh
   return { exec, start: { cwd: at.cwd, env: at.env } };
 }
 
-async function resolve(ctx: ToolContext, info: NotebookInfo, p: string): Promise<string> {
+export async function resolve(ctx: ToolContext, info: NotebookInfo, p: string): Promise<string> {
   return resolvePath(p, await places(ctx, info));
 }
 
@@ -975,21 +976,21 @@ export interface McpToolListing {
   inputSchema: Record<string, unknown>;
 }
 
-export function listTools(): McpToolListing[] {
-  return TOOLS.map((t) => {
+export function listTools(tools: readonly ToolDef<z.ZodType, any>[] = TOOLS): McpToolListing[] {
+  return tools.map((t) => {
     const schema = z.toJSONSchema(t.schema as z.ZodType, { target: "draft-7" }) as Record<string, unknown>;
     delete schema.$schema;
     return { name: t.name, description: t.description, inputSchema: schema };
   });
 }
 
-export async function callTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
-  const t = TOOLS.find((x) => x.name === name);
+export async function callTool<C extends ToolContext = ToolContext>(ctx: C, name: string, args: unknown, tools: readonly ToolDef<z.ZodType, any>[] = TOOLS): Promise<ToolResult> {
+  const t = tools.find((x) => x.name === name);
   if (!t) return { text: `Unknown tool ${name}.`, isError: true };
   const parsed = (t.schema as z.ZodType).safeParse(args ?? {});
   if (!parsed.success) return { text: `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}`, isError: true };
   try {
-    return await (t as ToolDef<z.ZodType>).run(ctx, parsed.data);
+    return await (t as ToolDef<z.ZodType, C>).run(ctx, parsed.data);
   } catch (e) {
     if (e instanceof Denied || e instanceof VmError) return { text: e.message, isError: true };
     if (e instanceof KernelBusy) {

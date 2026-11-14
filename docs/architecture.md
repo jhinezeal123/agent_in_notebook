@@ -69,7 +69,7 @@ VS Code                                     bridge                     orx up --
   - một tab editor cho mỗi màn (New Chat, Settings, Experiment; các thử nghiệm dùng chung một tab);
   - chat Research trong khung chat.
 
-  Project hiện tại là project mở gần nhất (lưu trong `globalState`, phát qua sự kiện `project.current`). "Mở" là: hiện một chat Research của nó, hoặc chọn nó ở thanh tên. Chưa mở project nào, hoặc project đó đã bị xoá, thì lấy project thay đổi gần nhất (`pickProject` trong `studio/src/messages.ts`, dùng chung cho webview và tree Artifacts). Chat Notebook không đổi project hiện tại.
+  Project hiện tại là project mở gần nhất (lưu trong `globalState`, phát qua sự kiện `project.current`). "Mở" là: hiện một chat Research của nó, hiện một chat Notebook có notebook thuộc nó, hoặc chọn nó ở thanh tên. Chưa mở project nào, hoặc project đó đã bị xoá, thì lấy project thay đổi gần nhất (`pickProject` trong `studio/src/messages.ts`, dùng chung cho webview và tree Artifacts).
 
   Các việc chỉ VS Code hoặc bridge làm được thì đi qua `host.request`: mở tab, chọn thư mục, danh sách notebook, chọn chat, agent của chat Notebook, kernel setup, log của lần chạy (terminal giả đọc `/api/runs/{id}/logs`). Bridge chưa kết nối thì host tự kết nối, trừ khi user vừa bấm tắt bridge.
 - **Khung chat** (`ainb.chat`, ở thanh bên phải) nạp cả `webview.js` (chat Notebook, Preact) lẫn `studio.js`. Hai bên dùng chung API của VS Code qua `window.__ainbVsCode`, và phân biệt message bằng trường `type`. Chọn một chat Research thì chat Notebook bị ẩn, còn chat Research được gắn vào một shadow root có `studio.css` riêng, để style của hai chat không lẫn vào nhau.
@@ -138,6 +138,37 @@ VS Code dùng chính launcher đó (`vscode/src/start-bridge.ts`): Extension Hos
 Bridge là của VS Code. Host bật nó bằng `serve --background`, và bridge như vậy tự dừng khi không có VS Code nào nối vào trong 30 giây (`stopWithoutEditorMs`): VS Code đóng thì bridge đi theo, còn Reload Window nối lại kịp. Trình duyệt hỏi host bằng `{type:"connect", start:false}`: host chỉ trả port và token khi bridge đang chạy, không thì trả `notRunning`, và không bật bridge. Bridge chạy tay (`ainb serve`, `pnpm bridge`) không tự dừng.
 
 Khi tắt có chủ đích (VS Code đóng, nút **⏻**, Ctrl+C, `ainb stop` → `POST /shutdown`), bridge đóng WebSocket với mã 4001. Extension Chrome khi đó chờ: nó thử nối lại bằng WebSocket với port và token đã biết (lùi dần tới 10 giây, cộng alarm 30 giây khi service worker ngủ), nên khi VS Code bật bridge lại thì notebook trong Chrome tự quay lại. Nó chỉ hỏi host khi chưa biết token. Lúc chờ, biểu tượng không có dấu **!**. Token bị từ chối thì extension hỏi lại host một lần, phòng trường hợp token đã bị reset. Config ghi tay vào `chrome.storage.local` (test, devtools) được đánh dấu `manual` để host không ghi đè. Extension không có giao diện: trạng thái kết nối hiện ở badge và tooltip của biểu tượng.
+
+## Notebook trong project
+
+Thiết kế và lý do: [hop-nhat-openresearch.md](hop-nhat-openresearch.md). Tóm tắt phần đã làm:
+
+- **Liên kết** notebook ↔ project nằm ở `chats/<hash>.meta.json` (`bridge/src/store.ts: NotebookMeta`), tách khỏi transcript, giữ 180 ngày (transcript 30 ngày). Đóng chat không xoá meta. Meta không có `projectId` thì notebook thuộc Scratch.
+- **`bridge/src/research/projects.ts`** (`ResearchProjects`) gọi API HTTP của `orx up` mà bridge đang chạy, có timeout. OpenResearch chưa chạy thì nó bật `orx` ở nền và báo `OrxUnavailable` ngay, không bắt chat chờ. `ensureScratch()` tạo project Scratch một lần (`creationMode` folder hoặc blank, `githubSyncEnabled: false`), lưu id vào `research.json: scratchProjectId`; id cũ bị xoá thì tìm lại theo đường dẫn.
+- **`bridge/src/research/links.ts`** (`ProjectLinks`):
+  - `resolve` cho trạng thái `ready`, `pending`, `missing` (project đã bị xoá) hoặc `unavailable`;
+  - `link` chuyển notebook sang project khác;
+  - `list` liệt kê notebook chat của project (`chats.list`);
+  - `brief` tạo tóm tắt project cho prompt, cache 60 giây. Sự kiện `project.updated`, `experiment.updated`, `files.updated`, `run.updated`, `resync.required` từ `/api/events` (qua `Orx.onProjectChange`) đánh dấu cache cũ.
+- **Prompt** (`instructions.ts`): `<project-context>` (≤ 8000 ký tự) ở lượt đầu hoặc sau khi đổi project; các lượt sau chỉ thêm `<project-update>` khi digest đổi. Không có OpenResearch thì có một dòng báo chưa có ngữ cảnh.
+- **Project nhớ sẵn.** Mỗi lần OpenResearch trả lời về project, `ProjectLinks` lưu `meta.cache` (id, tên, `repoPath`, `githubUrl`, `artifactsDir`). Khi OpenResearch không trả lời, `Chat.requireProject` và `codeBlock` dùng bản này, nên đồng bộ code và shared artifacts vẫn chạy. Chỉ thiếu bản tóm tắt và `run_result`.
+- **Code trên máy notebook** (`bridge/src/project/vmrepo.ts`: `CodeSync`; `project/worktree.ts`; `project/github.ts`). Agent sống trên VM:
+  - **Trước mỗi lượt**, `Chat.codeBlock` gọi `CodeSync.ensure`, chạy tuần tự. Project không có `githubUrl`, kernel không phải Python, hoặc máy không phải POSIX thì agent được báo lý do trong `<project-code>`.
+  - **Worktree và nhánh** (`ensureWorktree`): bridge tự `git worktree add -b notebook/<tên>-<hash6>` từ `HEAD` của `repoPath`, vào `<AINB_HOME>/worktrees/<project>/<keyHash>`. Commit bắt đầu và tên nhánh gốc được ghi vào `<git-dir>/ainb-base` (mục Changes so sánh với nó). Không có phiên OpenResearch nào phía sau. Rồi bridge kéo bản đã có trên GitHub (nếu có, fast-forward) và push.
+  - **Token.** Token lấy từ `gh auth token` (CLI mà OpenResearch dùng), hoặc `AINB_GITHUB_TOKEN`, cache 5 phút. Git trên máy bạn dùng nó qua `-c http.https://github.com/.extraheader`, chỉ cho từng lệnh. Trên VM, bridge ghi nó bằng `vmfs.writeFile` vào `~/.ainb-git-credentials`, rồi đặt `credential.helper store --file`. Token không bao giờ nằm trong một lệnh. `redactTokens` che token trong kết quả mọi tool.
+  - **Clone.** Script chạy ở phiên terminal `project` (`runInSession`, cùng cơ chế với kernel setup): đặt git config và identity, rồi `git clone --branch` vào `<cwd>/<repo>`. Thư mục đã có thì `fetch` và chuyển sang nhánh. Mỗi lượt sau chỉ kiểm tra `<dir>/.git` còn hay không, mất thì clone lại.
+  - **Sau mỗi lượt** (`CodeSync.syncBack`): VM đưa file trên 50 MB chưa được track vào `.git/info/exclude`, rồi `git add -A`, commit, `git push origin HEAD:refs/heads/<nhánh>`. Bridge `fetch` rồi `merge --ff-only` vào worktree.
+  - `ChatProject.worktree` báo đường dẫn worktree cho VS Code. Mục **Chat Worktree** (`folder-tree.ts`, `studio.chatWorktreeOf`) hiện nó; Changes tính bằng git trên máy (`changes.ts: localChanges`, so với `ainb-base`). Chat Research vẫn dùng worktree và `/api/chat/sessions/{id}/worktree` của OpenResearch.
+- **Tool** (`bridge/src/project/tools.ts`) là MCP server thứ hai: relay `ainb mcp` với `AINB_MCP_SERVER=project` gọi `/mcp/project/list|call`. Chúng dùng chung `ToolDef`, `check` và policy với tool notebook. Action `save` trong `protocol/modes.ts`: Edit cell thì cấm; Write/Autonomous thì cho; Review bật thì hỏi trước.
+  - `artifact_list`, `artifact_read`, `artifact_write` làm việc thẳng trên `artifactsDir` (không qua OpenResearch), qua `realpath`. Chúng từ chối symlink và đường đi ra ngoài, và ghi nguyên tử. `artifact_write` nhận `content` hoặc `from_vm` (đọc bằng `vmfs.readFile`, tối đa 50 MB); `artifact_read` có `to_vm` (ghi bằng `vmfs.writeFile`, action `execute`). Ghi đè file mà chat không tự ghi thì luôn hỏi trước.
+  - `save_notebook` ghi notebook kèm output vào `artifacts/notebooks/`.
+  - `run_result` đọc `/api/runs/{id}` (hoặc lần chạy mới nhất của một thử nghiệm), và `log: true` thì đọc `/api/runs/{id}/logs`.
+- **RPC mới**: `notebook.link`, `notebook.project`, `chats.list`, `chat.saveNotebook`; `chat.open` nhận `projectId`; `ChatSnapshot.project`.
+- **VS Code**:
+  - `extension.ts` theo dõi `project` trong snapshot để thanh bên phải theo chat Notebook. Nó cũng xử lý `project.move` (quick pick) và `project.show`, gắn notebook Kaggle mở từ launcher vào project đang hiện (trong 15 phút), và chạy kernel setup của project.
+  - `studio-host.ts` phục vụ `projects.list`, `notebookChats.list`, `notebookChat.open`, `agents.logins` (`/api/harnesses`) và `agents.fromResearch` (`/api/harnesses/acp`).
+- **Test** không bao giờ chạm OpenResearch thật: `test/fixtures/fake-orx-api.ts` giả API và SSE, còn các test cũ dùng `NO_ORX`.
+- Phần OpenResearch (submodule) không bị sửa.
 
 ## Chat theo notebook
 

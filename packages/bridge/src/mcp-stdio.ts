@@ -41,14 +41,17 @@ function post(path: string, body: unknown): Promise<any> {
 }
 
 export async function runMcpStdio(): Promise<void> {
-  const server = new Server({ name: "notebook", version: BRIDGE_VERSION }, { capabilities: { tools: {} } });
+  // One relay serves each of the bridge's servers: "notebook" (the default) and "project".
+  const name = process.env.AINB_MCP_SERVER === "project" ? "project" : "notebook";
+  const base = name === "notebook" ? "/mcp" : `/mcp/${name}`;
+  const server = new Server({ name, version: BRIDGE_VERSION }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const { tools } = await post("/mcp/list", {});
+    const { tools } = await post(`${base}/list`, {});
     return { tools };
   });
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
-      const result = await post("/mcp/call", { name: req.params.name, arguments: req.params.arguments ?? {} });
+      const result = await post(`${base}/call`, { name: req.params.name, arguments: req.params.arguments ?? {} });
       const images: { mime: string; data: string }[] = Array.isArray(result.images) ? result.images : [];
       return {
         content: [

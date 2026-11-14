@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AppliedChange, ChatMessage } from "@ainb/protocol";
+import type { AppliedChange, ChatMessage, Platform } from "@ainb/protocol";
 
 /** Older messages are dropped past this; the recap only uses the tail anyway. */
 const MAX_MESSAGES = 200;
@@ -21,6 +21,40 @@ export interface StoredChat {
   /** Undo journal, by agent message id. */
   journal?: Record<string, AppliedChange[]>;
 }
+
+/**
+ * What the bridge knows of a notebook apart from its conversation: the
+ * OpenResearch project it belongs to. Kept in its own file, so "New chat"
+ * (which forgets the conversation) leaves the notebook in its project.
+ */
+/** What a notebook keeps of its OpenResearch project. */
+export interface ProjectCache {
+  id: string;
+  name: string;
+  repoPath: string;
+  githubUrl: string | null;
+  artifactsDir: string;
+}
+
+export interface NotebookMeta {
+  version: 1;
+  key: string;
+  /** Unset: never linked (an older bridge's notebook); it goes to Scratch. */
+  projectId?: string;
+  /** The project's name when last seen, to show while OpenResearch is down. */
+  projectName?: string;
+  title?: string;
+  url?: string;
+  platform?: Platform;
+  agentId?: string;
+  /** The project as last seen, so the chat's code and artifacts work while OpenResearch is not running. */
+  cache?: ProjectCache;
+  /** Where the project lives: unset for this computer (remote workspaces later). */
+  workspace?: string;
+  updatedAt: number;
+}
+
+const META_SUFFIX = ".meta.json";
 
 /** Short, filesystem-safe name for a notebook key. */
 export function keyHash(key: string): string {
@@ -106,14 +140,74 @@ export class ChatStore {
     return write;
   }
 
+  /** Forget the conversation; the notebook's meta (its project) stays. */
   remove(key: string): void {
     this.bump(key);
     rmSync(this.file(key), { force: true });
   }
 
-  /** Delete transcripts nobody has touched for `maxAgeMs`. */
-  prune(maxAgeMs: number): void {
-    pruneDir(this.dir, maxAgeMs);
+  /** Whether a conversation is saved for this notebook. */
+  hasTranscript(key: string): boolean {
+    return existsSync(this.file(key));
+  }
+
+  private metaFile(key: string): string {
+    return join(this.dir, `${keyHash(key)}${META_SUFFIX}`);
+  }
+
+  loadMeta(key: string): NotebookMeta | null {
+    try {
+      const data = JSON.parse(readFileSync(this.metaFile(key), "utf8")) as NotebookMeta;
+      if (data?.version !== 1 || data.key !== key) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Merge `patch` into the notebook's meta (unknown fields a newer bridge wrote are kept). */
+  saveMeta(key: string, patch: Partial<Omit<NotebookMeta, "version" | "key" | "updatedAt">>): NotebookMeta {
+    mkdirSync(this.dir, { recursive: true });
+    let old: Record<string, unknown> = {};
+    try {
+      const raw = JSON.parse(readFileSync(this.metaFile(key), "utf8"));
+      if (raw?.key === key) old = raw;
+    } catch {
+      // none yet
+    }
+    const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+    const data = { ...old, ...defined, version: 1, key, updatedAt: Date.now() } as NotebookMeta;
+    const file = this.metaFile(key);
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
+      renameSync(temporary, file);
+    } finally {
+      if (existsSync(temporary)) unlinkSync(temporary);
+    }
+    return data;
+  }
+
+  /** Every notebook's meta (the notebook chats of all projects). */
+  listMeta(): NotebookMeta[] {
+    if (!existsSync(this.dir)) return [];
+    const out: NotebookMeta[] = [];
+    for (const name of readdirSync(this.dir)) {
+      if (!name.endsWith(META_SUFFIX)) continue;
+      try {
+        const data = JSON.parse(readFileSync(join(this.dir, name), "utf8")) as NotebookMeta;
+        if (data?.version === 1 && typeof data.key === "string") out.push(data);
+      } catch {
+        // unreadable: skip it
+      }
+    }
+    return out;
+  }
+
+  /** Delete transcripts nobody has touched for `maxAgeMs`, and notebook metas for `metaMaxAgeMs`. */
+  prune(maxAgeMs: number, metaMaxAgeMs = maxAgeMs): void {
+    pruneDir(this.dir, maxAgeMs, (name) => name.endsWith(META_SUFFIX));
+    pruneDir(this.dir, metaMaxAgeMs, (name) => !name.endsWith(META_SUFFIX));
   }
 }
 

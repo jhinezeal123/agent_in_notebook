@@ -272,3 +272,12 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .context-meter.filling .bar > span { background: #d29922; }
 .context-meter.full { color: #cf222e; }
 .context-meter.full .bar > span { background: #cf222e; }
+.ctx-chip.project { max-width: 50%; }
+.ctx-chip.project.p-missing, .ctx-chip.project.p-unavailable { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+.ctx-chip.project svg.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+.ctx-link { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-link:hover:not(:disabled) { text-decoration: underline; }
+.project-actions { display: inline-flex; gap: 12px; margin-left: auto; }
+.project-actions .linkish { display: inline-flex; align-items: center; gap: 3px; }
+.project-actions .linkish:disabled { opacity: .5; cursor: default; }
+.project-actions svg.i { width: 13px; height: 13px; }
