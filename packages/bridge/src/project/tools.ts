@@ -3,7 +3,7 @@
 // user's computer. The project's code is not here: it is cloned on the
 // machine (vmrepo.ts). Here are the project's shared artifacts (results and
 // outputs every chat of the project sees), read and written through the
-// bridge, the results of the project's runs, and the research literature
+// bridge, and the research literature
 // (searched and read with OpenResearch's `orx discover` and `orx paper`).
 
 import { randomUUID } from "node:crypto";
@@ -15,7 +15,7 @@ import { toIpynb } from "../notebook/ipynb.js";
 import { check, Denied, machine, resolve, tool, type ToolContext, type ToolDef, type ToolResult } from "../notebook/tools.js";
 import { FileTooBig, readFile as vmReadFile, writeFile as vmWriteFile } from "../notebook/vmfs.js";
 import type { ProjectLinks } from "../research/links.js";
-import { OrxApiError, type OrxExperiment, type OrxRun, type ResearchProjects } from "../research/projects.js";
+import type { ResearchProjects } from "../research/projects.js";
 
 /** What the artifact tools need of the project. */
 export interface ArtifactsProject {
@@ -38,8 +38,6 @@ export interface ProjectToolContext extends ToolContext {
 const READ_LINES = 2000;
 const READ_BUDGET = 60_000;
 const LIST_MAX = 400;
-const LOG_PAGE = 12_000;
-const RESULT_MAX = 20_000;
 /** save_notebook refuses a notebook bigger than this. */
 export const NOTEBOOK_MAX = 20 * 1024 * 1024;
 /** Files copied between the notebook's machine and the shared artifacts, at most. */
@@ -154,22 +152,9 @@ function numbered(text: string, offset?: number, limit?: number): string {
   return shown.join("\n") + more;
 }
 
-/** The newest run of each experiment. */
-function latestRuns(runs: OrxRun[]): Map<string, OrxRun> {
-  const time = (r: OrxRun) => r.endedAt ?? r.startedAt ?? r.createdAt ?? 0;
-  const latest = new Map<string, OrxRun>();
-  for (const r of runs) {
-    const old = latest.get(r.experimentId);
-    if (!old || time(r) > time(old)) latest.set(r.experimentId, r);
-  }
-  return latest;
-}
-
 function when(ms: number | null | undefined): string {
   return ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "-";
 }
-
-const id = (s: string) => encodeURIComponent(s);
 
 interface Listed {
   path: string;
@@ -336,48 +321,6 @@ export const PROJECT_TOOLS: ToolDef<z.ZodType, ProjectToolContext>[] = [
     },
   }),
   tool({
-    name: "run_result",
-    description:
-      "A run of the project's experiments (from <project-context>): status, command, commit, times, exit code and the result report its agent wrote. " +
-      "Give run_id, or experiment (slug or id) for its newest run. log: true pages through its log instead (cursor: a byte offset, given at the end of each page).",
-    schema: z.object({
-      run_id: z.string().optional(),
-      experiment: z.string().optional(),
-      log: z.boolean().optional(),
-      cursor: z.number().int().min(0).optional(),
-    }),
-    async run(ctx: ProjectToolContext, a) {
-      const project = await ctx.project();
-      let run: OrxRun | undefined;
-      try {
-        if (a.run_id) run = (await ctx.research.api<{ run: OrxRun }>("GET", `/api/runs/${id(a.run_id)}`, { wait: true })).run;
-        else if (a.experiment) {
-          const [{ experiments = [] }, { runs = [] }] = await Promise.all([
-            ctx.research.api<{ experiments?: OrxExperiment[] }>("GET", `/api/projects/${id(project.id)}/experiments`, { wait: true }),
-            ctx.research.api<{ runs?: OrxRun[] }>("GET", `/api/projects/${id(project.id)}/runs`, { wait: true }),
-          ]);
-          const exp = experiments.find((e) => e.id === a.experiment || e.slug === a.experiment || e.branchName === a.experiment);
-          if (!exp) throw new Denied(`No experiment ${a.experiment} in ${project.name}. <project-context> lists them.`);
-          run = latestRuns(runs).get(exp.id);
-          if (!run) return { text: `Experiment ${exp.slug} has not been run yet.` };
-        } else throw new Denied("Give run_id or experiment.");
-      } catch (e) {
-        if (e instanceof OrxApiError && e.status === 404) throw new Denied(`No run ${a.run_id}. <project-context> lists the latest runs.`);
-        throw e;
-      }
-      if (a.log) return readLog(ctx, run.id, a.cursor);
-      const lines = [
-        `Run ${run.id} [${run.status}]${run.exitCode != null ? ` exit code ${run.exitCode}` : ""}`,
-        `Started ${when(run.startedAt)}, ended ${when(run.endedAt)}.`,
-        run.command ? `Command: ${run.command}` : "",
-        run.commitSha ? `Commit: ${run.commitSha}` : "",
-        "",
-        run.resultMarkdown ? capText(run.resultMarkdown, RESULT_MAX) : "No result report. log: true shows its log.",
-      ];
-      return { text: lines.filter((l, i) => l || i === 4).join("\n") };
-    },
-  }),
-  tool({
     name: "paper_search",
     description:
       "Search the research literature, the way OpenResearch's lit-review does (`orx discover`, run on the user's computer; public sources, no sign-in). One search per call. " +
@@ -470,25 +413,6 @@ async function orxCli(ctx: ProjectToolContext, args: string[], timeoutMs: number
   } catch (e) {
     throw new Denied((e as Error).message);
   }
-}
-
-/** A page of a run's log, from `cursor` (a byte offset). */
-async function readLog(ctx: ProjectToolContext, runId: string, cursor: number | undefined): Promise<ToolResult> {
-  const page = await ctx.research.api<{ offset?: number; dataBase64?: string; nextCursor?: number; eof?: boolean }>("GET", `/api/runs/${id(runId)}/logs?cursor=${cursor ?? 0}`, { wait: true, timeoutMs: 20_000 });
-  const data = Buffer.from(page.dataBase64 ?? "", "base64");
-  const offset = page.offset ?? cursor ?? 0;
-  const reset = cursor !== undefined && offset !== cursor ? `(the log was restarted or is shorter than cursor ${cursor}; this is from byte ${offset})\n` : "";
-  if (!data.length) return { text: `${reset}${page.eof ? "End of the log." : "Nothing more yet; the run is still writing. Ask again later with the same cursor."}` };
-  let used = data.length;
-  if (used > LOG_PAGE) {
-    used = LOG_PAGE;
-    // Do not split a UTF-8 character.
-    while (used > 0 && (data[used]! & 0xc0) === 0x80) used--;
-  }
-  const text = data.subarray(0, used).toString("utf8");
-  const next = offset + used;
-  const done = used === data.length && page.eof;
-  return { text: `${reset}bytes ${offset}-${next}\n${text}\n${done ? "(end of the log)" : `(continue with log: true, cursor=${used === data.length ? page.nextCursor ?? next : next})`}` };
 }
 
 export type { ToolResult };

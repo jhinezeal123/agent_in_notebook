@@ -5,6 +5,7 @@ Trạng thái: đã làm, với hai thay đổi so với thiết kế dưới đ
 - Bỏ tính năng handoff (`handoff_to_research`, nút "Hand off to Research").
 - Bridge tự tạo worktree (không qua phiên OpenResearch). Tool của notebook chat rút gọn còn `artifact_list/read/write`, `save_notebook`, `run_result`; bỏ đọc code (code đã ở trên VM), `paper_search`, `push_to_vm`, nút "Open in notebook copilot" và gợi ý từ requirements.txt. Hai mục bên phải đổi tên thành "Chat Worktree" và "Shared Artifacts".
 - Thêm lại tìm bài báo, bản đầy đủ: `paper_search` và `paper_read` gọi `orx discover` và `orx paper` trên máy người dùng, và lệnh `/lit-review` trong chat Notebook theo quy trình `orx-lit-review` của OpenResearch.
+- Chat Notebook không còn biết gì về thử nghiệm và lần chạy: bỏ tool `run_result`, bỏ thử nghiệm/lần chạy khỏi `<project-context>`, bỏ `<project-update>` và việc nghe `/api/events` cho chat Notebook. Người dùng tự báo agent khi cần.
 
 ## Bối cảnh
 

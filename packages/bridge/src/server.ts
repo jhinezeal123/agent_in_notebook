@@ -106,7 +106,6 @@ export class Bridge {
       log: (m) => this.log(m),
       onStatus: (status) => this.toEditor("research.status", status),
       onRun: (run) => this.toEditor("research.run", run),
-      onProjectChange: (projectId) => this.links?.markDirty(projectId),
     });
     this.links = new ProjectLinks(this.store, new ResearchProjects(this.orx, (m) => this.log(m)), (m) => this.log(m));
     try {

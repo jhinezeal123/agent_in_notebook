@@ -35,35 +35,6 @@ export interface OrxProject {
   updatedAt: number;
 }
 
-export interface OrxExperiment {
-  id: string;
-  projectId: string;
-  parentExperimentId?: string | null;
-  slug: string;
-  branchName: string;
-  title?: string | null;
-  description?: string | null;
-  agentStatus?: string;
-  archived?: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface OrxRun {
-  id: string;
-  experimentId: string;
-  projectId: string;
-  status: string;
-  command?: string | null;
-  commitSha?: string | null;
-  resultMarkdown?: string | null;
-  createdAt: number;
-  updatedAt?: number;
-  startedAt?: number | null;
-  endedAt?: number | null;
-  exitCode?: number | null;
-}
-
 export interface OrxArtifact {
   name: string;
   path: string;

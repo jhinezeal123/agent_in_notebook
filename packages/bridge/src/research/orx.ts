@@ -30,11 +30,6 @@ export interface OrxOptions {
   log: (msg: string) => void;
   onStatus: (status: ResearchStatus) => void;
   onRun: (run: ResearchRun) => void;
-  /**
-   * Something of a project changed (its record, an experiment, a run, its
-   * artifacts); undefined: anything may have (the event stream reconnected).
-   */
-  onProjectChange?: (projectId: string | undefined) => void;
   /** Find orx (default: research.json, AINB_ORX, PATH, the usual install places). */
   locate?: () => OrxLaunch | { missing: string };
   /** Ports where an OpenResearch already running may answer (default: its default port). */
@@ -200,8 +195,6 @@ export class Orx {
     };
     const req = get(`${url}/api/events`, { headers: { accept: "text/event-stream" } }, (res) => {
       if (res.statusCode !== 200) { res.resume(); lost(); return; }
-      // Events missed while the stream was down are not replayed.
-      this.opts.onProjectChange?.(undefined);
       res.setEncoding("utf8");
       let buffer = "";
       res.on("data", (chunk: string) => {
@@ -234,18 +227,9 @@ export class Orx {
     } catch {
       return; // not JSON: skip
     }
-    const changed = (id: unknown) => this.opts.onProjectChange?.(typeof id === "string" ? id : undefined);
-    switch (type) {
-      case "run.updated": {
-        const run = toRun(body?.run);
-        if (run) this.opts.onRun(run);
-        changed(body?.run?.projectId);
-        return;
-      }
-      case "project.updated": changed(body?.project?.id); return;
-      case "experiment.updated": changed(body?.experiment?.projectId); return;
-      case "files.updated": changed(body?.projectId); return;
-      case "resync.required": this.opts.onProjectChange?.(undefined); return;
+    if (type === "run.updated") {
+      const run = toRun(body?.run);
+      if (run) this.opts.onRun(run);
     }
   }
 }

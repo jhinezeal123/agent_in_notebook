@@ -33,7 +33,7 @@ import {
 } from "@ainb/protocol";
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
-import { litReview, playbook, projectContext, projectUnavailable, projectUpdate, recap, turnContext } from "./instructions.js";
+import { litReview, playbook, projectContext, projectUnavailable, recap, turnContext } from "./instructions.js";
 import { RecentRuns } from "./notebook/exec.js";
 import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
@@ -421,14 +421,14 @@ export class Chat {
     this.lastOrx = res?.orx ? { id: res.orx.id, name: res.orx.name, repoPath: res.orx.repoPath, githubUrl: res.orx.githubUrl ?? null, artifactsDir: res.orx.artifactsDir } : this.host.project?.cached() ?? null;
     if (res?.orx) {
       try {
-        const brief = await this.host.project.links.brief(res.orx);
-        const before = this.lastBrief;
-        let text: string | null;
-        if (full || this.projectMoved || !before || before.id !== brief.id) {
+        // Told once (again after a compaction or a move); changes later are the user's to mention.
+        let text: string | null = null;
+        if (full || this.projectMoved || this.lastBrief?.id !== res.orx.id) {
+          const brief = await this.host.project.links.brief(res.orx);
           const note = this.projectMoved ? `The user moved this notebook to the project ${brief.name}. What you were told about another project no longer applies.` : undefined;
           text = projectContext(brief, note);
-        } else text = brief.digest === before.digest ? null : projectUpdate(before, brief);
-        this.lastBrief = brief;
+          this.lastBrief = brief;
+        }
         this.projectMoved = false;
         this.lastProjectNote = "";
         return text;
@@ -1177,7 +1177,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP servers are registered as "notebook" and "project"; agents spell the tool name differently. */
 export function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review|artifact_\w+|paper_search|paper_read|run_result|save_notebook)\b/i.test(t)) return true;
+  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review|artifact_\w+|paper_search|paper_read|save_notebook)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }

@@ -77,7 +77,7 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<agent-in-notebook>")) await say("[saw playbook]");
     if (text.includes("<earlier-conversation>")) await say("[saw recap]");
     if (text.includes("<undo-note>")) await say("[saw undo note]");
-    if (text.includes("<lit-review>")) await say(text.includes("They named no topic") ? "[saw lit-review, no topic]" : "[saw lit-review]");
+    if (text.includes("<lit-review>\n")) await say(text.includes("They named no topic") ? "[saw lit-review, no topic]" : "[saw lit-review]");
     if (text.includes("ECHO_MODEL")) await say(`[model ${model}]`);
     const ctx = text.match(/<notebook-context>[\s\S]*?<\/notebook-context>/);
     if (ctx && text.includes("ECHO_CONTEXT")) await say(ctx[0]);

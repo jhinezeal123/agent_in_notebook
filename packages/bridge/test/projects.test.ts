@@ -134,28 +134,29 @@ describe("which project a notebook belongs to", () => {
 });
 
 describe("what the agent is told about the project", () => {
-  it("gives the whole project on the first turn, then only what changed", async () => {
+  it("gives the project once, without its experiments or runs, and nothing about later changes", async () => {
     const p = orx.addProject("Speech", { code: { "README.md": "# Speech\nTrain a small ASR model.", "src/train.py": "lr = 0.1\n" } });
     orx.experiments.push({ id: "exp_1", projectId: p.id, slug: "baseline", branchName: "orx/baseline", title: "Baseline", description: "The paper's setup", archived: false, createdAt: 1, updatedAt: 1 });
+    mkdirSync(join(p.artifactsDir, "reports"), { recursive: true });
+    writeFileSync(join(p.artifactsDir, "reports", "plan.md"), "# Plan");
     const { ext, chatId } = await open("colab:/drive/speech", { projectId: p.id });
     const first = await turn(ext, chatId, "ECHO_PROJECT");
     expect(first).toContain("<project-context>");
     expect(first).toContain("Project: Speech");
-    expect(first).toContain("baseline \"Baseline\" [not run] branch orx/baseline");
     expect(first).toContain("Train a small ASR model.");
+    expect(first).toContain("artifacts/reports/plan.md");
+    expect(first).not.toContain("orx/baseline");
+    expect(first).not.toMatch(/## Experiments|Latest runs/);
     expect(await turn(ext, chatId, "ECHO_PROJECT")).toContain("[no project block]");
 
+    // A run ends and a figure appears: the agent hears of it from the user, not from the bridge.
     const run = { id: "run_1", experimentId: "exp_1", projectId: p.id, status: "done", resultMarkdown: "WER 12.3%", createdAt: 2, startedAt: 2, endedAt: 3 };
     orx.runs.push(run);
     mkdirSync(join(p.artifactsDir, "figures"), { recursive: true });
     writeFileSync(join(p.artifactsDir, "figures", "wer.png"), "png");
     orx.emit("run.updated", { run });
     await sleep(300);
-    const update = await turn(ext, chatId, "ECHO_PROJECT");
-    expect(update).toContain("<project-update>");
-    expect(update).toContain("Experiment baseline: not run → done");
-    expect(update).toContain("WER 12.3%");
-    expect(update).toContain("artifacts/figures/wer.png");
+    expect(await turn(ext, chatId, "ECHO_PROJECT")).toContain("[no project block]");
     ext.close();
   });
 

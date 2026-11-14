@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import type { ChatProject, NotebookChatSummary, Platform } from "@ainb/protocol";
 import type { ChatStore, NotebookMeta, ProjectCache } from "../store.js";
-import { describeFailure, OrxApiError, OrxUnavailable, SCRATCH_NAME, type OrxArtifact, type OrxExperiment, type OrxFile, type OrxProject, type OrxRun, type ResearchProjects } from "./projects.js";
+import { describeFailure, OrxApiError, OrxUnavailable, SCRATCH_NAME, type OrxArtifact, type OrxFile, type OrxProject, type ResearchProjects } from "./projects.js";
 
 
 /** What a chat knows of its project at one moment. */
@@ -24,39 +24,16 @@ export interface ProjectBrief {
   paperId: string | null;
   githubUrl: string | null;
   docs: { name: string; head: string }[];
-  experiments: BriefExperiment[];
-  runs: BriefRun[];
   artifacts: { path: string; size: number }[];
   artifactsTotal: number;
   /** Changes when anything above changes. */
   digest: string;
 }
 
-export interface BriefExperiment {
-  id: string;
-  slug: string;
-  title: string | null;
-  description: string | null;
-  branch: string;
-  parent: string | null;
-  /** Its newest run's status, else "not run". */
-  status: string;
-}
-
-export interface BriefRun {
-  id: string;
-  experiment: string;
-  status: string;
-  endedAt: number | null;
-  result: string | null;
-}
-
-const BRIEF_EXPERIMENTS = 30;
-const BRIEF_RUNS = 5;
 const BRIEF_ARTIFACTS = 40;
 const DOC_LINES = 40;
 const DOCS = ["AGENTS.md", "CLAUDE.md", "README.md"];
-/** A brief is fetched again after this long even without an event saying it changed. */
+/** A brief is fetched again after this long, or once an artifact was written through the bridge. */
 const BRIEF_TTL_MS = 60_000;
 
 export class ProjectLinks {
@@ -159,7 +136,7 @@ export class ProjectLinks {
 
   // ------------------------------------------------------------ briefs
 
-  /** An event said these projects changed (none named: any may have). */
+  /** These projects changed through the bridge (none named: any may have). */
   markDirty(projectId?: string): void {
     if (projectId === undefined) for (const entry of this.briefs.values()) entry.dirty = true;
     else {
@@ -179,9 +156,7 @@ export class ProjectLinks {
 
   private async fetchBrief(project: OrxProject): Promise<ProjectBrief> {
     const id = encodeURIComponent(project.id);
-    const [experiments, runs, artifacts, ...docs] = await Promise.all([
-      this.projects.api<{ experiments?: OrxExperiment[] }>("GET", `/api/projects/${id}/experiments`).then((r) => r.experiments ?? []),
-      this.projects.api<{ runs?: OrxRun[] }>("GET", `/api/projects/${id}/runs`).then((r) => r.runs ?? []),
+    const [artifacts, ...docs] = await Promise.all([
       this.projects.api<{ entries?: OrxArtifact[] }>("GET", `/api/projects/${id}/files`).then((r) => flatten(r.entries ?? []), (e) => {
         this.log(`Could not list the artifacts of ${project.name}: ${describeFailure(e)}`);
         return [] as OrxArtifact[];
@@ -193,14 +168,6 @@ export class ProjectLinks {
         ),
       ),
     ]);
-    const latest = new Map<string, OrxRun>();
-    const time = (r: OrxRun) => r.endedAt ?? r.startedAt ?? r.createdAt ?? 0;
-    for (const run of runs) {
-      const old = latest.get(run.experimentId);
-      if (!old || time(run) > time(old)) latest.set(run.experimentId, run);
-    }
-    const slugs = new Map(experiments.map((e) => [e.id, e.slug]));
-    const live = experiments.filter((e) => !e.archived).sort((a, b) => b.updatedAt - a.updatedAt);
     const files = artifacts.filter((a) => !a.isDir).sort((a, b) => b.modifiedAt - a.modifiedAt);
     const brief: Omit<ProjectBrief, "digest"> = {
       id: project.id,
@@ -208,22 +175,6 @@ export class ProjectLinks {
       paperId: project.paperId ?? null,
       githubUrl: project.githubUrl ?? null,
       docs: docs.filter((d): d is { name: string; head: string } => !!d),
-      experiments: live.slice(0, BRIEF_EXPERIMENTS).map((e) => ({
-        id: e.id,
-        slug: e.slug,
-        title: e.title ?? null,
-        description: e.description ?? null,
-        branch: e.branchName,
-        parent: e.parentExperimentId ? slugs.get(e.parentExperimentId) ?? e.parentExperimentId : null,
-        status: latest.get(e.id)?.status ?? "not run",
-      })),
-      runs: [...runs].sort((a, b) => time(b) - time(a)).slice(0, BRIEF_RUNS).map((r) => ({
-        id: r.id,
-        experiment: slugs.get(r.experimentId) ?? r.experimentId,
-        status: r.status,
-        endedAt: r.endedAt ?? null,
-        result: r.resultMarkdown?.trim() || null,
-      })),
       artifacts: files.slice(0, BRIEF_ARTIFACTS).map((a) => ({ path: a.path, size: a.size })),
       artifactsTotal: files.length,
     };
