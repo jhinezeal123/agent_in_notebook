@@ -3,8 +3,9 @@
 // models are imported straight from an OpenResearch checkout at build time, so
 // updating OpenResearch and rebuilding updates them here.
 //
-// The checkout: OPENRESEARCH_DIR, else ../openresearch_custom next to this
-// repository. Its ui/ must have been installed (pnpm install) once.
+// The checkout: OPENRESEARCH_DIR, else the openresearch/ submodule, which pins
+// the OpenResearch commit this repository needs. Its ui/ must have been
+// installed (pnpm install) once.
 import { build } from "esbuild";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -14,16 +15,18 @@ import { spawnSync } from "node:child_process";
 const here = dirname(fileURLToPath(import.meta.url));
 
 export function openResearchDir() {
-  const dir = resolve(process.env.OPENRESEARCH_DIR ?? join(here, "../../../openresearch_custom"));
+  const dir = resolve(process.env.OPENRESEARCH_DIR ?? join(here, "../../openresearch"));
   const ui = join(dir, "ui");
   if (!existsSync(join(ui, "src", "workspace.tsx"))) {
-    throw new Error(`OpenResearch is not at ${dir}. Set OPENRESEARCH_DIR to an OpenResearch checkout.`);
+    throw new Error(process.env.OPENRESEARCH_DIR
+      ? `OpenResearch is not at ${dir}. Point OPENRESEARCH_DIR to an OpenResearch checkout.`
+      : `The OpenResearch submodule is missing. Run "git submodule update --init" in the repository root.`);
   }
   if (!existsSync(join(ui, "node_modules", "react"))) {
     throw new Error(`Run "pnpm install" in ${ui} once, so its client code can be built here.`);
   }
   if (!existsSync(join(ui, "src", "paraglide", "messages.js"))) {
-    throw new Error(`Run "pnpm exec paraglide-js compile --project ./project.inlang --outdir ./src/paraglide" in ${ui} once.`);
+    throw new Error(`Run "pnpm exec paraglide-js compile --emit-ts-declarations" in ${ui} once.`);
   }
   return dir;
 }

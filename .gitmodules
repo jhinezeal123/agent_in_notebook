@@ -1,0 +1,3 @@
+[submodule "openresearch"]
+	path = openresearch
+	url = https://github.com/jhinezeal123/OpenResearch.git

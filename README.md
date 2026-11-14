@@ -103,6 +103,34 @@ Trong VS Code, link Markdown như `[Xem dòng 12](./src/main.py:12)` mở file �
 
 Cần Node ≥ 20, pnpm, VS Code ≥ 1.105, và Chrome ≥ 116 nếu dùng notebook trên web.
 
+Repo này đi kèm [OpenResearch](https://github.com/jhinezeal123/OpenResearch) (bản fork) dưới dạng **git submodule** ở thư mục `openresearch/`. Submodule ghim đúng commit OpenResearch mà mỗi commit ở đây cần, nên hãy clone kèm submodule:
+
+```sh
+git clone --recurse-submodules https://github.com/jhinezeal123/agent_in_notebook
+# Đã clone mà quên submodule, hoặc sau khi pull:
+git submodule update --init
+```
+
+| Tính năng | Cần OpenResearch? |
+|---|---|
+| Chat notebook (Colab, Kaggle, Jupyter, VS Code) | Không |
+| Chat Research, Settings › Compute, mở notebook Kaggle theo tài khoản | Có: mã nguồn (lúc build) và chương trình `orx` (lúc chạy) |
+
+**0. OpenResearch (bỏ qua nếu chỉ dùng chat notebook)**
+
+```sh
+cd openresearch/ui
+pnpm install
+pnpm exec paraglide-js compile --emit-ts-declarations
+pnpm build
+cd ..
+cargo build --release   # tạo openresearch/target/release/orx
+```
+
+Trên Windows, build `orx` bằng toolchain Rust `x86_64-pc-windows-gnullvm` (kèm llvm-mingw); toolchain `x86_64-pc-windows-gnu` báo lỗi thiếu `libgcc`. Sau đó chọn file `orx` vừa build bằng lệnh **Agent in Notebook: Choose the OpenResearch Program (orx)**, hoặc đặt nó vào PATH.
+
+**Build Agent in Notebook**
+
 ```sh
 pnpm install
 pnpm build
@@ -214,10 +242,23 @@ E2E_NATIVE=1 pnpm --filter @ainb/extension exec vitest run test/native-e2e.test.
 `AINB_DEBUG=1 pnpm bridge` in toàn bộ luồng ACP của agent (update, xin quyền, stderr).
 
 Các màn Research (`packages/studio`) được build từ mã nguồn OpenResearch:
-- Mặc định lấy thư mục `../openresearch_custom` đặt cạnh repo này. Đặt biến `OPENRESEARCH_DIR` để dùng chỗ khác.
+- Mặc định lấy submodule `openresearch/`. Đặt biến `OPENRESEARCH_DIR` để dùng chỗ khác.
 - Thư mục `ui/` của OpenResearch cần chạy `pnpm install` một lần, và cần đã compile paraglide.
 - Nếu không có OpenResearch, extension VS Code vẫn build được, nhưng các màn Research chỉ hiện dòng báo thiếu.
 - `pnpm --filter @ainb/studio typecheck` kiểm tra kiểu các màn này với chính cấu hình TypeScript của OpenResearch.
+
+Sửa OpenResearch ngay trong `openresearch/`. Đó là một repo git đầy đủ, nhưng submodule mặc định không đứng trên nhánh nào, nên:
+
+```sh
+cd openresearch
+git switch main && git pull     # trước khi sửa
+# ... sửa, commit, push như repo thường ...
+cd ..
+git add openresearch            # ghim commit OpenResearch mới cho repo này
+git commit -m "chore: bump OpenResearch"
+```
+
+Commit ở đây cần tính năng mới của OpenResearch thì ghim kèm trong cùng commit, để máy khác pull về là có đúng bản.
 
 Cấu trúc: `packages/protocol` (kiểu dữ liệu, policy của mode, diff, RPC, `OpRunner`), `packages/bridge` (server, agent, tool notebook), `packages/extension` (adapter Colab/Jupyter, background, giao diện chat dùng chung), `packages/vscode` (sidebar và adapter Notebook Editor), `packages/studio` (các màn Research trên logic của OpenResearch). Chi tiết thiết kế: [docs/architecture.md](docs/architecture.md).
 
