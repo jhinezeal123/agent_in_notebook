@@ -69,6 +69,17 @@ export interface NotebookEntry {
   place: "vscode" | "chrome";
 }
 
+export interface KaggleAccount {
+  id: string;
+  alias: string;
+}
+
+export type KaggleNotebookLaunch =
+  | { state: "opened" }
+  | { state: "sign-in"; message: string }
+  | { state: "retry"; message: string }
+  | { state: "unavailable"; message: string };
+
 export type SelectedChat = { kind: "notebook"; tabId: number } | { kind: "research"; projectId: string; sessionId: string };
 
 /** Kernel environment: what runs on a notebook's machine when it attaches. */

@@ -10,8 +10,9 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { ResearchStatus } from "@ainb/protocol";
-import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
+import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KaggleNotebookLaunch, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
 import type { ChangeSet, ChangedFile } from "./changes.js";
+import { listKaggleAccounts, openKaggleNotebook } from "./kaggle-notebooks.js";
 import { OrxTunnel } from "./orx-tunnel.js";
 
 export interface StudioDeps {
@@ -63,6 +64,7 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   readonly onDidChangeChat = this.chatChanged.event;
   private readonly webviews = new Set<{ webview: vscode.Webview; view: () => StudioView | null }>();
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  private readonly kaggleLaunches = new Map<string, Promise<KaggleNotebookLaunch>>();
   private readonly statusItem: vscode.StatusBarItem;
   /** Live runs: their project, and whether they still wait in their provider's queue. */
   private running = new Map<string, { projectId: string; queued: boolean }>();
@@ -303,6 +305,22 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
       case "project.open": return typeof p.projectId === "string" ? this.openProject(p.projectId) : undefined;
       case "project.pick": return this.pickProjectToShow();
       case "notebooks.list": return this.deps.notebooks();
+      case "kaggle.accounts":
+      case "kaggle.openNotebook": {
+        if (vscode.env.remoteName) throw new Error("Open Agent in Notebook in a local VS Code window to use the Kaggle Chrome launcher.");
+        const config = vscode.workspace.getConfiguration("ainb.kaggle");
+        const accounts = await listKaggleAccounts(config.get<string>("accountsFile", "").trim());
+        if (method === "kaggle.accounts") return accounts;
+        const account = accounts.find(({ id }) => id === p.id);
+        if (!account) throw new Error("This Kaggle account is no longer in the registry. Reopen Compute to refresh the list.");
+        const current = this.kaggleLaunches.get(account.id);
+        if (current) return current;
+        const profiles = vscode.Uri.joinPath(this.deps.context.globalStorageUri, "kaggle-chrome");
+        const launch = openKaggleNotebook(account, profiles.fsPath, config.get<string>("chromePath", "").trim(), () => this.baseUrl(), p.recover !== false)
+          .finally(() => this.kaggleLaunches.delete(account.id));
+        this.kaggleLaunches.set(account.id, launch);
+        return launch;
+      }
       case "folder.pick": {
         const picked = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, title: typeof p.title === "string" ? p.title : "Choose a folder" });
         return picked?.[0]?.fsPath ?? null;
