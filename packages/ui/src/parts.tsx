@@ -134,15 +134,28 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
           <PartView key={i} part={item.part} actions={actions} liveThought={live && i === items.length - 1} />
         ),
       )}
-      {text && (
-        <div class="msg-actions">
-          <button class="linkish" title="Copy this reply" onClick={(e) => void copyText(host, text, e.currentTarget)}>
-            Copy
-          </button>
+      {!live && (text || msg.changes) && (
+        <div class="msg-foot">
+          {text && <CopyButton host={host} text={text} />}
+          {msg.changes && <Changes msg={msg} count={msg.changes.count} undone={!!msg.changes.undone} actions={actions} />}
         </div>
       )}
-      {msg.changes && !live && <Changes msg={msg} count={msg.changes.count} undone={!!msg.changes.undone} actions={actions} />}
     </div>
+  );
+}
+
+function CopyButton({ host, text }: { host: PanelHost; text: string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(() => setDone(false), 1200);
+    return () => clearTimeout(timer);
+  }, [done]);
+  const label = done ? "Copied" : "Copy this reply";
+  return (
+    <button class={`icon${done ? " done" : ""}`} title={label} aria-label={label} onClick={() => void host.copy(text).then(() => setDone(true), () => {})}>
+      <Icon name={done ? "check" : "copy"} />
+    </button>
   );
 }
 
@@ -243,9 +256,8 @@ function ToolGroup({ tools }: { tools: ToolPart[] }) {
         <span class="tool-icon" aria-label={status}>
           <StatusIcon status={status} />
         </span>
-        <span class="tool-summary">{running.length ? `${toolLabel(running.at(-1)!)}…` : summarizeTools(tools)}</span>
+        <span class="tool-summary" title={`${tools.length} tool calls`}>{running.length ? `${toolLabel(running.at(-1)!)}…` : summarizeTools(tools)}</span>
         {failed > 0 && <span class="tool-failed">{failed} failed</span>}
-        <span class="tool-count">{tools.length} calls</span>
         <Icon name={open ? "chev-d" : "chev-r"} class="tool-chev" />
       </button>
       {open && (

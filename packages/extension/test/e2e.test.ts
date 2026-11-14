@@ -124,12 +124,19 @@ async function openPanel(title: string): Promise<Page> {
   await panel.locator(".setup, .app").first().waitFor({ timeout: 30_000 });
   await panel.locator(".app").waitFor({ timeout: 30_000 });
   await pickNotebook(panel, title);
-  await panel.getByLabel("Agent").selectOption("fake");
+  await (await agentPicker(panel)).selectOption("fake");
   return panel;
 }
 
+/** The agent picker, inside the menu that the agent's button in the toolbar opens. */
+async function agentPicker(panel: Page) {
+  const picker = panel.getByLabel("Agent", { exact: true }).first();
+  if (!(await picker.count())) await panel.getByRole("button", { name: "Agent and options" }).click();
+  return picker;
+}
+
 async function send(panel: Page, text: string) {
-  const box = panel.getByPlaceholder(/Ask about this notebook|Queue a follow-up/);
+  const box = panel.getByPlaceholder(/^Ask |Queue a follow-up/);
   await box.fill(text);
   const sendButton = panel.getByRole("button", { name: /^(Send|Queue follow-up)$/ });
   await expect.poll(() => sendButton.isEnabled(), { timeout: 120_000 }).toBe(true);
@@ -401,7 +408,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     const request = (method: string, params: unknown) => panel.evaluate(([m, p]) => (window as any).ainbRequest(m, p), [method, params] as const);
     const launchCommand = formatLaunchCommand(process.execPath, [FAKE_AGENT]);
     const { agent } = await request("agents.save", { name: "Browser custom ACP", launchCommand }) as { agent: { id: string } };
-    const picker = panel.getByLabel("Agent", { exact: true });
+    const picker = await agentPicker(panel);
     await expect.poll(() => picker.locator("option").allTextContents(), { timeout: 30_000 }).toContain("Browser custom ACP");
     expect(await picker.locator("option").allTextContents()).toContain("Manage agents…");
     await picker.selectOption(agent.id);

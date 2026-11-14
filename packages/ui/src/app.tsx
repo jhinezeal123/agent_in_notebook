@@ -4,7 +4,7 @@ import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type Chat
 import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { Message, PendingPrompt, type PartActions } from "./parts.js";
-import { Icon } from "./icons.js";
+import { Icon, type IconName } from "./icons.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -199,6 +199,12 @@ export function App() {
   const history = (live?.messages ?? []).filter((m) => m.role === "user").map((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(""));
 
   const agentReady = agents.some((a) => a.id === prefs.agentId && a.available);
+  const agentName = agents.find((a) => a.id === prefs.agentId)?.name ?? "the agent";
+  // The model sits in the toolbar; the agent's other options open from the agent's button.
+  const options = live && live.agentId === prefs.agentId ? live.options : [];
+  const modelOptions = options.filter((o) => o.category === "model" && o.kind === "select");
+  const moreOptions = options.filter((o) => !modelOptions.includes(o)).sort((a, b) => optionOrder(a) - optionOrder(b));
+  const optionsLocked = changingOption || live?.status !== "idle";
   const setOption = (id: string, v: string | boolean) => {
     if (!live) return;
     setChangingOption(true);
@@ -219,7 +225,7 @@ export function App() {
         />
       )}
       {!notebook ? (
-        <Welcome>
+        <Welcome mark>
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
         </Welcome>
       ) : (
@@ -254,63 +260,76 @@ export function App() {
             history={history}
             running={running}
             draft={draft}
+            placeholder={`Ask ${agentName}…`}
             disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agentReady}
             onSend={send}
             onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
             context={
-                <ComposerContext
+              <ComposerContext
                 notebook={notebook}
                 settings={settings}
                 onSettings={updateSettings}
                 project={live?.project}
                 onShowProject={() => live?.project?.id && void run(client.request("project.show", { projectId: live.project.id }))}
                 onMoveProject={moveProject}
+                saving={saving}
+                onSaveNotebook={saveNotebook}
               />
             }
             tools={
               <>
                 <Picker
                   label="Mode"
+                  class={`scope scope-${settings.scope}`}
                   value={settings.scope}
                   title={SCOPE_HINT[settings.scope]}
                   options={SCOPES.map((s) => ({ value: s, label: SCOPE_LABEL[s], title: SCOPE_HINT[s] }))}
                   onChange={(s) => updateSettings({ ...settings, scope: s as Scope })}
                 />
-                <Picker
-                  label="Agent"
-                  value={prefs.agentId}
-                  disabled={running || changingOption}
-                  options={[
-                    ...agents.map((a) => ({ value: a.id, label: a.available ? a.name : `${a.name} (not installed)`, disabled: !a.available, title: a.reason })),
-                    { value: MANAGE, label: "Manage agents…", title: "Add or change agents in Settings" },
-                  ]}
-                  onChange={(id) => {
-                    if (id === MANAGE) void run(client.request("studio.open", { view: "settings", section: "agents" }));
-                    else setPrefs({ agentId: id });
-                  }}
-                />
-                {live && live.agentId === prefs.agentId && <AgentOptions chat={live} busy={changingOption} onSet={setOption} />}
+                {modelOptions.map((o) => <OptionPicker key={o.id} option={o} disabled={optionsLocked} onSet={setOption} />)}
+                <OptionsMenu label={agentName}>
+                  <div class="option-row">
+                    <span class="option-name">Agent</span>
+                    <Picker
+                      label="Agent"
+                      value={prefs.agentId}
+                      disabled={running || changingOption}
+                      options={[
+                        ...agents.map((a) => ({ value: a.id, label: a.available ? a.name : `${a.name} (not installed)`, disabled: !a.available, title: a.reason })),
+                        { value: MANAGE, label: "Manage agents…", title: "Add or change agents in Settings" },
+                      ]}
+                      onChange={(id) => {
+                        if (id === MANAGE) void run(client.request("studio.open", { view: "settings", section: "agents" }));
+                        else setPrefs({ agentId: id });
+                      }}
+                    />
+                  </div>
+                  {moreOptions.length > 0 && <div class="options-caption">{agentName} options</div>}
+                  {moreOptions.map((o) => (
+                    <div key={o.id} class="option-row">
+                      <span class="option-name" title={o.name}>{o.name}</span>
+                      {o.kind === "select" ? (
+                        <OptionPicker option={o} disabled={optionsLocked} onSet={setOption} />
+                      ) : (
+                        <input type="checkbox" class="switch" aria-label={o.name} checked={!!o.value} disabled={optionsLocked} onChange={(e) => setOption(o.id, e.currentTarget.checked)} />
+                      )}
+                    </div>
+                  ))}
+                </OptionsMenu>
               </>
             }
           />
           <div class="input-status">
             <label class="toggle" title="Show each change as a diff to apply or reject">
-              <input type="checkbox" checked={settings.review} onChange={(e) => updateSettings({ ...settings, review: (e.target as HTMLInputElement).checked })} />
+              <input type="checkbox" class="switch" checked={settings.review} onChange={(e) => updateSettings({ ...settings, review: e.currentTarget.checked })} />
               Review
             </label>
             <label class="toggle" title="Refuse the agent's requests to use its own tools on this computer (shell, file edits, web). Notebook content could try to talk the agent into them.">
-              <input type="checkbox" checked={settings.notebookOnly} onChange={(e) => updateSettings({ ...settings, notebookOnly: (e.target as HTMLInputElement).checked })} />
+              <input type="checkbox" class="switch" checked={settings.notebookOnly} onChange={(e) => updateSettings({ ...settings, notebookOnly: e.currentTarget.checked })} />
               Notebook only
             </label>
             {live?.status === "starting" && <span role="status">Starting {live.agentName}…</span>}
             {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
-            {live?.project && (
-              <span class="project-actions">
-                <button class="linkish" disabled={saving || live.project.state !== "ready"} title={`Save this notebook, with its outputs, to the artifacts of ${live.project.name}`} onClick={saveNotebook}>
-                  <Icon name="save" /> {saving ? "Saving…" : "Save to project"}
-                </button>
-              </span>
-            )}
           </div>
         </footer>
       )}
@@ -322,19 +341,23 @@ const SCOPES: Scope[] = ["cell", "write", "auto"];
 /** The agent picker's last entry: opens Settings › Agents, where agents are managed. */
 const MANAGE = "\u0000manage";
 
-function Welcome({ title = "Agent in Notebook", children }: { title?: string; children: ComponentChildren }) {
+function Welcome({ title = "Agent in Notebook", mark = false, text, children }: { title?: string; mark?: boolean; text?: ComponentChildren; children?: ComponentChildren }) {
   return (
     <div class="welcome">
-      <div class="welcome-mark"><Icon name="notebook" /></div>
-      <h2>{title}</h2>
-      <div class="welcome-text">{children}</div>
+      <div class="welcome-body">
+        {mark && <div class="welcome-mark"><Icon name="notebook" /></div>}
+        <h2>{title}</h2>
+        <div class="welcome-text">{text ?? children}</div>
+        {text ? children : null}
+      </div>
     </div>
   );
 }
 
 /** A select drawn as a borderless toolbar button, like the model picker in VS Code's chat. */
-function Picker({ label, value, options, onChange, disabled, title }: {
+function Picker({ label, value, options, onChange, disabled, title, class: cls }: {
   label: string;
+  class?: string;
   value: string;
   options: { value: string; label: string; disabled?: boolean; title?: string }[];
   onChange: (value: string) => void;
@@ -342,7 +365,7 @@ function Picker({ label, value, options, onChange, disabled, title }: {
   title?: string;
 }) {
   return (
-    <span class="picker">
+    <span class={cls ? `picker ${cls}` : "picker"}>
       <select aria-label={label} title={title ?? label} value={value} disabled={disabled} onChange={(e) => onChange((e.target as HTMLSelectElement).value)}>
         {options.map((o) => (
           <option key={o.value} value={o.value} disabled={o.disabled} title={o.title}>
@@ -367,7 +390,6 @@ function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
   return (
     <header class="notebook-header">
       <div class="notebook-header-body chat-width">
-        <div class="notebook-mark"><Icon name="notebook" /></div>
         <div class="notebook-details">
           {choices.length > 1 ? (
             <div class="notebook-select" title={notebook.title}>
@@ -383,6 +405,7 @@ function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
           )}
           <div class="notebook-meta">
             <span>{PLATFORM[notebook.platform]}{chrome ? " in Chrome" : ""}</span>
+            {notebook.cellCount > 0 && <span>{notebook.cellCount} {notebook.cellCount === 1 ? "cell" : "cells"}</span>}
             <span class="kernel-state">
               <span class={`kdot k-${notebook.kernel}`} aria-hidden="true" />
               Kernel {notebook.kernel}
@@ -399,13 +422,15 @@ function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
   );
 }
 
-function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject }: {
+function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject, saving, onSaveNotebook }: {
   notebook: NotebookInfo;
   settings: ChatSettings;
   onSettings: (s: ChatSettings) => void;
   project?: ChatProject;
   onShowProject: () => void;
   onMoveProject: () => void;
+  saving: boolean;
+  onSaveNotebook: () => void;
 }) {
   const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
   const pinned = settings.targetCellIds.length > 0;
@@ -417,7 +442,9 @@ function ComposerContext({ notebook, settings, onSettings, project, onShowProjec
           <Icon name="folder" />
           <button class="ctx-name ctx-link" disabled={!project.id} onClick={onShowProject}>{project.name}{project.state === "pending" ? "…" : ""}</button>
           {project.state !== "ready" && project.state !== "pending" && <Icon name="warning" class="warn" />}
+          <span class="ctx-sep" aria-hidden="true" />
           <button class="ctx-btn" title="Move to project…" aria-label="Move to project" onClick={onMoveProject}><Icon name="swap" /></button>
+          <button class="ctx-btn" disabled={saving || project.state !== "ready"} title={saving ? "Saving…" : `Save this notebook, with its outputs, to the artifacts of ${project.name}`} aria-label="Save to project" onClick={onSaveNotebook}><Icon name="save" /></button>
         </span>
       )}
       {settings.scope === "cell" && (
@@ -451,10 +478,10 @@ function Elapsed({ since }: { since: number }) {
   return <span ref={ref} class="elapsed" aria-hidden="true" />;
 }
 
-const SUGGESTIONS = [
-  { label: "Explain this notebook", text: "Explain what this notebook does" },
-  { label: "Fix the selected cell", text: "Fix the error in the selected cell" },
-  { label: "Plot the training loss", text: "Add a section that plots the training loss" },
+const SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
+  { icon: "notebook", label: "Explain this notebook", text: "Explain what this notebook does" },
+  { icon: "wand", label: "Fix the selected cell", text: "Fix the error in the selected cell" },
+  { icon: "chart", label: "Plot the training loss", text: "Add a section that plots the training loss" },
 ];
 
 function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void }) {
@@ -480,12 +507,11 @@ function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; a
 
   if (!chat || !hasMessages) {
     return (
-      <Welcome title="What are you working on?">
-        <p>Ask about your notebook or get help editing and running cells.</p>
+      <Welcome title="What are you working on?" text={<p>Ask about your notebook, or get help editing and running cells.</p>}>
         <div class="suggestions">
           {SUGGESTIONS.map((s) => (
             <button key={s.text} class="suggestion" onClick={() => onSuggest(s.text)}>
-              <Icon name="sparkle" /> <span>{s.label}</span><Icon name="chev-r" />
+              <Icon name={s.icon} /><span>{s.label}</span><Icon name="chev-r" />
             </button>
           ))}
         </div>
@@ -512,7 +538,7 @@ function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; a
           ))}
           {running && (
             <div class="working" role="status">
-              <span class="spinner" aria-hidden="true" /> Working <Elapsed since={last?.role === "agent" ? last.createdAt : Date.now()} />
+              <span class="dots" aria-hidden="true"><i /><i /><i /></span> Working <Elapsed since={last?.role === "agent" ? last.createdAt : Date.now()} />
             </div>
           )}
         </div>
@@ -534,12 +560,13 @@ function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; a
   );
 }
 
-function Composer({ history, running, disabled, draft, onSend, onStop, context, tools }: {
+function Composer({ history, running, disabled, draft, placeholder, onSend, onStop, context, tools }: {
   history: string[];
   running: boolean;
   disabled: boolean;
   /** Text put in the box from outside (a suggestion); a new object each time. */
   draft: { text: string } | null;
+  placeholder: string;
   onSend: (t: string) => Promise<boolean>;
   onStop: () => void;
   context: ComponentChildren;
@@ -577,7 +604,7 @@ function Composer({ history, running, disabled, draft, onSend, onStop, context, 
         ref={area}
         rows={1}
         aria-label="Message"
-        placeholder={running ? "Queue a follow-up…" : "Ask about this notebook…"}
+        placeholder={running ? "Queue a follow-up…" : placeholder}
         value={text}
         onInput={(e) => {
           recall.current = null;
@@ -637,30 +664,49 @@ function ContextMeter({ usage }: { usage: ChatUsage }) {
   );
 }
 
-function AgentOptions({ chat, busy, onSet }: { chat: ChatSnapshot; busy: boolean; onSet: (id: string, v: string | boolean) => void }) {
-  const order = (o: AgentOption) => ["model", "thought_level", "mode"].indexOf(o.category ?? "") >>> 0;
-  const opts = [...chat.options].sort((a, b) => order(a) - order(b));
-  const locked = busy || chat.status !== "idle";
+const optionOrder = (o: AgentOption) => ["model", "thought_level", "mode"].indexOf(o.category ?? "") >>> 0;
+
+/** One of the agent's own choices (model, effort…), as it listed them over ACP. */
+function OptionPicker({ option, disabled, onSet }: { option: AgentOption; disabled: boolean; onSet: (id: string, v: string | boolean) => void }) {
   return (
-    <>
-      {opts.map((o) =>
-        o.kind === "select" ? (
-          <Picker
-            key={o.id}
-            label={o.name}
-            value={String(o.value)}
-            disabled={locked}
-            options={(o.choices ?? []).map((c) => ({ value: c.value, label: c.name, title: c.description ?? undefined }))}
-            onChange={(v) => onSet(o.id, v)}
-          />
-        ) : (
-          <label key={o.id} class="toggle tool-toggle" title={o.name}>
-            <input type="checkbox" checked={!!o.value} disabled={locked} onChange={(e) => onSet(o.id, (e.target as HTMLInputElement).checked)} />
-            {o.name}
-          </label>
-        ),
-      )}
-    </>
+    <Picker
+      label={option.name}
+      value={String(option.value)}
+      disabled={disabled}
+      options={(option.choices ?? []).map((c) => ({ value: c.value, label: c.name, title: c.description ?? undefined }))}
+      onChange={(v) => onSet(option.id, v)}
+    />
+  );
+}
+
+/** The agent's button in the toolbar: opens a menu above the input box with the agent and its options. */
+function OptionsMenu({ label, children }: { label: string; children: ComponentChildren }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const away = (e: Event) => { if (!root.current?.contains(e.target as Node)) close(); };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      close();
+      button.current?.focus();
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, [open]);
+  return (
+    <span class="options" ref={root}>
+      <button ref={button} class="options-btn" aria-haspopup="dialog" aria-expanded={open} aria-label="Agent and options" title={`Agent: ${label}. Change the agent and its options.`} onClick={() => setOpen(!open)}>
+        <Icon name="sliders" /><span>{label}</span>
+      </button>
+      {open && <div class="options-menu" role="dialog" aria-label="Agent and options">{children}</div>}
+    </span>
   );
 }
 
