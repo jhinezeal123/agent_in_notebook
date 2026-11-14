@@ -14,7 +14,7 @@ const notebook: NotebookInfo = {
 };
 const now = Date.now();
 const chat: ChatSnapshot = {
-  chatId: "chat1", tabId: -7, agentId: "claude", agentName: "Claude Code", notebookKey: "colab:x", status: "running",
+  chatId: "chat1", tabId: -7, agentId: "claude", agentName: "Claude Code", notebookKey: "colab:x", status: empty ? "idle" : "running",
   settings: { scope: "write", review: true, targetCellIds: [], notebookOnly: true }, notebook,
   usage: { used: 53_000, size: 200_000 },
   options: [
