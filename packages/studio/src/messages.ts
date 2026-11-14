@@ -31,6 +31,8 @@ export type StudioView =
   | { view: "sidebar" }
   /** The right side bar: the current project's bar and its experiment tree. */
   | { view: "project" }
+  /** The left side bar's Project Chats: the current project's research chats. */
+  | { view: "projectChats" }
   | { view: "newchat" }
   /** `connectHost`: open Compute's SSH connect for that host (a run waiting on its sign-in). */
   | { view: "settings"; section?: SettingsSection; connectHost?: string }

@@ -9,7 +9,7 @@ import type { StudioView } from "./messages.js";
 import { installTunnel, onHostEvent } from "./tunnel.js";
 import { WorkspaceRoot } from "./root.js";
 import { Sidebar } from "./sidebar.js";
-import { ProjectPanel } from "./project.js";
+import { ProjectChats, ProjectPanel } from "./project.js";
 import { NewChat } from "./newchat.js";
 import { Settings } from "./settings.js";
 import { ExperimentView } from "./experiment.js";
@@ -27,6 +27,7 @@ function Screen({ initial }: { initial: StudioView }) {
   switch (view.view) {
     case "sidebar": return <Sidebar />;
     case "project": return <ProjectPanel />;
+    case "projectChats": return <ProjectChats />;
     case "newchat": return <NewChat />;
     case "settings": return <Settings section={view.section} request={view} />;
     case "experiment": return <ExperimentView key={view.experimentId} projectId={view.projectId} experimentId={view.experimentId} />;

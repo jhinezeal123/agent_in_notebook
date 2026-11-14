@@ -49,13 +49,8 @@
       ],
       "secondarySidebar": [
         {
-          "id": "ainb-chat",
-          "title": "Agent Chat",
-          "icon": "notebook.svg"
-        },
-        {
           "id": "ainb-project",
-          "title": "Research Project",
+          "title": "Agent in Notebook",
           "icon": "beaker.svg"
         }
       ]
@@ -66,16 +61,20 @@
           "type": "webview",
           "id": "ainb.research",
           "name": "Notebooks"
-        }
-      ],
-      "ainb-chat": [
+        },
         {
           "type": "webview",
-          "id": "ainb.chat",
-          "name": "Agent Chat"
+          "id": "ainb.projectChats",
+          "name": "Project Chats"
         }
       ],
       "ainb-project": [
+        {
+          "type": "webview",
+          "id": "ainb.chat",
+          "name": "Agent Chat",
+          "when": "ainb.mode != research"
+        },
         {
           "type": "webview",
           "id": "ainb.project",

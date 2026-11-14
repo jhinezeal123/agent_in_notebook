@@ -24,12 +24,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider("ainb.chat", panel, retain),
     vscode.window.registerWebviewViewProvider("ainb.research", studio, retain),
     vscode.window.registerWebviewViewProvider("ainb.project", studio.projectView, retain),
+    vscode.window.registerWebviewViewProvider("ainb.projectChats", studio.projectChatsView, retain),
     registerChangeProviders(),
     new FolderTree(studio, CODE),
     new FolderTree(studio, ARTIFACTS),
     vscode.commands.registerCommand("ainb.pickProject", () => studio.pickProjectToShow()),
     vscode.commands.registerCommand("ainb.saveNotebookToProject", () => panel.projectCommand("chat.saveNotebook")),
-    vscode.commands.registerCommand("ainb.open", () => vscode.commands.executeCommand("ainb.chat.focus")),
+    vscode.commands.registerCommand("ainb.open", () => panel.openChat()),
     vscode.commands.registerCommand("ainb.newChat", () => studio.open({ view: "newchat" })),
     vscode.commands.registerCommand("ainb.openSettings", () => studio.open({ view: "settings" })),
     vscode.commands.registerCommand("ainb.openCompute", () => studio.open({ view: "settings", section: "compute" })),
@@ -224,7 +225,10 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     if (document?.notebookType === MIRROR_TYPE) {
       // A Chrome tab's notebook shown here: the chat is about that tab.
       const tab = mirrorTab(document.uri);
-      if (tab !== null && this.core.exists(-tab)) this.core.follow(-tab);
+      if (tab !== null && this.core.exists(-tab)) {
+        this.core.follow(-tab);
+        this.leaveResearch(-tab);
+      }
       return;
     }
     const supported = document?.notebookType === "jupyter-notebook";
@@ -241,7 +245,22 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       this.core.localChanged();
     }
     this.core.follow(notebook?.tabId ?? null);
+    if (notebook) this.leaveResearch(notebook.tabId);
     if (document) this.refresh(document);
+  }
+
+  /** A notebook came to the front while a research chat was selected: one layout at a time, so it is the notebook's now. */
+  private leaveResearch(tabId: number): void {
+    if (this.selected?.kind !== "research") return;
+    this.setSelected({ kind: "notebook", tabId });
+    this.studio.closeChatTab();
+  }
+
+  /** "Open Agent Chat": the research chat's tab in the middle, or the chat in the right side bar. */
+  async openChat(): Promise<void> {
+    const chat = this.selected;
+    if (chat?.kind === "research") this.studio.open({ view: "chat", projectId: chat.projectId, sessionId: chat.sessionId });
+    else await vscode.commands.executeCommand("ainb.chat.focus");
   }
 
   private closeNotebook(document: vscode.NotebookDocument): void {
@@ -278,6 +297,9 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private setSelected(chat: SelectedChat | null): void {
     this.selected = chat;
+    // Two layouts: a research chat sits in the middle (Agent Chat leaves the right side bar);
+    // a notebook chat sits in the right side bar beside its notebook.
+    void vscode.commands.executeCommand("setContext", "ainb.mode", chat?.kind === "research" ? "research" : "notebook");
     // Showing a research chat opens its project (the right side bar follows).
     this.studio.chatSelected(chat);
     // So does a notebook chat: its notebook belongs to a project.
@@ -351,10 +373,26 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         await this.context.globalState.update("prefs", prefs);
         this.post({ event: "prefs", params: prefs });
       }
+      // The notebook takes the middle again; its chat is in the right side bar.
+      this.studio.closeChatTab();
+      await this.showNotebook(chat.tabId).catch(() => {});
+      await vscode.commands.executeCommand("ainb.chat.focus");
     } else {
       this.setSelected({ kind: "research", projectId: chat.projectId, sessionId: chat.sessionId });
+      // The research chat takes the middle; the right side bar shows its project.
+      await vscode.commands.executeCommand("ainb.project.focus").then(undefined, () => {});
+      this.studio.open({ view: "chat", projectId: chat.projectId, sessionId: chat.sessionId });
     }
-    await vscode.commands.executeCommand("ainb.chat.focus");
+  }
+
+  /** Show a notebook in the editor: the file itself, or a Chrome tab's live copy (its mirror). */
+  private async showNotebook(tabId: number): Promise<void> {
+    if (isChrome(tabId)) {
+      await this.core.handle("notebook.mirror", { tabId });
+      return;
+    }
+    const notebook = this.find(tabId);
+    if (notebook) await vscode.window.showNotebookDocument(notebook.adapter.document, { preview: false });
   }
 
   /** Run the kernel setup script on a notebook's machine (a Chrome tab's has a negative id). */

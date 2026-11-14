@@ -415,3 +415,7 @@ h3 { font-size: 13px; margin: 0; font-weight: 600; }
 .waitrow-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-chip.link { cursor: pointer; font: inherit; color: inherit; background: transparent; }
 .ctx-chip.link:hover:not(:disabled) { background: var(--hover); }
+
+/* A list's own heading row inside a side bar view (the project's name and a + button). */
+.listhead { display: flex; align-items: center; gap: 6px; padding: 4px 8px 2px 12px; min-height: 22px; }
+.listhead > .dsc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }

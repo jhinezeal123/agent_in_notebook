@@ -307,6 +307,14 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   /** The right side bar's Project view (the current project's bar and experiment tree). */
   readonly projectView: vscode.WebviewViewProvider = { resolveWebviewView: (view) => this.resolveView(view, { view: "project" }) };
 
+  /** The left side bar's Project Chats view (the current project's research chats and their sub-agents). */
+  readonly projectChatsView: vscode.WebviewViewProvider = { resolveWebviewView: (view) => this.resolveView(view, { view: "projectChats" }) };
+
+  /** Close the research chat's editor tab (a notebook chat is in front now). */
+  closeChatTab(): void {
+    this.panels.get("chat")?.dispose();
+  }
+
   private resolveView(view: vscode.WebviewView, screen: StudioView): void {
     view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.deps.context.extensionUri, "dist")] };
     this.host(view.webview, () => screen, view);
@@ -353,7 +361,7 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   open(view: StudioView): void {
     const key = view.view === "experiment" ? "experiment" : view.view;
     const existing = this.panels.get(key);
-    const title = view.view === "newchat" ? "New Chat" : view.view === "settings" ? "Agent in Notebook Settings" : view.view === "experiment" ? "Experiment" : "Research";
+    const title = view.view === "newchat" ? "New Chat" : view.view === "settings" ? "Agent in Notebook Settings" : view.view === "experiment" ? "Experiment" : view.view === "chat" ? "Research Chat" : "Research";
     if (existing) {
       existing.title = title;
       // A connect request is for once; a reload of the tab should not repeat it.

@@ -65,15 +65,17 @@ Cầu nối giữa **coding agent chạy trên máy bạn** (Claude Code, Codex,
 
 Ngoài chat về notebook, app có **chat Research** dựa trên [OpenResearch](https://github.com/jhinezeal123/OpenResearch) (chương trình `orx`). Agent tạo thử nghiệm (mỗi thử nghiệm là một nhánh git), gửi lần chạy nền lên máy khác (Kaggle SSH, SSH, Vast, Modal…) và đọc paper. Tất cả nằm trong VS Code:
 
-- **Thanh bên trái** (biểu tượng Agent in Notebook ở Activity Bar): **Notebooks**, các notebook đang mở. Bấm một notebook để chat về nó. Nút trên tiêu đề mở Compute.
-- **Thanh bên phải**, mục **Research Project**, nói về **project hiện tại**:
-  - thanh tên project (bấm để đổi project);
-  - **Chats**: các chat Research của project;
-  - **Notebook chats**: các notebook thuộc project. Notebook đang mở có chấm xanh. Bấm một notebook đang đóng thì nó được mở lại (Colab/Kaggle trong trình duyệt, `.ipynb` trong VS Code);
-  - **Experiments**: cây thử nghiệm, có trạng thái lần chạy mới nhất. Bấm một thử nghiệm để mở trang chi tiết. Nút terminal mở log;
+- **Thanh bên trái** (biểu tượng Agent in Notebook ở Activity Bar), về **project hiện tại**:
+  - **Notebooks**: các notebook chat của project. Notebook đang mở có chấm xanh; bấm một notebook đang đóng thì nó được mở lại. Bên dưới là các notebook đang mở thuộc project khác. Nút trên tiêu đề mở New Chat, Compute, Settings;
+  - **Project Chats**: các chat Research của project, side chat và sub-agent nằm thụt dưới chat đã tạo ra chúng (dấu **?**: đang chờ bạn trả lời hoặc duyệt). Nút ＋ tạo chat Research mới.
+- **Hai chế độ**, theo chat bạn chọn bên trái:
+  - **chế độ Notebook** (bấm một notebook): giữa là notebook (file `.ipynb`, hoặc bản sao sống của notebook trong Chrome); thanh bên phải có **Agent Chat** và thông tin project;
+  - **chế độ Research** (bấm một chat Research): giữa là chat Research (một tab "Research Chat"); thanh bên phải chỉ còn thông tin project, có thêm **Experiments**. Chuyển sang chat Notebook thì tab này tự đóng; bấm thẳng vào một notebook trong editor cũng chuyển sang chế độ Notebook. Mỗi lúc chỉ có một chế độ.
+- **Thanh bên phải** (mục Agent in Notebook), từ trên xuống:
+  - **Agent Chat** (chỉ ở chế độ Notebook);
+  - **Project**: tên project (bấm để đổi project), và ở chế độ Research thì có **Experiments**: cây thử nghiệm, có trạng thái lần chạy mới nhất. Bấm một thử nghiệm để mở trang chi tiết. Nút terminal mở log;
   - **Chat Worktree**: worktree riêng của chat đang mở (chat Research hoặc chat Notebook); không có chat nào của project thì là repo của project. Nút **Changes** liệt kê file chat đã đổi so với lúc tách nhánh;
   - **Shared Artifacts**: thư mục kết quả chung của project (chỉ trên máy bạn, không thuộc git), mọi chat đều thấy.
-- **Khung chat** cũng ở thanh bên phải. Khung này hiện chat Notebook hoặc chat Research, tùy chat bạn chọn.
 - **New Chat** (nút ＋): chọn kiểu chat (Research hoặc Notebook), rồi chọn điểm bắt đầu:
   - thư mục trống;
   - project có sẵn;
