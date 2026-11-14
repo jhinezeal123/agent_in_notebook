@@ -33,7 +33,7 @@ import {
 } from "@ainb/protocol";
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
-import { playbook, projectContext, projectUnavailable, projectUpdate, recap, turnContext } from "./instructions.js";
+import { litReview, playbook, projectContext, projectUnavailable, projectUpdate, recap, turnContext } from "./instructions.js";
 import { RecentRuns } from "./notebook/exec.js";
 import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
@@ -397,6 +397,8 @@ export class Chat {
     if (project) blocks.push(project);
     const code = await this.codeBlock(rules || !!this.pendingRecap);
     if (code) blocks.push(code);
+    const lit = this.host.project ? litReview(text) : null;
+    if (lit) blocks.push(lit);
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file));
     blocks.push(text);
     return blocks.join("\n\n");
@@ -1175,7 +1177,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP servers are registered as "notebook" and "project"; agents spell the tool name differently. */
 export function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review|artifact_\w+|run_result|save_notebook)\b/i.test(t)) return true;
+  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review|artifact_\w+|paper_search|paper_read|run_result|save_notebook)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }

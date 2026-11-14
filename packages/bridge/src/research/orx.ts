@@ -8,7 +8,7 @@
 // The bridge holds OpenResearch's event stream open, which also keeps a hidden
 // `orx up` from stopping itself when idle, and passes run changes on.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { get, type ClientRequest } from "node:http";
 import { homedir } from "node:os";
@@ -58,6 +58,29 @@ export class Orx {
   private generation = 0;
 
   constructor(private readonly opts: OrxOptions) {}
+
+  /**
+   * Run an `orx` command (not the server: `orx discover`, `orx paper`) and
+   * give its output. It needs orx installed, not running.
+   */
+  cli(args: string[], opts: { timeoutMs?: number; maxBytes?: number } = {}): Promise<string> {
+    const launch = (this.opts.locate ?? locateOrx)();
+    if ("missing" in launch) return Promise.reject(new Error(launch.missing));
+    return new Promise((resolve, reject) => {
+      execFile(
+        launch.command,
+        [...launch.args, ...args],
+        { env: orxEnv(launch), timeout: opts.timeoutMs ?? 120_000, maxBuffer: opts.maxBytes ?? 16 * 1024 * 1024, windowsHide: true, encoding: "utf8" },
+        (error, stdout, stderr) => {
+          if (!error) return resolve(stdout);
+          const why = stderr.trim().replace(/^Error:\s*/i, "").slice(-2000);
+          if ((error as { killed?: boolean }).killed) return reject(new Error(`orx ${args[0]} took too long and was stopped.${why ? `\n${why}` : ""}`));
+          if ((error as { code?: unknown }).code === "ENOENT") return reject(new Error(`The orx program at ${launch.path} could not be started.`));
+          reject(new Error(why || `orx ${args[0]} failed (${error.message}).`));
+        },
+      );
+    });
+  }
 
   /** Start OpenResearch (or join a running one). Safe to call repeatedly. */
   start(): Promise<ResearchStatus> {

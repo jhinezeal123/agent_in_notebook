@@ -3,7 +3,8 @@
 // user's computer. The project's code is not here: it is cloned on the
 // machine (vmrepo.ts). Here are the project's shared artifacts (results and
 // outputs every chat of the project sees), read and written through the
-// bridge, and the results of the project's runs.
+// bridge, the results of the project's runs, and the research literature
+// (searched and read with OpenResearch's `orx discover` and `orx paper`).
 
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -376,7 +377,100 @@ export const PROJECT_TOOLS: ToolDef<z.ZodType, ProjectToolContext>[] = [
       return { text: lines.filter((l, i) => l || i === 4).join("\n") };
     },
   }),
+  tool({
+    name: "paper_search",
+    description:
+      "Search the research literature, the way OpenResearch's lit-review does (`orx discover`, run on the user's computer; public sources, no sign-in). One search per call. " +
+      "source: keyword (alphaXiv/arXiv: exact terms in title, abstract and full text, with matching snippets: method names, acronyms, benchmarks, authors), " +
+      "embedding (alphaXiv/arXiv: semantic, from a short question in the user's terms), openalex (journals, conferences, citations, beyond arXiv), " +
+      "biorxiv (biology preprints), pubmed (biomedical and clinical journals; PubMed syntax such as [ti], [au]). " +
+      "Results: id (for paper_read), title, date, abstract, votes or citations. Dates are inclusive YYYY-MM-DD; prioritize: recency only for new work, historical for foundational work, popular only when asked about standing.",
+    schema: z.object({
+      source: z.enum(["keyword", "embedding", "openalex", "biorxiv", "pubmed"]),
+      query: z.string().min(1).max(500),
+      published_after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      published_before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      prioritize: z.enum(["default", "recency", "historical", "popular"]).optional(),
+      limit: z.number().int().min(1).max(50).optional().describe("Most results (default 15)."),
+    }),
+    async run(ctx: ProjectToolContext, a) {
+      const args = ["discover", a.source];
+      if (a.published_after) args.push("--published-after", a.published_after);
+      if (a.published_before) args.push("--published-before", a.published_before);
+      if (a.prioritize) args.push("--prioritize", a.prioritize);
+      if (a.limit) args.push("--limit", String(a.limit));
+      const out = await orxCli(ctx, [...args, "--", a.query], 90_000);
+      let hits: LitHit[];
+      try {
+        hits = JSON.parse(out) as LitHit[];
+        if (!Array.isArray(hits)) throw new Error("not a list");
+      } catch {
+        return { text: `orx discover gave an answer that is not a list of papers:\n${capText(out, 2000)}`, isError: true };
+      }
+      if (!hits.length) {
+        return { text: `No ${a.source} results for "${a.query}". That does not show there is no such literature: try another source, or a more focused query.` };
+      }
+      return { text: capText(`${hits.length} ${a.source} results for "${a.query}":\n\n${hits.map(hitText).join("\n\n")}`, SEARCH_MAX) };
+    },
+  }),
+  tool({
+    name: "paper_read",
+    description:
+      "Read a paper found with paper_search (`orx paper`): its id is an arXiv id or URL, a DOI, an OpenAlex W… id or a PubMed id. " +
+      "For alphaXiv papers: a structured report, or full: true for the extracted full text (exact wording, for quotes); then a GitHub line when alphaXiv links code. " +
+      "Other sources: abstract and links to the full text. Long text comes in pages: offset (in characters) continues.",
+    schema: z.object({
+      id: z.string().min(1).max(300),
+      full: z.boolean().optional(),
+      offset: z.number().int().min(0).optional(),
+    }),
+    async run(ctx: ProjectToolContext, a) {
+      const out = await orxCli(ctx, ["paper", ...(a.full ? ["--full"] : []), "--", a.id], 120_000);
+      const start = Math.min(a.offset ?? 0, out.length);
+      if (start >= out.length && out.length) return { text: `The paper's text has ${out.length} characters; offset ${a.offset} is past the end.` };
+      const end = Math.min(out.length, start + PAPER_PAGE);
+      const page = out.slice(start, end);
+      const more = end < out.length ? `\n\n(characters ${start}-${end} of ${out.length}; continue with offset=${end})` : "";
+      return { text: (page.trim() ? page : "orx paper printed nothing for this id.") + more };
+    },
+  }),
 ];
+
+const SEARCH_MAX = 40_000;
+const PAPER_PAGE = 40_000;
+
+/** A search result as `orx discover` prints it. */
+interface LitHit {
+  source: string;
+  id: string;
+  title: string;
+  abstract?: string;
+  publicationDate?: string | null;
+  votes?: number;
+  citations?: number;
+  snippets?: { pageNumber?: number; snippet: string }[];
+}
+
+function hitText(h: LitHit, i: number): string {
+  const facts = [h.publicationDate?.slice(0, 10), h.votes != null ? `${h.votes} votes` : "", h.citations != null ? `${h.citations} citations` : ""].filter(Boolean).join("; ");
+  const lines = [`${i + 1}. [${h.source} ${h.id}] ${h.title}${facts ? ` (${facts})` : ""}`];
+  const abstract = (h.abstract ?? "").replace(/\s+/g, " ").trim();
+  if (abstract) lines.push(`   ${abstract.length > 600 ? `${abstract.slice(0, 599)}…` : abstract}`);
+  for (const s of (h.snippets ?? []).slice(0, 2)) {
+    const text = s.snippet.replace(/\s+/g, " ").trim();
+    lines.push(`   match${s.pageNumber ? ` p. ${s.pageNumber}` : ""}: "${text.length > 300 ? `${text.slice(0, 299)}…` : text}"`);
+  }
+  return lines.join("\n");
+}
+
+/** Run orx on the user's computer; its failure (not installed, a source turned off, offline) goes to the agent as is. */
+async function orxCli(ctx: ProjectToolContext, args: string[], timeoutMs: number): Promise<string> {
+  try {
+    return await ctx.research.cli(args, { timeoutMs });
+  } catch (e) {
+    throw new Denied((e as Error).message);
+  }
+}
 
 /** A page of a run's log, from `cursor` (a byte offset). */
 async function readLog(ctx: ProjectToolContext, runId: string, cursor: number | undefined): Promise<ToolResult> {

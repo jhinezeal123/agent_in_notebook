@@ -99,6 +99,8 @@ Mỗi notebook thuộc về **một project** của OpenResearch. Notebook chưa
   - `artifact_list`, `artifact_read` (chữ, hoặc hình gửi kèm; `to_vm` chép file xuống máy notebook), `artifact_write` (từ nội dung chữ, hoặc `from_vm` chép một file trên máy notebook lên; tối đa 50 MB). Agent được dặn **chỉ ghi kết quả và output bạn yêu cầu** vào shared artifacts; code, ghi chú làm việc, file tạm thì để trong repo trên máy notebook;
   - `save_notebook`: lưu notebook kèm output vào `artifacts/notebooks/<tên>.ipynb`;
   - `run_result`: kết quả hoặc log của một lần chạy thử nghiệm (cần OpenResearch đang chạy);
+  - `paper_search`, `paper_read`: tìm và đọc bài báo bằng `orx discover` và `orx paper` chạy trên máy bạn (alphaXiv, OpenAlex, bioRxiv, PubMed; không cần đăng nhập, chỉ cần cài `orx`, không cần OpenResearch đang chạy). Nguồn nào bạn tắt trong cài đặt OpenResearch thì cũng tắt ở đây;
+  - gõ **`/lit-review <chủ đề>`** trong chat Notebook: agent làm tổng quan tài liệu theo cách của `/lit-review` bên OpenResearch (tìm ở nhiều nguồn, xếp hạng 5–15 bài, đọc kỹ 3–5 bài, trích nguyên văn và gắn link tới đúng trang);
   - mode **Edit cell** không cho ghi; **Review** bật thì hỏi trước; ghi đè file chat khác hoặc bạn đã ghi thì luôn hỏi. Không đọc file bí mật (`.env`, `*.pem`, `id_*`, file khóa);
   - project đã từng mở thì bridge nhớ đường dẫn repo, GitHub và thư mục artifacts của nó, nên đồng bộ code và shared artifacts vẫn chạy khi OpenResearch tắt.
 - **Code của project nằm trên máy notebook** (project phải có repo GitHub). Agent sống trên VM và không đụng tới máy bạn:

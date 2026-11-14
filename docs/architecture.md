@@ -163,6 +163,8 @@ Thiết kế và lý do: [hop-nhat-openresearch.md](hop-nhat-openresearch.md). T
   - `artifact_list`, `artifact_read`, `artifact_write` làm việc thẳng trên `artifactsDir` (không qua OpenResearch), qua `realpath`. Chúng từ chối symlink và đường đi ra ngoài, và ghi nguyên tử. `artifact_write` nhận `content` hoặc `from_vm` (đọc bằng `vmfs.readFile`, tối đa 50 MB); `artifact_read` có `to_vm` (ghi bằng `vmfs.writeFile`, action `execute`). Ghi đè file mà chat không tự ghi thì luôn hỏi trước.
   - `save_notebook` ghi notebook kèm output vào `artifacts/notebooks/`.
   - `run_result` đọc `/api/runs/{id}` (hoặc lần chạy mới nhất của một thử nghiệm), và `log: true` thì đọc `/api/runs/{id}/logs`.
+  - `paper_search` và `paper_read` chạy `orx discover <nguồn> … -- <câu>` và `orx paper [--full] -- <id>` trên máy người dùng (`Orx.cli`: cùng `locateOrx` và `orxEnv` với `orx up`, nhưng không cần server). Chúng định dạng lại JSON kết quả và chia toàn văn thành trang 40 000 ký tự. Lỗi của orx (chưa cài, nguồn bị tắt, mất mạng) được đưa nguyên cho agent.
+  - **`/lit-review`**: tin nhắn có `/lit-review` thì `Chat.buildPrompt` thêm khối `<lit-review>` (`instructions.ts: litReview`), bản rút gọn của skill `orx-lit-review` cho hai tool trên. Playbook (luật 9) dặn agent dùng chúng cho câu hỏi khoa học ngay cả khi không gõ lệnh.
 - **RPC mới**: `notebook.link`, `notebook.project`, `chats.list`, `chat.saveNotebook`; `chat.open` nhận `projectId`; `ChatSnapshot.project`.
 - **VS Code**:
   - `extension.ts` theo dõi `project` trong snapshot để thanh bên phải theo chat Notebook. Nó cũng xử lý `project.move` (quick pick) và `project.show`, gắn notebook Kaggle mở từ launcher vào project đang hiện (trong 15 phút), và chạy kernel setup của project.

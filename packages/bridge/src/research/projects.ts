@@ -103,6 +103,11 @@ export class ResearchProjects {
     return this.orx.status.state === "ready";
   }
 
+  /** An `orx` command's output (literature search and reading); OpenResearch need not be running. */
+  cli(args: string[], opts?: { timeoutMs?: number; maxBytes?: number }): Promise<string> {
+    return this.orx.cli(args, opts);
+  }
+
   /**
    * OpenResearch's address. Not running: start it in the background and fail
    * at once, unless `wait` (then wait a while for it).

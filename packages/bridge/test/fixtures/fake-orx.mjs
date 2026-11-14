@@ -1,9 +1,41 @@
 // Stands in for `orx up --headless --port 0`: announces its address on stderr
 // the way orx does, answers /api/health, and streams one run change on
 // /api/events. FAKE_ORX_FAIL=1 makes it exit at once, like a second orx.
+// Also `orx discover <source> [flags] -- <query>` and `orx paper [--full] -- <id>`,
+// answering from a tiny made-up library.
 import { createServer } from "node:http";
 
-if (process.argv[2] !== "up") {
+const [command, ...rest] = process.argv.slice(2);
+if (command === "discover") {
+  const source = rest[0];
+  const query = rest.at(-1);
+  if (source === "pubmed") {
+    console.error("Error: PubMed is turned off in OpenResearch settings. Turn it on there to search it.");
+    process.exit(1);
+  }
+  const hits = query.includes("nothing")
+    ? []
+    : [
+        { source: "alphaxiv", id: "2106.09685", title: "LoRA: Low-Rank Adaptation of Large Language Models", abstract: "We propose Low-Rank Adaptation.", publicationDate: "2021-06-17", votes: 120, snippets: [{ pageNumber: 4, snippet: "freeze the pretrained weights" }] },
+        { source: "openalex", id: "W3000000001", title: "QLoRA", abstract: "Quantized LoRA.", publicationDate: "2023-05-23", citations: 900 },
+      ];
+  // What it was asked, so a test can see the flags reached orx.
+  hits.forEach((h) => (h.abstract += ` [asked: ${rest.join(" ")}]`));
+  console.log(JSON.stringify(hits, null, 2));
+  process.exit(0);
+}
+if (command === "paper") {
+  const id = rest.at(-1);
+  if (id === "0000.00000") {
+    console.error("Error: alphaXiv has no paper 0000.00000.");
+    process.exit(1);
+  }
+  const body = rest.includes("--full") ? `FULL TEXT of ${id}. ${"word ".repeat(12_000)}THE END` : `# Report on ${id}\nLow-rank updates.`;
+  console.log(`alphaXiv: https://www.alphaxiv.org/abs/${id}\n${body}`);
+  process.exit(0);
+}
+
+if (command !== "up") {
   console.error(`unexpected arguments: ${process.argv.slice(2).join(" ")}`);
   process.exit(2);
 }

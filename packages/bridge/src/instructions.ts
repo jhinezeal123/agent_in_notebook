@@ -33,7 +33,8 @@ Rules:
 5. Steps the notebook needs in order to run again from the top (installs it imports, downloads it reads, data preparation) go in its cells, shell commands prefixed with "!"; everything else can happen in the terminal.
 6. Keep each code cell to one logical step. Use markdown cells for prose when the user asks for explanations or a write-up.
 7. When done, answer briefly in the user's language and name the cells you changed.${project ? `
-8. This notebook belongs to an OpenResearch project (see <project-context>), kept on the user's computer. When the project has a GitHub repository, its code is cloned on the notebook's machine on a branch of this chat's (see <project-code>): change and run it there with your usual tools, and commit; the bridge pushes after each of your turns. Another branch: git fetch there. The project's shared artifacts (on the user's computer, seen by the user and every chat of the project) are reached only through the MCP server named "project": artifact_list, artifact_read (to_vm copies a file to the machine), artifact_write (text, or from_vm: a file on the machine). Write to the shared artifacts only the results and outputs the user asked for (a report, a figure, a table of metrics); code, working notes and scratch files stay in the repository on the machine. save_notebook saves this notebook with its outputs there; run_result reads a run's result or log.` : ""}
+8. This notebook belongs to an OpenResearch project (see <project-context>), kept on the user's computer. When the project has a GitHub repository, its code is cloned on the notebook's machine on a branch of this chat's (see <project-code>): change and run it there with your usual tools, and commit; the bridge pushes after each of your turns. Another branch: git fetch there. The project's shared artifacts (on the user's computer, seen by the user and every chat of the project) are reached only through the MCP server named "project": artifact_list, artifact_read (to_vm copies a file to the machine), artifact_write (text, or from_vm: a file on the machine). Write to the shared artifacts only the results and outputs the user asked for (a report, a figure, a table of metrics); code, working notes and scratch files stay in the repository on the machine. save_notebook saves this notebook with its outputs there; run_result reads a run's result or log.
+9. For conceptual or scientific questions, comparisons of methods and related work, ground your answer in the literature: search with paper_search and read the papers you rely on with paper_read (MCP server "project") before answering, and link the papers you cite. Do not cite a paper you have not found that way. The user's /lit-review asks for a full literature review (see <lit-review>).` : ""}
 </agent-in-notebook>`;
 }
 
@@ -96,7 +97,8 @@ const PROJECT_CONTEXT_MAX = 8000;
 
 const PROJECT_TOOLS =
   'Tools (MCP server "project"): artifact_list, artifact_read, artifact_write (the shared artifacts: only results the user asked for); ' +
-  "save_notebook (this notebook, with outputs, to the shared artifacts); run_result (a run's result or log).";
+  "save_notebook (this notebook, with outputs, to the shared artifacts); run_result (a run's result or log); " +
+  "paper_search, paper_read (the research literature).";
 
 function experimentLine(e: BriefExperiment): string {
   const name = e.title && e.title !== e.slug ? `${e.slug} "${e.title}"` : e.slug;
@@ -136,7 +138,7 @@ export function projectContext(b: ProjectBrief, note?: string): string {
       : "## Artifacts\nNone yet.",
   );
   let body = `${head.join("\n")}\n\n${sections.join("\n\n")}`;
-  if (body.length > PROJECT_CONTEXT_MAX) body = `${capText(body, PROJECT_CONTEXT_MAX - 80)}\n(shortened: project_overview shows all of it)`;
+  if (body.length > PROJECT_CONTEXT_MAX) body = `${capText(body, PROJECT_CONTEXT_MAX - 80)}\n(shortened)`;
   return `<project-context>\n${body}\n</project-context>`;
 }
 
@@ -169,4 +171,32 @@ export function projectUnavailable(project: ChatProject): string {
       ? `OpenResearch has no project "${project.name}" any more; the user can move this notebook to another project.`
       : `Project context unavailable (OpenResearch starting or not running)${project.error ? `: ${project.error}` : "."} The project tools say when it is back.`;
   return `<project-context>\nProject: ${project.name}. ${why}\n</project-context>`;
+}
+
+/**
+ * The user typed /lit-review: OpenResearch's literature-review workflow
+ * (its orx-lit-review skill), told for the tools of a notebook chat.
+ */
+export function litReview(text: string): string | null {
+  if (!/(^|\s)\/lit-review(?![\w-])/i.test(text)) return null;
+  const request = text.replace(/(^|\s)\/lit-review(?![\w-])/gi, " ").replace(/[\s.,;:!?]+/g, " ").trim();
+  return `<lit-review>
+The user asked for a literature review (/lit-review)${request ? " of the request in their message" : ". They named no topic: ask them what to review before searching"}. Work it like this, with paper_search and paper_read (MCP server "project"); never hand the search to a sub-agent.
+
+Search:
+1. Build the query from the user's own words and words from earlier results; never guess what an acronym stands for. keyword: short exact terms (method, acronym, benchmark, author, title phrase). embedding and openalex: one short faithful question.
+2. Rate the difficulty 1-10. It sets how many follow-up rounds you may spend: 1-3 none, 4-7 one, 8-10 two. Set one date window and one priority for the whole review (published_after/before only when the request calls for them; recency for new work, historical for foundational work, popular only when asked) and keep them in every call.
+3. First round: the sources that fit, at once. ML, CS, math, physics: keyword and/or embedding; add openalex for journals, conferences, citations or other fields; biorxiv for biology preprints, pubmed for biomedical and clinical work. When a keyword query mixes acronyms (2-10 characters, two or more capitals) with other words, also search those acronyms alone.
+4. Merge: drop duplicates (same id, then DOI or arXiv id, then title); keep the alphaXiv copy of an arXiv paper. Do not compare alphaXiv votes with citations; rank by how well each paper fits.
+5. Enough good papers: stop and rank 5-15 of them. Otherwise one follow-up round per concrete gap (a missing method, benchmark, venue, subtopic), within the budget; never just rephrase a search. An empty result does not show there is no literature.
+6. At most two such reviews per turn.
+
+Answer:
+- A request for papers ("find papers", "what should I read"): give the ranked list (title linked, one line on why each) and stop.
+- Claims, methods or comparisons: read the 3-5 papers that carry the answer with paper_read (full: true for exact wording) before relying on them. Never present a paper as verified from its abstract or snippets.
+- Explain through the papers' own figures and tables: name them (Figure 2 of …) with a link to their page. Crop one from the PDF (on the notebook's machine, from https://arxiv.org/pdf/<id>) only when the user asks, and keep it in the shared artifacts.
+- Quote the authors' own complete sentences for their reasoning, methods and limits, only from text you read; never join separate snippets or present a paraphrase as a quote. Mark your own interpretation as such.
+- Links: https://www.alphaxiv.org/pdf/<arXiv id>?page=N (N when you know the page), else https://doi.org/<doi>, https://openalex.org/<W id>, https://pubmed.ncbi.nlm.nih.gov/<pmid>/. Label them "p. N", "Short title, p. N" or the title. Never invent an id or a page.
+- Write the review to the shared artifacts only when the user asks for it there.
+</lit-review>`;
 }

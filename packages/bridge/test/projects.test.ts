@@ -17,10 +17,12 @@ import { FakeOrx } from "./fixtures/fake-orx-api.js";
 const TOKEN = "test-token-0123456789abcdef";
 const CLI = resolve(__dirname, "../dist/cli.js");
 const FAKE_AGENT = resolve(__dirname, "fixtures/fake-agent.mjs");
+const FAKE_ORX = resolve(__dirname, "fixtures/fake-orx.mjs");
 const MISSING = () => ({ missing: "OpenResearch is not used in these tests." });
 
 let home: string;
 let orx: FakeOrx;
+let orxPort: number;
 let bridge: Bridge;
 let port: number;
 let nextTab = 500;
@@ -31,7 +33,7 @@ beforeAll(async () => {
   process.env.AINB_SCRATCH_DIR = join(home, "OpenResearch", "scratch");
   writeFileSync(join(home, "agents.json"), JSON.stringify([{ id: "fake", name: "Fake Agent", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 5 }]));
   orx = new FakeOrx();
-  const orxPort = await orx.start();
+  orxPort = await orx.start();
   bridge = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: { knownPorts: [orxPort], locate: MISSING }, log: () => {} });
   port = await bridge.listen();
 });
@@ -262,6 +264,52 @@ describe("project tools", () => {
     expect(await ext.request("chat.saveNotebook", { chatId })).toEqual({ path: "artifacts/notebooks/test.ipynb" });
     expect(existsSync(join(p.artifactsDir, "notebooks", "test.ipynb"))).toBe(true);
     expect(ext.parts().some((x) => x.type === "prompt")).toBe(false);
+    ext.close();
+  });
+});
+
+describe("the research literature", () => {
+  it("searches and reads papers with orx on the user's computer, and passes on what orx refuses", async () => {
+    const withOrx = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: { knownPorts: [orxPort], locate: () => ({ path: "fake-orx", command: process.execPath, args: [FAKE_ORX] }) }, log: () => {} });
+    const withOrxPort = await withOrx.listen();
+    try {
+      const p = orx.addProject("Papers");
+      const { ext, chatId } = await open("colab:/drive/papers", { projectId: p.id, port: withOrxPort });
+      const text = await turn(ext, chatId, script([
+        { server: "project", tool: "paper_search", args: { source: "keyword", query: "--LoRA", published_after: "2021-01-01", prioritize: "recency", limit: 5 } },
+        { server: "project", tool: "paper_search", args: { source: "openalex", query: "nothing at all" } },
+        { server: "project", tool: "paper_search", args: { source: "pubmed", query: "lora" } },
+        { server: "project", tool: "paper_read", args: { id: "2106.09685" } },
+        { server: "project", tool: "paper_read", args: { id: "2106.09685", full: true } },
+        { server: "project", tool: "paper_read", args: { id: "2106.09685", full: true, offset: 40000 } },
+        { server: "project", tool: "paper_read", args: { id: "0000.00000" } },
+      ]));
+      expect(text).toContain("1. [alphaxiv 2106.09685] LoRA: Low-Rank Adaptation of Large Language Models (2021-06-17; 120 votes)");
+      expect(text).toContain('match p. 4: "freeze the pretrained weights"');
+      expect(text).toContain("2. [openalex W3000000001] QLoRA (2023-05-23; 900 citations)");
+      // The flags reach orx, and a query that looks like a flag stays the query.
+      expect(text).toContain("[asked: keyword --published-after 2021-01-01 --prioritize recency --limit 5 -- --LoRA]");
+      expect(text).toMatch(/No openalex results for "nothing at all"/);
+      expect(text).toMatch(/RESULT paper_search \(error\): PubMed is turned off in OpenResearch settings/);
+      expect(text).toContain("# Report on 2106.09685");
+      expect(text).toMatch(/FULL TEXT of 2106\.09685[\s\S]*\(characters 0-40000 of \d+; continue with offset=40000\)/);
+      expect(text).toContain("THE END");
+      expect(text).toMatch(/RESULT paper_read \(error\): alphaXiv has no paper 0000\.00000/);
+      // /lit-review brings OpenResearch's workflow along with the message.
+      expect(await turn(ext, chatId, "/lit-review compare LoRA variants")).toContain("[saw lit-review]");
+      expect(await turn(ext, chatId, "/lit-review")).toContain("[saw lit-review, no topic]");
+      expect(await turn(ext, chatId, "no review here, see a/lit-review/x")).not.toContain("[saw lit-review");
+      ext.close();
+    } finally {
+      await withOrx.close();
+    }
+  });
+
+  it("says when orx is not installed", async () => {
+    const p = orx.addProject("No orx");
+    const { ext, chatId } = await open("colab:/drive/no-orx", { projectId: p.id });
+    const text = await turn(ext, chatId, script([{ server: "project", tool: "paper_search", args: { source: "keyword", query: "lora" } }]));
+    expect(text).toMatch(/RESULT paper_search \(error\): OpenResearch is not used in these tests/);
     ext.close();
   });
 });
