@@ -69,13 +69,14 @@ Ngoài chat về notebook, app có **chat Research** dựa trên [OpenResearch](
   - **Notebooks**: các notebook chat của project. Notebook đang mở có chấm xanh; bấm một notebook đang đóng thì nó được mở lại. Bên dưới là các notebook đang mở thuộc project khác. Nút trên tiêu đề mở New Chat, Compute, Settings;
   - **Project Chats**: các chat Research của project, side chat và sub-agent nằm thụt dưới chat đã tạo ra chúng (dấu **?**: đang chờ bạn trả lời hoặc duyệt). Nút ＋ tạo chat Research mới.
 - **Hai chế độ**, theo chat bạn chọn bên trái:
-  - **chế độ Notebook** (bấm một notebook): giữa là notebook (file `.ipynb`, hoặc bản sao sống của notebook trong Chrome); thanh bên phải có **Agent Chat** và thông tin project;
-  - **chế độ Research** (bấm một chat Research): giữa là chat Research (một tab "Research Chat"); thanh bên phải chỉ còn thông tin project, có thêm **Experiments**. Chuyển sang chat Notebook thì tab này tự đóng; bấm thẳng vào một notebook trong editor cũng chuyển sang chế độ Notebook. Mỗi lúc chỉ có một chế độ.
-- **Thanh bên phải** (mục Agent in Notebook), từ trên xuống:
-  - **Agent Chat** (chỉ ở chế độ Notebook);
-  - **Project**: tên project (bấm để đổi project), và ở chế độ Research thì có **Experiments**: cây thử nghiệm, có trạng thái lần chạy mới nhất. Bấm một thử nghiệm để mở trang chi tiết. Nút terminal mở log;
-  - **Chat Worktree**: worktree riêng của chat đang mở (chat Research hoặc chat Notebook); không có chat nào của project thì là repo của project. Nút **Changes** liệt kê file chat đã đổi so với lúc tách nhánh;
-  - **Shared Artifacts**: thư mục kết quả chung của project (chỉ trên máy bạn, không thuộc git), mọi chat đều thấy.
+  - **chế độ Notebook** (bấm một notebook): giữa là notebook (file `.ipynb`, hoặc bản sao sống của notebook trong Chrome); thanh bên phải mở mục **Agent in Notebook** (khung chat). Mục **Project** nằm cạnh nó, bấm vào thì thanh bên phải chuyển sang thông tin project;
+  - **chế độ Research** (bấm một chat Research): giữa là chat Research (một tab "Research Chat"); thanh bên phải chỉ còn mục **Project**, có thêm **Experiments**. Chuyển sang chat Notebook thì tab này tự đóng; bấm thẳng vào một notebook trong editor cũng chuyển sang chế độ Notebook. Mỗi lúc chỉ có một chế độ.
+- **Thanh bên phải** có hai mục, bấm tên mục để chuyển:
+  - **Agent in Notebook**: khung chat Notebook (chỉ có ở chế độ Notebook);
+  - **Project**, gồm ba phần:
+    - **Current Project**: tên project (bấm để đổi project), và ở chế độ Research thì có **Experiments**: cây thử nghiệm, có trạng thái lần chạy mới nhất. Bấm một thử nghiệm để mở trang chi tiết. Nút terminal mở log;
+    - **Chat Worktree**: worktree riêng của chat đang mở (chat Research hoặc chat Notebook); không có chat nào của project thì là repo của project. Nút **Changes** liệt kê file chat đã đổi so với lúc tách nhánh;
+    - **Shared Artifacts**: thư mục kết quả chung của project (chỉ trên máy bạn, không thuộc git), mọi chat đều thấy.
 - **New Chat** (nút ＋): chọn kiểu chat (Research hoặc Notebook), rồi chọn điểm bắt đầu:
   - thư mục trống;
   - project có sẵn;

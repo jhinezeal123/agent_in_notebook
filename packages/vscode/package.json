@@ -49,8 +49,13 @@
       ],
       "secondarySidebar": [
         {
-          "id": "ainb-project",
+          "id": "ainb-chat",
           "title": "Agent in Notebook",
+          "icon": "notebook.svg"
+        },
+        {
+          "id": "ainb-project",
+          "title": "Project",
           "icon": "beaker.svg"
         }
       ]
@@ -68,17 +73,19 @@
           "name": "Project Chats"
         }
       ],
-      "ainb-project": [
+      "ainb-chat": [
         {
           "type": "webview",
           "id": "ainb.chat",
           "name": "Agent Chat",
           "when": "ainb.mode != research"
-        },
+        }
+      ],
+      "ainb-project": [
         {
           "type": "webview",
           "id": "ainb.project",
-          "name": "Project"
+          "name": "Current Project"
         },
         {
           "id": "ainb.code",
