@@ -309,10 +309,10 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
       case "kaggle.openNotebook": {
         if (vscode.env.remoteName) throw new Error("Open Agent in Notebook in a local VS Code window to use the Kaggle Chrome launcher.");
         const config = vscode.workspace.getConfiguration("ainb.kaggle");
-        const accounts = await listKaggleAccounts(config.get<string>("accountsFile", "").trim());
+        const accounts = await listKaggleAccounts(await this.baseUrl());
         if (method === "kaggle.accounts") return accounts;
         const account = accounts.find(({ id }) => id === p.id);
-        if (!account) throw new Error("This Kaggle account is no longer in the registry. Reopen Compute to refresh the list.");
+        if (!account) throw new Error("This Kaggle account is no longer in OpenResearch. Reopen Compute to refresh the list.");
         const current = this.kaggleLaunches.get(account.id);
         if (current) return current;
         const profiles = vscode.Uri.joinPath(this.deps.context.globalStorageUri, "kaggle-chrome");

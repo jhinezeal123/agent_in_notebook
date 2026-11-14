@@ -1,47 +1,21 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
-import { promisify } from "node:util";
 import type { KaggleAccount, KaggleNotebookLaunch } from "../../studio/src/messages.js";
 
-const execFileAsync = promisify(execFile);
 const NEW_NOTEBOOK = "https://www.kaggle.com/code/new";
 const KAGGLE_SIGN_IN = "https://www.kaggle.com/account/login?returnUrl=%2Fcode%2Fnew";
 
-async function documentsDirectory(): Promise<string> {
-  if (process.platform === "win32") {
-    // Windows lets users move Documents to another drive or to OneDrive.
-    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
-    const { stdout } = await execFileAsync("reg.exe", ["query", key, "/v", "Personal"], { windowsHide: true }).catch(() => ({ stdout: "" }));
-    const value = /^\s*Personal\s+REG_(?:EXPAND_)?SZ\s+(.+)$/mi.exec(stdout)?.[1]?.trim();
-    const path = value?.replace(/%([^%]+)%/g, (match, key: string) => process.env[key] ?? match);
-    if (path && isAbsolute(path)) return path;
-  }
-  return join(homedir(), "Documents");
-}
-
-export async function listKaggleAccounts(configuredPath: string): Promise<KaggleAccount[]> {
-  const path = configuredPath || join(await documentsDirectory(), "kaggle_token", "profiles", "accounts.json");
-  if (!isAbsolute(path)) throw new Error("Set ainb.kaggle.accountsFile to an absolute path.");
-  const source = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") throw new Error("Kaggle account registry not found. Set ainb.kaggle.accountsFile to your pool's profiles/accounts.json.");
-    throw new Error(`Could not read the Kaggle account registry (${error.code ?? "read failed"}).`);
-  });
-  let registry: { accounts?: Record<string, { alias?: unknown } | null> } | null;
-  try {
-    registry = JSON.parse(source.replace(/^\uFEFF/, ""));
-  } catch {
-    throw new Error("The Kaggle account registry contains invalid JSON.");
-  }
-  const accounts = registry?.accounts;
-  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) throw new Error("The Kaggle account registry is missing its accounts object.");
-
-  return Object.entries(accounts).map(([id, entry]) => {
-    const alias = typeof entry?.alias === "string" ? entry.alias.trim() : "";
-    return { id, alias: alias || id.replace(/\.txt$/i, "") };
-  }).sort((a, b) => a.alias.localeCompare(b.alias));
+export async function listKaggleAccounts(base: string): Promise<KaggleAccount[]> {
+  const response = await fetch(`${base}/api/settings/kaggle`, { signal: AbortSignal.timeout(25_000) });
+  if (!response.ok) throw new Error(`OpenResearch could not list Kaggle accounts (HTTP ${response.status}).`);
+  const catalog = await response.json() as { accounts?: KaggleAccount[]; error?: string | null } | null;
+  if (catalog?.error) throw new Error(catalog.error);
+  if (!Array.isArray(catalog?.accounts)) throw new Error("OpenResearch did not return a Kaggle account list.");
+  return catalog.accounts.map(({ id, alias }) => ({ id, alias: alias?.trim() || id.replace(/\.txt$/i, "") }))
+    .sort((a, b) => a.alias.localeCompare(b.alias));
 }
 
 async function chromeExecutable(configuredPath: string): Promise<string> {

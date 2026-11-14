@@ -31,12 +31,6 @@
     "configuration": {
       "title": "Agent in Notebook",
       "properties": {
-        "ainb.kaggle.accountsFile": {
-          "type": "string",
-          "scope": "application",
-          "default": "",
-          "description": "Absolute path to the Kaggle account pool's profiles/accounts.json. By default, Agent in Notebook looks in Documents/kaggle_token/profiles/accounts.json."
-        },
         "ainb.kaggle.chromePath": {
           "type": "string",
           "scope": "application",
