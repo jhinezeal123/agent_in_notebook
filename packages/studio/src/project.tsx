@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { buildHistoryNodes, layoutLineage, type HistoryRow } from "@orx/components/experimentLineageModel";
 import type { ChatSession, Project } from "@orx/api";
+import { delegateLineage, delegateModelLabel, delegateStatus } from "@orx/delegates";
 import type { NotebookChatSummary } from "@ainb/protocol";
 import { pickProject } from "./messages.js";
 import { ResearchGate } from "./root.js";
@@ -78,7 +79,11 @@ function ChatList({ project, closed, onToggle }: { project: Project; closed: boo
   const { queries, api } = useWorkspace();
   const selected = useSelectedChat();
   const sessions = useQuery(queries.listChatSessionsQuery(project.id));
-  const chats = (sessions.data ?? []).filter((s: ChatSession) => !s.archived && !s.sideParentSessionId);
+  const all = sessions.data ?? [];
+  // A delegate is listed under the chat that started it (a side chat too: it may wait on the user);
+  // one whose chat is not listed here stands on its own.
+  const listed = (s: ChatSession) => !s.archived && !s.sideParentSessionId;
+  const chats = all.filter((s: ChatSession) => listed(s) && !(s.delegate && all.some((p) => p.id === s.delegate!.parentId && listed(p))));
   const harnesses = useQuery(queries.getHarnessesQuery());
   const [creating, setCreating] = useState(false);
   const newChat = async () => {
@@ -98,14 +103,20 @@ function ChatList({ project, closed, onToggle }: { project: Project; closed: boo
     <Pane id="chats" title="Chats" open={!closed} onToggle={onToggle}
       actions={<IconButton icon="plus" title="New research chat in this project" disabled={creating} onClick={() => void newChat()} />}>
       {sessions.isError && <p className="empty error">{errorText(sessions.error)}</p>}
-      {chats.map((s) => {
+      {chats.flatMap((s) => [{ session: s, level: 0 }, ...delegateLineage(all, s.id).filter((d) => !d.session.archived)]).map(({ session: s, level }) => {
         const on = selected?.kind === "research" && selected.sessionId === s.id;
+        const status = level ? delegateStatus(s, all) : null;
+        const asking = s.awaitingInput || status === "asking" || status === "approval";
         return (
-          <div key={s.id} className={`item${on ? " sel" : ""}`} style={{ paddingLeft: 20 }} onClick={() => void hostRequest("chat.select", { kind: "research", projectId: project.id, sessionId: s.id })} title={s.title ?? undefined}>
-            <Icon name="comment" />
-            <span className="lbl">{s.title || "New chat"}</span>
+          <div key={s.id} className={`item${on ? " sel" : ""}`} style={{ paddingLeft: 20 + 14 * level }} onClick={() => void hostRequest("chat.select", { kind: "research", projectId: project.id, sessionId: s.id })}
+            title={level ? `Sub-agent: ${s.title || delegateModelLabel(s)}` : s.title ?? undefined}>
+            <Icon name={level ? "branch" : "comment"} />
+            <span className="lbl">{s.title || (level ? delegateModelLabel(s) || "Sub-agent" : "New chat")}</span>
             <span className="tail">
-              {s.awaitingInput ? <span className="ask" title="Waiting for your answer">?</span> : s.busy ? <span className="dot pulse" style={{ background: "var(--st-running)" }} title="Working" /> : <span className="dsc">{ago(s.updatedAt)}</span>}
+              {asking ? <span className="ask" title={status === "approval" ? "Waiting for your approval" : "Waiting for your answer"}>?</span>
+                : s.busy || status === "running" ? <span className="dot pulse" style={{ background: "var(--st-running)" }} title="Working" />
+                : status === "failed" ? <span className="dsc" style={{ color: "var(--st-failed)" }}>failed</span>
+                : <span className="dsc">{ago(s.updatedAt)}</span>}
             </span>
           </div>
         );

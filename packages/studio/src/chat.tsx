@@ -1,14 +1,18 @@
 // A research chat: one of OpenResearch's own chat sessions (its agent, its
 // tools, its run notices), read and written through OpenResearch's chat logic
-// and drawn in the chat panel's look.
+// and drawn in the chat panel's look. Chats it delegated to (sub-agents)
+// show under the turn that started them, and what other chats sent it can be
+// read in full; a click opens that chat here.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { activePath } from "@orx/transcriptTree";
 import { fmtDuration, type ChatActiveRun, type ChatMessage, type ChatPart, type ChatSession, type Harness } from "@orx/api";
 import { runConnectHost, runDisplay } from "@orx/runDisplay";
 import { statusLabel } from "@orx/components/StatusBadge";
+import { delegateLineage, delegateModelLabel, delegatesOf, delegateStatus, type DelegateStatus } from "@orx/delegates";
+import { firstLine } from "@orx/agentMessages";
 import { m } from "@orx/paraglide/messages.js";
 import { Markdown } from "./experiment.js";
 import { ResearchGate } from "./root.js";
@@ -17,6 +21,18 @@ import { Banner, Button, Icon, errorText } from "./ui.js";
 
 export function ResearchChat({ projectId, sessionId }: { projectId: string; sessionId: string }) {
   return <ResearchGate compact><ChatInner key={sessionId} projectId={projectId} sessionId={sessionId} /></ResearchGate>;
+}
+
+/** The other chats of the project, by id, and opening one in the chat panel. */
+interface ChatLinks {
+  chat(id: string): ChatSession | undefined;
+  open(id: string): void;
+}
+const ChatLinksContext = createContext<ChatLinks | null>(null);
+
+interface DelegateRow {
+  session: ChatSession;
+  status: DelegateStatus;
 }
 
 function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: string }) {
@@ -43,6 +59,27 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
   }), [workspace, queryClient]);
   const runs = (activeRuns.data ?? []).filter((r) => r.sessionId === sessionId);
 
+  const allSessions = useMemo(() => sessions.data ?? [], [sessions.data]);
+  const links = useMemo<ChatLinks>(() => ({
+    chat: (id) => allSessions.find((s) => s.id === id),
+    open: (id) => void hostRequest("chat.select", { kind: "research", projectId, sessionId: id }),
+  }), [allSessions, projectId]);
+  // Each delegate sits under the message that started it: the last one begun before it was.
+  const delegatesByMessage = useMemo(() => {
+    const out = new Map<string, DelegateRow[]>();
+    for (const d of delegatesOf(allSessions, sessionId)) {
+      const at = messages.filter((msg) => msg.createdAt <= d.createdAt).at(-1);
+      if (!at) continue;
+      out.set(at.id, [...(out.get(at.id) ?? []), { session: d, status: delegateStatus(d, allSessions) }]);
+    }
+    return out;
+  }, [allSessions, sessionId, messages]);
+  // Sub-agents, at any depth, that wait on the user: they stop until someone answers in their chat.
+  const waiting = delegateLineage(allSessions, sessionId)
+    .map(({ session: s }) => ({ session: s, status: delegateStatus(s, allSessions) }))
+    .filter((d) => d.status === "asking" || d.status === "approval");
+  const parent = session?.delegate ? links.chat(session.delegate.parentId) : undefined;
+
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   useLayoutEffect(() => { const el = scroller.current; if (el && stick.current) el.scrollTop = el.scrollHeight; });
@@ -61,6 +98,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
     void api.respondChat(sessionId, { promptId, ...answer }).catch((e) => setError(errorText(e)));
 
   return (
+    <ChatLinksContext.Provider value={links}>
     <div className="rchat">
       {!messages.length && !history.isPending && !history.isError ? (
         <div className="welcome">
@@ -74,19 +112,40 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
       ) : (
         <div className="transcript" ref={scroller} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
           {history.isError && <Banner tone="error">{errorText(history.error)}</Banner>}
-          {messages.map((msg) => <Message key={msg.id} message={msg} onRespond={respond} />)}
+          {messages.map((msg) => (
+            <div key={msg.id} className="msg-row">
+              <Message message={msg} onRespond={respond} />
+              {delegatesByMessage.get(msg.id)?.map((d) => <DelegateCard key={d.session.id} row={d} onOpen={links.open} />)}
+            </div>
+          ))}
           {busy && <div className="working"><span className="spinner" /> Working…</div>}
           {!!queued.length && <div className="queued">{queued.length} message{queued.length > 1 ? "s" : ""} waiting for the agent</div>}
         </div>
       )}
       {error && <Banner tone="error">{error}</Banner>}
       {harness && !harness.agentReady && <Banner tone="warn">{harness.name} is not ready: {harness.agentNote ?? "set it up in Settings › Agents."}</Banner>}
+      {!!waiting.length && (
+        <div className="waitbar" role="status">
+          {waiting.map((d) => (
+            <div key={d.session.id} className="waitrow">
+              <span className="ask">?</span>
+              <span className="waitrow-text"><b>{d.session.title?.trim() || delegateModelLabel(d.session)}</b> {d.status === "asking" ? "needs an answer" : "needs your approval"}</span>
+              <Button small onClick={() => links.open(d.session.id)}>Open</Button>
+            </div>
+          ))}
+        </div>
+      )}
       <RunBanner key={sessionId} runs={runs} />
       <Composer busy={busy} draft={draft} placeholder={`Message ${harness?.name ?? "the agent"}…`} onSend={send} onStop={() => void api.interruptChat(sessionId).catch((e) => setError(errorText(e)))}
         context={
           <div className="ctx-row">
             <span className="ctx-chip rs" title="This chat uses OpenResearch's tools: experiments, runs and papers"><Icon name="flask" /> Research</span>
             {project && <span className="ctx-chip" title={project.repoPath}><Icon name="folder" /><span className="ctx-name">{project.name}</span></span>}
+            {session?.delegate && (
+              <button type="button" className="ctx-chip link" disabled={!parent} title={parent ? "Open the chat that delegated this task" : undefined} onClick={() => parent && links.open(parent.id)}>
+                <Icon name="branch" /><span className="ctx-name">Sub-agent of {parent?.title?.trim() || "another chat"}</span>
+              </button>
+            )}
           </div>
         }
         tools={<>
@@ -94,6 +153,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
           {session?.model && <span className="tb-label">{session.model}</span>}
         </>} />
     </div>
+    </ChatLinksContext.Provider>
   );
 }
 
@@ -173,7 +233,60 @@ function OrxNotice({ part }: { part: ChatPart }) {
     const ok = src.status === "done";
     return <div className={`npill ${ok ? "ok" : src.status === "failed" ? "bad" : "warn"}`}><Icon name={ok ? "check" : "warning"} /><span>{text || `Run ${src.status}`}</span></div>;
   }
-  return <div className="npill info"><Icon name={src.kind === "monitoring" ? "warning" : "comment"} /><span>{src.from ? `${src.from}: ` : ""}{text}</span></div>;
+  return <SentCard part={part} />;
+}
+
+const SENT_KIND: Record<string, string> = { task: "Task from", message: "Message from", answer: "Answer from", question: "Question from" };
+
+/** What another chat (or OpenResearch, about runs) sent this one: its sender opens that chat, the rest opens the whole message. */
+function SentCard({ part }: { part: ChatPart }) {
+  const links = useContext(ChatLinksContext);
+  const [open, setOpen] = useState(false);
+  const { kind, from } = part.orx!;
+  const text = part.text ?? "";
+  const monitoring = kind === "monitoring";
+  const chat = monitoring || !from ? undefined : links?.chat(from);
+  const sender = monitoring ? "OpenResearch" : chat?.title?.trim() || (chat ? delegateModelLabel(chat) : "another chat");
+  return (
+    <div className={`sent${open ? " open" : ""}`}>
+      <div className="sent-head">
+        <span className="sent-from">
+          <Icon name={monitoring ? "warning" : "comment"} />
+          {!monitoring && <span className="muted">{SENT_KIND[kind] ?? "From"}</span>}
+          {chat ? <button type="button" className="linkish" title="Open this chat" onClick={() => links?.open(chat.id)}>{sender}</button> : <span>{sender}</span>}
+        </span>
+        <button type="button" className="sent-toggle" aria-expanded={open} title={open ? "Fold" : "Read the whole message"} onClick={() => setOpen(!open)}>
+          {!open && <span className="sent-preview">{firstLine(text)}</span>}
+          <Icon name={open ? "chev-d" : "chev-r"} />
+        </button>
+      </div>
+      {open && <div className="sent-body"><Markdown text={text} /></div>}
+    </div>
+  );
+}
+
+const DELEGATE_STATUS: Record<DelegateStatus, string> = {
+  running: "Running", asking: "Needs an answer", approval: "Needs approval", finished: "Finished", failed: "Failed", stopped: "Stopped",
+};
+
+/** A chat this one delegated to, under the turn that started it. */
+function DelegateCard({ row: { session, status }, onOpen }: { row: DelegateRow; onOpen: (id: string) => void }) {
+  const model = delegateModelLabel(session);
+  const ended = status === "finished" || status === "failed" || status === "stopped";
+  const preview = ended ? firstLine(session.delegate?.answer || session.delegate?.error || "") : "";
+  return (
+    <button type="button" className={`dcard ${status}`} title="Open sub-agent chat" onClick={() => onOpen(session.id)}>
+      <Icon name="branch" />
+      <span className="dcard-main">
+        <span className="dcard-top">
+          <b className="dcard-title">{session.title?.trim() || model || "Sub-agent"}</b>
+          <span className="dcard-status">{DELEGATE_STATUS[status]}</span>
+        </span>
+        <span className="dcard-sub">{preview || model}</span>
+      </span>
+      {status === "running" ? <span className="spinner small" /> : <Icon name="chev-r" />}
+    </button>
+  );
 }
 
 function Prompt({ part, onRespond }: { part: ChatPart; onRespond: (promptId: string, answer: { approve?: boolean; answers?: string[] }) => void }) {
