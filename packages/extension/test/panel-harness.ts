@@ -114,7 +114,7 @@ export async function pickNotebook(panel: Page, title: string): Promise<void> {
         await picker.selectOption({ label });
         return;
       }
-    } else if ((await panel.locator(".top-title").textContent())?.includes(title)) return;
+    } else if ((await panel.locator(".notebook-title").textContent())?.includes(title)) return;
     if (Date.now() > deadline) throw new Error(`No notebook titled ${title} in the panel.`);
     await panel.waitForTimeout(250);
   }

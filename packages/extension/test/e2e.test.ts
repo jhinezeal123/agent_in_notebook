@@ -131,8 +131,8 @@ async function openPanel(title: string): Promise<Page> {
 async function send(panel: Page, text: string) {
   const box = panel.getByPlaceholder(/Ask about this notebook|Queue a follow-up/);
   await box.fill(text);
-  const sendButton = panel.getByRole("button", { name: "Send", exact: true });
-  if (await sendButton.count()) await expect.poll(() => sendButton.isEnabled(), { timeout: 120_000 }).toBe(true);
+  const sendButton = panel.getByRole("button", { name: /^(Send|Queue follow-up)$/ });
+  await expect.poll(() => sendButton.isEnabled(), { timeout: 120_000 }).toBe(true);
   await box.press("Enter");
 }
 
@@ -152,8 +152,8 @@ describe.skipIf(!RUN)("Colab", () => {
     await nb.goto(COLAB, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await nb.waitForFunction(() => (window as any).colab?.global?.notebook?.cells?.length > 0, null, { timeout: 120_000 });
     panel = await openPanel("colab-github-demo.ipynb");
-    await expect.poll(() => panel.locator(".top-title").textContent(), { timeout: 60_000 }).toContain("Colab");
-    await expect.poll(() => panel.locator(".top-title").textContent()).toContain("colab-github-demo.ipynb");
+    await expect.poll(() => panel.locator(".notebook-meta").textContent(), { timeout: 60_000 }).toContain("Colab");
+    await expect.poll(() => panel.locator(".notebook-title").textContent()).toContain("colab-github-demo.ipynb");
   }, 300_000);
 
   it("lets the agent read and write cells", async () => {
@@ -259,7 +259,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     nb = await ctx.newPage();
     await nb.goto(`${JUPYTER_BASE}/notebooks/e2e.ipynb?token=e2e`, { waitUntil: "domcontentloaded" });
     panel = await openPanel("e2e.ipynb");
-    await expect.poll(() => panel.locator(".top-title").textContent(), { timeout: 60_000 }).toContain("e2e.ipynb");
+    await expect.poll(() => panel.locator(".notebook-title").textContent(), { timeout: 60_000 }).toContain("e2e.ipynb");
     const model = panel.getByLabel("Model", { exact: true });
     await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
     expect(await panel.locator(".msg.user").count()).toBe(0);

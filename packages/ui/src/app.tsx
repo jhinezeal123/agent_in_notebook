@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatMessage, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { Message, PendingPrompt, type PartActions } from "./parts.js";
@@ -209,13 +209,21 @@ export function App() {
 
   return (
     <div class="app">
+      {notebook && (
+        <NotebookHeader
+          notebook={notebook}
+          tabId={tabId}
+          choices={choices}
+          onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
+          onMirror={() => tabId !== null && void run(client.request("notebook.mirror", { tabId }))}
+        />
+      )}
       {!notebook ? (
         <Welcome>
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
-          <p class="small">The agent works on the machine the notebook runs on.</p>
         </Welcome>
       ) : (
-        <Transcript chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} />
+        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} />
       )}
 
       {live?.error && <div class="banner error">{live.error}</div>}
@@ -229,7 +237,7 @@ export function App() {
       )}
 
       {notebook && (
-        <footer class="bottom">
+        <footer class="bottom chat-width">
           {pendingPrompts[0] && <PendingPrompt part={pendingPrompts[0]} more={pendingPrompts.length - 1} actions={actions} />}
           {pendingReviews.length > 1 && (
             <div class="bulk">
@@ -250,13 +258,9 @@ export function App() {
             onSend={send}
             onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
             context={
-              <NotebookContext
+                <ComposerContext
                 notebook={notebook}
-                tabId={tabId}
-                choices={choices}
                 settings={settings}
-                onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
-                onMirror={() => tabId !== null && void run(client.request("notebook.mirror", { tabId }))}
                 onSettings={updateSettings}
                 project={live?.project}
                 onShowProject={() => live?.project?.id && void run(client.request("project.show", { projectId: live.project.id }))}
@@ -298,7 +302,7 @@ export function App() {
               <input type="checkbox" checked={settings.notebookOnly} onChange={(e) => updateSettings({ ...settings, notebookOnly: (e.target as HTMLInputElement).checked })} />
               Notebook only
             </label>
-            {live?.status === "starting" && <span class="muted">Starting {live.agentName}…</span>}
+            {live?.status === "starting" && <span role="status">Starting {live.agentName}…</span>}
             {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
             {live?.project && (
               <span class="project-actions">
@@ -318,12 +322,11 @@ const SCOPES: Scope[] = ["cell", "write", "auto"];
 /** The agent picker's last entry: opens Settings › Agents, where agents are managed. */
 const MANAGE = "\u0000manage";
 
-/** The empty panel, as VS Code's own chat greets: a mark, a name, a line on what it does. */
-function Welcome({ children }: { children: ComponentChildren }) {
+function Welcome({ title = "Agent in Notebook", children }: { title?: string; children: ComponentChildren }) {
   return (
     <div class="welcome">
       <div class="welcome-mark"><Icon name="notebook" /></div>
-      <h2>Agent in Notebook</h2>
+      <h2>{title}</h2>
       <div class="welcome-text">{children}</div>
     </div>
   );
@@ -352,14 +355,53 @@ function Picker({ label, value, options, onChange, disabled, title }: {
   );
 }
 
-/** What the chat is about, shown as context chips at the top of the input box. */
-function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror, onSettings, project, onShowProject, onMoveProject }: {
+function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
   notebook: NotebookInfo;
   tabId: number | null;
   choices: NotebookChoice[];
-  settings: ChatSettings;
   onPick: (tabId: number) => void;
   onMirror: () => void;
+}) {
+  const chrome = tabId !== null && tabId < 0;
+  const hasCurrentChoice = choices.some((choice) => choice.tabId === tabId);
+  return (
+    <header class="notebook-header">
+      <div class="notebook-header-body chat-width">
+        <div class="notebook-mark"><Icon name="notebook" /></div>
+        <div class="notebook-details">
+          {choices.length > 1 ? (
+            <div class="notebook-select" title={notebook.title}>
+              <span class="notebook-title" aria-hidden="true">{notebook.title}</span>
+              <Icon name="chev-d" />
+              <select class="notebook-pick" aria-label="Notebook" value={hasCurrentChoice ? (tabId ?? "") : ""} onChange={(e) => onPick(Number(e.currentTarget.value))}>
+                {!hasCurrentChoice && <option value="" disabled>{notebook.title}</option>}
+                {choices.map((choice) => <option key={choice.tabId} value={choice.tabId}>{choiceLabel(choice)}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div class="notebook-title" title={notebook.title}>{notebook.title}</div>
+          )}
+          <div class="notebook-meta">
+            <span>{PLATFORM[notebook.platform]}{chrome ? " in Chrome" : ""}</span>
+            <span class="kernel-state">
+              <span class={`kdot k-${notebook.kernel}`} aria-hidden="true" />
+              Kernel {notebook.kernel}
+            </span>
+          </div>
+        </div>
+        {chrome && (
+          <button class="ctx-btn notebook-mirror" title="Open this notebook in VS Code: edits and runs go to the Chrome tab" aria-label="Open in VS Code" onClick={onMirror}>
+            <Icon name="open" />
+          </button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject }: {
+  notebook: NotebookInfo;
+  settings: ChatSettings;
   onSettings: (s: ChatSettings) => void;
   project?: ChatProject;
   onShowProject: () => void;
@@ -367,26 +409,9 @@ function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror,
 }) {
   const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
   const pinned = settings.targetCellIds.length > 0;
-  const chrome = tabId !== null && tabId < 0;
+  if (!project && settings.scope !== "cell") return null;
   return (
     <div class="ctx-row">
-      <span class="ctx-chip top-title" title={`${notebook.title} · ${PLATFORM[notebook.platform]}${chrome ? " in Chrome" : ""} · kernel ${notebook.kernel}`}>
-        <Icon name="notebook" />
-        {choices.length > 1 ? (
-          <select class="notebook-pick" aria-label="Notebook" value={tabId ?? ""} onChange={(e) => onPick(Number((e.target as HTMLSelectElement).value))}>
-            {tabId === null && <option value="">Choose a notebook</option>}
-            {choices.map((c) => <option key={c.tabId} value={c.tabId}>{choiceLabel(c)}</option>)}
-          </select>
-        ) : (
-          <span class="ctx-name">{notebook.title}<span class="muted"> · {PLATFORM[notebook.platform]}</span></span>
-        )}
-        <span class={`kdot k-${notebook.kernel}`} aria-label={`Kernel ${notebook.kernel}`} />
-      </span>
-      {chrome && (
-        <button class="ctx-btn" title="Open this notebook in VS Code: edits and runs go to the Chrome tab" aria-label="Open in VS Code" onClick={onMirror}>
-          <Icon name="open" />
-        </button>
-      )}
       {project && (
         <span class={`ctx-chip project p-${project.state}`} title={projectTitle(project)}>
           <Icon name="folder" />
@@ -398,7 +423,7 @@ function NotebookContext({ notebook, tabId, choices, settings, onPick, onMirror,
       {settings.scope === "cell" && (
         <span class="ctx-chip cells" title={pinned ? "The agent may change these pinned cells" : "The agent may change the selected cell"}>
           <Icon name="cell" />
-          <span class="ctx-name">{targets.length ? targets.map((t) => t.slice(0, 8)).join(", ") : "select a cell"}</span>
+          <span class="ctx-name" title={targets.join(", ") || undefined}>{targets.length ? targets.map((t) => t.slice(0, 8)).join(", ") : "Select a cell"}</span>
           {pinned ? (
             <button class="ctx-btn" title="Follow the selection again" aria-label="Unpin" onClick={() => onSettings({ ...settings, targetCellIds: [] })}><Icon name="close" /></button>
           ) : targets.length > 0 && (
@@ -423,31 +448,44 @@ function Elapsed({ since }: { since: number }) {
     const timer = setInterval(write, 1000);
     return () => clearInterval(timer);
   }, [since]);
-  return <span ref={ref} class="elapsed" />;
+  return <span ref={ref} class="elapsed" aria-hidden="true" />;
 }
 
-const SUGGESTIONS = ["Explain what this notebook does", "Fix the error in the selected cell", "Add a section that plots the training loss"];
+const SUGGESTIONS = [
+  { label: "Explain this notebook", text: "Explain what this notebook does" },
+  { label: "Fix the selected cell", text: "Fix the error in the selected cell" },
+  { label: "Plot the training loss", text: "Add a section that plots the training loss" },
+];
 
 function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const lastHeight = useRef(0);
   const [behind, setBehind] = useState(false);
+  const hasMessages = !!chat?.messages.length;
+
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    if (stick.current) el.scrollTop = el.scrollHeight;
-    else if (el.scrollHeight > lastHeight.current && !behind) setBehind(true);
-    lastHeight.current = el.scrollHeight;
-  });
-  if (!chat || !chat.messages.length) {
+    if (!el || !content.current) return;
+    const follow = () => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    };
+    // Streaming text, images and changes to the composer can all resize the view.
+    const observer = new ResizeObserver(follow);
+    observer.observe(el);
+    observer.observe(content.current);
+    follow();
+    return () => observer.disconnect();
+  }, [hasMessages]);
+
+  if (!chat || !hasMessages) {
     return (
-      <Welcome>
-        <p>Ask the agent about this notebook. It reads, edits and runs cells, and works in the terminal of the machine the notebook runs on.</p>
+      <Welcome title="What are you working on?">
+        <p>Ask about your notebook or get help editing and running cells.</p>
         <div class="suggestions">
           {SUGGESTIONS.map((s) => (
-            <button key={s} class="suggestion" onClick={() => onSuggest(s)}>
-              <Icon name="sparkle" /> {s}
+            <button key={s.text} class="suggestion" onClick={() => onSuggest(s.text)}>
+              <Icon name="sparkle" /> <span>{s.label}</span><Icon name="chev-r" />
             </button>
           ))}
         </div>
@@ -465,36 +503,37 @@ function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; a
         onScroll={(e) => {
           const el = e.currentTarget as HTMLDivElement;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-          if (stick.current && behind) setBehind(false);
+          setBehind(!stick.current);
         }}
       >
-        {chat.messages.map((m) => (
-          <Message key={m.id} msg={m} actions={actions} live={m.id === liveId} />
-        ))}
-        {running && (
-          <div class="working" aria-label="Agent is working">
-            <span class="spinner" aria-hidden="true" /> Working <Elapsed since={last?.role === "agent" ? last.createdAt : Date.now()} />
-          </div>
-        )}
+        <div class="transcript-content chat-width" ref={content}>
+          {chat.messages.map((m) => (
+            <Message key={m.id} msg={m} actions={actions} live={m.id === liveId} />
+          ))}
+          {running && (
+            <div class="working" role="status">
+              <span class="spinner" aria-hidden="true" /> Working <Elapsed since={last?.role === "agent" ? last.createdAt : Date.now()} />
+            </div>
+          )}
+        </div>
       </div>
       {behind && (
         <button
           class="jump"
           onClick={() => {
+            stick.current = true;
             const el = ref.current;
             if (el) el.scrollTop = el.scrollHeight;
-            stick.current = true;
             setBehind(false);
           }}
         >
-          <Icon name="chev-d" /> New messages
+          <Icon name="chev-d" /> Jump to latest
         </button>
       )}
     </div>
   );
 }
 
-/** The input box: context chips on top, the text, and a toolbar of pickers with the send button. */
 function Composer({ history, running, disabled, draft, onSend, onStop, context, tools }: {
   history: string[];
   running: boolean;
@@ -508,31 +547,36 @@ function Composer({ history, running, disabled, draft, onSend, onStop, context, 
 }) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
+  const sending = useRef(false);
   /** Position in `history` while recalling earlier prompts with the arrow keys. */
   const recall = useRef<number | null>(null);
   useEffect(() => {
     if (!draft) return;
+    recall.current = null;
     setText(draft.text);
     area.current?.focus();
   }, [draft]);
   const submit = async () => {
     const t = text.trim();
-    if (!t || disabled) return;
+    if (!t || disabled || sending.current) return;
+    sending.current = true;
+    recall.current = null;
     setText("");
-    if (!(await onSend(t))) setText(t);
+    area.current?.focus();
+    try {
+      if (!(await onSend(t))) setText((current) => current || text);
+    } finally {
+      sending.current = false;
+    }
   };
-  useLayoutEffect(() => {
-    const el = area.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [text]);
+  const sendLabel = running ? "Queue follow-up" : "Send";
   return (
     <div class="composer" onClick={(e) => { if (e.target === e.currentTarget) area.current?.focus(); }}>
       {context}
       <textarea
         ref={area}
         rows={1}
+        aria-label="Message"
         placeholder={running ? "Queue a follow-up…" : "Ask about this notebook…"}
         value={text}
         onInput={(e) => {
@@ -540,9 +584,9 @@ function Composer({ history, running, disabled, draft, onSend, onStop, context, 
           setText((e.target as HTMLTextAreaElement).value);
         }}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          if (e.isComposing) return;
+          if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            recall.current = null;
             void submit();
             return;
           }
@@ -563,17 +607,17 @@ function Composer({ history, running, disabled, draft, onSend, onStop, context, 
         }}
       />
       <div class="toolbar">
-        {tools}
-        <span class="grow" />
-        {running && !text.trim() ? (
-          <button class="send stop" onClick={onStop} title="Stop the agent" aria-label="Stop">
-            <Icon name="stop" />
-          </button>
-        ) : (
-          <button class="send" onClick={() => void submit()} disabled={disabled || !text.trim()} title="Send (Enter)" aria-label="Send">
+        <div class="toolbar-options">{tools}</div>
+        <div class="toolbar-actions">
+          {running && (
+            <button class="send stop-agent" onClick={onStop} title="Stop the agent" aria-label="Stop">
+              <Icon name="stop" />
+            </button>
+          )}
+          <button class="send" onClick={() => void submit()} disabled={disabled || !text.trim()} title={`${sendLabel} (Enter)`} aria-label={sendLabel}>
             <Icon name="send" />
           </button>
-        )}
+        </div>
       </div>
     </div>
   );
