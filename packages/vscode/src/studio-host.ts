@@ -10,7 +10,7 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { ResearchStatus } from "@ainb/protocol";
-import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KaggleNotebookLaunch, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
+import { DEFAULT_KERNEL_SETUP, pickProject, type FromHost, type HostEvents, type KaggleAccount, type KaggleNotebookLaunch, type KernelSetup, type NotebookEntry, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
 import type { ChangeSet, ChangedFile } from "./changes.js";
 import { listKaggleAccounts, openKaggleNotebook } from "./kaggle-notebooks.js";
 import { OrxTunnel } from "./orx-tunnel.js";
@@ -33,6 +33,7 @@ export interface StudioDeps {
 
 const KERNEL_KEY = "kernelSetup";
 const PROJECT_KEY = "researchProject";
+const KAGGLE_ACCOUNTS_KEY = "kaggleAccounts";
 
 /** What the extension needs of an OpenResearch project. */
 export interface OrxProject {
@@ -199,6 +200,18 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     this.statusItem.show();
   }
 
+  /** OpenResearch's Kaggle accounts, remembered so Chrome still opens when it is down. */
+  private async kaggleAccounts(known: KaggleAccount[] | undefined): Promise<KaggleAccount[]> {
+    try {
+      const accounts = await listKaggleAccounts(await this.baseUrl());
+      await this.deps.context.globalState.update(KAGGLE_ACCOUNTS_KEY, accounts);
+      return accounts;
+    } catch (error) {
+      if (known?.length) return known;
+      throw error;
+    }
+  }
+
   /** OpenResearch's address, starting it through the bridge when needed. */
   private async baseUrl(): Promise<string> {
     if (this.status.state === "ready" && this.status.url) return this.status.url;
@@ -309,16 +322,21 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
       case "kaggle.openNotebook": {
         if (vscode.env.remoteName) throw new Error("Open Agent in Notebook in a local VS Code window to use the Kaggle Chrome launcher.");
         const config = vscode.workspace.getConfiguration("ainb.kaggle");
-        const accounts = await listKaggleAccounts(await this.baseUrl());
+        const recover = p.recover !== false;
+        const known = this.deps.context.globalState.get<KaggleAccount[]>(KAGGLE_ACCOUNTS_KEY);
+        // Opening without recovery needs no OpenResearch, so it uses the last list it gave.
+        const accounts = method === "kaggle.openNotebook" && !recover && known?.length ? known : await this.kaggleAccounts(known);
         if (method === "kaggle.accounts") return accounts;
         const account = accounts.find(({ id }) => id === p.id);
         if (!account) throw new Error("This Kaggle account is no longer in OpenResearch. Reopen Compute to refresh the list.");
-        const current = this.kaggleLaunches.get(account.id);
+        // Opening without recovery must not get a recovery that is still running.
+        const key = `${account.id}:${recover}`;
+        const current = this.kaggleLaunches.get(key);
         if (current) return current;
         const profiles = vscode.Uri.joinPath(this.deps.context.globalStorageUri, "kaggle-chrome");
-        const launch = openKaggleNotebook(account, profiles.fsPath, config.get<string>("chromePath", "").trim(), () => this.baseUrl(), p.recover !== false)
-          .finally(() => this.kaggleLaunches.delete(account.id));
-        this.kaggleLaunches.set(account.id, launch);
+        const launch = openKaggleNotebook(account, profiles.fsPath, config.get<string>("chromePath", "").trim(), () => this.baseUrl(), recover)
+          .finally(() => this.kaggleLaunches.delete(key));
+        this.kaggleLaunches.set(key, launch);
         return launch;
       }
       case "folder.pick": {
