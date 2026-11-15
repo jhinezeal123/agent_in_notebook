@@ -73,6 +73,24 @@ export function planPush(local: readonly LocalCell[], remote: readonly { id: str
   return steps;
 }
 
+/**
+ * What a poll does with the browser's cells:
+ * - "wait": the user's own change to the cells is still on its way to the browser;
+ * - "rebuild": the cells differ (added, removed or moved in the browser, or the
+ *   browser did not end where the mirror asked, e.g. Kaggle adds an empty cell
+ *   when the last one is deleted): read the whole notebook again;
+ * - "sync": same cells in both: follow sources and runs cell by cell.
+ */
+export function pullAction(
+  local: readonly LocalCell[],
+  known: readonly { id: string; type: CellType }[],
+  remote: readonly { id: string; type: CellType }[],
+  pushPending: boolean,
+): "wait" | "rebuild" | "sync" {
+  if (!sameOrder(local, known)) return pushPending ? "wait" : "rebuild";
+  return sameOrder(known, remote) ? "sync" : "rebuild";
+}
+
 export function sameOrder(local: readonly LocalCell[], remote: readonly { id: string; type: CellType }[]): boolean {
   return local.length === remote.length && local.every((c, i) => c.id === remote[i]!.id && c.type === remote[i]!.type);
 }

@@ -11,7 +11,7 @@
 
 import * as vscode from "vscode";
 import type { BrowserOp, CellInfo, CellType, NotebookInfo } from "@ainb/protocol";
-import { planPush, sameOrder, toEditorOutputs, type LocalCell } from "./mirror-sync.js";
+import { planPush, pullAction, sameOrder, toEditorOutputs, type LocalCell } from "./mirror-sync.js";
 
 export const MIRROR_TYPE = "ainb-chrome-notebook";
 const SCHEME = "ainb-chrome";
@@ -362,8 +362,12 @@ class Mirror {
     const localCells: LocalCell[] = local.map((cell) => ({ id: idOf(cell), type: typeOf(cell) }));
     const knownOrder = this.known.map((k) => ({ id: k.id, type: k.type }));
     const remoteOrder = remote.map((c) => ({ id: c.id, type: c.type }));
-    if (!sameOrder(localCells, knownOrder)) return; // the user's own change is on its way
-    if (!sameOrder(knownOrder, remoteOrder)) {
+    // A mirror that no longer matches what the browser was last known to hold,
+    // with no change of the user's on its way, takes the browser's notebook:
+    // waiting would leave it stuck for good.
+    const action = pullAction(localCells, knownOrder, remoteOrder, this.structure !== undefined);
+    if (action === "wait") return;
+    if (action === "rebuild") {
       await this.rebuild();
       return;
     }

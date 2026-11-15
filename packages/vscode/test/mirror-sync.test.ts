@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planPush, sameOrder, toEditorOutputs, type LocalCell, type PushStep } from "../src/mirror-sync.js";
+import { planPush, pullAction, sameOrder, toEditorOutputs, type LocalCell, type PushStep } from "../src/mirror-sync.js";
 
 /** Apply the steps to the browser's list as the browser would, and return the ids in order. */
 function apply(remote: { id: string; type: "code" | "markdown" }[], local: LocalCell[], steps: PushStep[]): string[] {
@@ -71,5 +71,32 @@ describe("toEditorOutputs", () => {
     expect(out[2]!.metadata).toEqual({ outputType: "execute_result" });
     expect([...out[3]!.items[0]!.data]).toEqual([137, 80, 78, 71]);
     expect(JSON.parse(decode(out[4]!.items[0]!.data))).toEqual({ name: "ValueError", message: "nope", stack: "Traceback…" });
+  });
+});
+
+describe("pullAction", () => {
+  const a = { id: "a", type: "code" } as const;
+  const b = { id: "b", type: "code" } as const;
+  const blank = { id: "z", type: "code" } as const;
+
+  it("follows sources and runs when all three hold the same cells", () => {
+    expect(pullAction([a, b], [a, b], [a, b], false)).toBe("sync");
+  });
+
+  it("reads the notebook again when cells changed in the browser", () => {
+    expect(pullAction([a, b], [a, b], [b, a], false)).toBe("rebuild");
+  });
+
+  it("waits while the user's own change is on its way", () => {
+    expect(pullAction([a], [a, b], [a, b], true)).toBe("wait");
+  });
+
+  it("takes the browser's notebook when the browser did not end where the mirror asked", () => {
+    // Every cell deleted in VS Code; Kaggle keeps one empty cell. Nothing is left to push.
+    expect(pullAction([], [blank], [blank], false)).toBe("rebuild");
+  });
+
+  it("takes the browser's notebook after a push that failed half way", () => {
+    expect(pullAction([{ id: null, type: "code" }], [a, b], [a], false)).toBe("rebuild");
   });
 });
