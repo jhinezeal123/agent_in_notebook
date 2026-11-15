@@ -10,9 +10,17 @@ let nextReq = 1;
 const pending = new Map<number, (r: OpResponse) => void>();
 
 function toBackground(msg: ContentToBackground) {
-  chrome.runtime.sendMessage(msg).catch(() => {
-    // Service worker restarting; it pings frames again when it comes back.
-  });
+  // After the extension is reloaded, this old copy stays in the tab until the
+  // tab reloads, and sendMessage throws "Extension context invalidated" at
+  // once: it has no background left to talk to, so it stays quiet.
+  if (!chrome.runtime?.id) return;
+  try {
+    chrome.runtime.sendMessage(msg).catch(() => {
+      // Service worker restarting; it pings frames again when it comes back.
+    });
+  } catch {
+    // Context invalidated between the check and the call.
+  }
 }
 
 window.addEventListener("message", (e: MessageEvent) => {
@@ -30,7 +38,12 @@ window.addEventListener("message", (e: MessageEvent) => {
       const done = pending.get(msg.reqId);
       if (!done) return;
       pending.delete(msg.reqId);
-      done(msg.ok ? { ok: true, result: msg.result } : { ok: false, error: msg.error });
+      try {
+        done(msg.ok ? { ok: true, result: msg.result } : { ok: false, error: msg.error });
+      } catch {
+        // Nobody waits for this answer any more (the background gave up on the
+        // op, restarted, or the extension was reloaded): drop it.
+      }
       return;
     }
   }

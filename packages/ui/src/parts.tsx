@@ -123,8 +123,11 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
     const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     return <div class="msg user"><Markdown text={text} /></div>;
   }
-  if (!msg.parts.length) return null;
-  const items = groupParts(msg.parts);
+  // A card the user dismissed is gone from the chat.
+  // (Older transcripts only say so in the outcome.)
+  const parts = msg.parts.filter((p) => !(p.type === "card" && (p.card.dismissed || (p.card.state !== "open" && p.card.outcome === "Dismissed"))));
+  if (!parts.length) return null;
+  const items = groupParts(parts);
   const text = msg.role === "agent" && !live ? messageText(msg) : "";
   return (
     <div class={`msg ${msg.role}`}>
@@ -316,7 +319,8 @@ function Card({ card, actions }: { card: ChatCard; actions: PartActions }) {
           </button>
         )}
       </div>
-      {card.detail && <div class="card-status">{card.detail}</div>}
+      {/* A closed notice about the machine keeps only its title and what became of it. */}
+      {card.detail && !(card.kind === "session" && card.state !== "open") && <div class="card-status">{card.detail}</div>}
       {card.progress && (
         <div class="card-status card-progress">
           <progress max={card.progress.total} value={card.progress.done} />

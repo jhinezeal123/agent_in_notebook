@@ -78,6 +78,8 @@ export interface ChatCard {
   state: "open" | "done" | "stale";
   /** What became of it, shown in place of the buttons ("Asked the agent to fix it"). */
   outcome?: string;
+  /** The user dismissed it: the chat no longer shows it. */
+  dismissed?: boolean;
   /** For a job in progress. */
   progress?: { done: number; total: number };
 }

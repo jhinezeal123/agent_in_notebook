@@ -15,7 +15,7 @@ import {
   type ReviewInfo,
   type RunResult,
 } from "./notebook.js";
-import { normalizeIpynbOutput } from "./outputs.js";
+import { normalizeIpynbOutput, outputsFingerprint } from "./outputs.js";
 import { RunWatcher } from "./run-watcher.js";
 
 export interface NotebookAdapter {
@@ -146,7 +146,14 @@ export class OpRunner {
         return a.info();
       case "get_cells": {
         const pending = this.pendingCellIds();
-        const cells = a.getCells(op.summary ? { ...op, includeOutputs: false } : op).map((c) => {
+        const read = op.summary ? { ...op, includeOutputs: false } : op.outputsHash ? { ...op, includeOutputs: true } : op;
+        const cells = a.getCells(read).map((c) => {
+          if (!op.outputsHash || op.summary) return c;
+          // Hashed in the page: only the fingerprint crosses the wire, unless the outputs were asked for too.
+          const { outputs, ...rest } = c;
+          const hashed = c.type === "code" ? { ...rest, outputsHash: outputsFingerprint(outputs ?? []) } : rest;
+          return op.includeOutputs ? { ...hashed, outputs } : hashed;
+        }).map((c) => {
           const stale = c.type === "code" && this.watcher.isStale(c.id, c.source);
           const withRunState = stale ? { ...c, stale: true } : c;
           return pending.has(c.id) ? { ...withRunState, pendingReview: true } : withRunState;

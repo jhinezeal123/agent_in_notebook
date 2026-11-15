@@ -148,6 +148,24 @@ export class ChatStore {
     rmSync(this.file(key), { force: true });
   }
 
+  /**
+   * A notebook now known by another key (renamed): its conversation and meta
+   * (project, machine) go to the new key; the address and title it has now stay.
+   */
+  move(from: string, to: string): void {
+    const chat = this.load(from);
+    const meta = this.loadMeta(from);
+    const now = this.loadMeta(to);
+    if (chat) this.save({ key: to, agentId: chat.agentId, title: now?.title ?? chat.title, messages: chat.messages, journal: chat.journal });
+    else this.remove(to);
+    if (meta) {
+      const { version: _v, key: _k, updatedAt: _u, ...rest } = meta;
+      this.saveMeta(to, { ...rest, title: now?.title ?? rest.title, url: now?.url ?? rest.url });
+    }
+    this.remove(from);
+    rmSync(this.metaFile(from), { force: true });
+  }
+
   /** Whether a conversation is saved for this notebook. */
   hasTranscript(key: string): boolean {
     return existsSync(this.file(key));

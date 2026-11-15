@@ -513,6 +513,31 @@ export class Bridge {
     if (this.chats.get(chat.tabId) === chat) this.chats.delete(chat.tabId);
   }
 
+  /**
+   * Kaggle gives a new notebook an address like /code/<user>/notebook5e1f…,
+   * and moves it to /code/<user>/<title> once renamed, seen at the next page
+   * load: the notebook's key changes, and it would come back as a new notebook
+   * with an empty chat. Its machine tells: a fresh chat whose notebook runs on
+   * the machine of a saved conversation (not open elsewhere) takes it over.
+   */
+  private adoptRenamed(target: Target, key: string, boot: string): void {
+    const chat = [...this.chats.values()].find((c) => c.notebookKey === key && sameAs(this.targets.get(c), target));
+    // Only Kaggle gives every notebook a machine of its own; Colab and Jupyter servers share one.
+    if (!key.startsWith("kaggle:") || !chat || chat.messages.some((m) => m.role === "user")) return;
+    const open = new Set([...this.chats.values()].map((c) => c.notebookKey));
+    for (const info of this.browserNotebooks.values()) open.add(info.key);
+    const from = this.store.listMeta()
+      .filter((m) => m.key !== key && m.key.startsWith("kaggle:") && m.machine?.boot === boot && !open.has(m.key))
+      .filter((m) => this.store.load(m.key)?.messages.some((x) => x.role === "user"))
+      .sort((a, b) => (b.machine?.seenAt ?? 0) - (a.machine?.seenAt ?? 0))[0];
+    if (!from) return;
+    this.log(`The notebook ${from.key} now answers as ${key} (renamed): its conversation follows it.`);
+    this.dropChat(chat, { forget: true });
+    this.store.move(from.key, key);
+    // The editor sees the chat closed and opens it again, from the moved conversation.
+    this.toEditor("chat.snapshot", chat.snapshot());
+  }
+
   private dropAllChats(): void {
     for (const chat of [...this.chats.values()]) this.dropChat(chat);
   }
@@ -560,6 +585,7 @@ export class Bridge {
         save: (patch) => { this.store.saveMeta(key, patch); },
       } : undefined,
       machineReset: () => forgetSetup(`${target.kind}:${target.tabId}`),
+      machineSeen: (boot) => { if (key) this.adoptRenamed(target, key, boot); },
       projectMcpServer: (chatToken): McpServer => ({
         name: "project",
         command: this.opts.mcpCommand.command,

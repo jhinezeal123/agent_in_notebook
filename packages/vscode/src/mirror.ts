@@ -1,8 +1,12 @@
 // A notebook open in a Chrome tab (Colab, Kaggle, Jupyter), shown and edited
 // in VS Code. The browser keeps the notebook and runs it; VS Code holds a live
 // copy:
-// - browser to VS Code: the cells are read every second; changed sources,
-//   cells added, removed or moved, and runs (with their outputs) show up;
+// - browser to VS Code: the cells are read every second, each with a
+//   fingerprint of its outputs; changed sources, cells added, removed or
+//   moved, runs, and any output that changed (also while a cell runs) show up.
+//   The outputs follow the page whatever it says about runs;
+// - a reload of the page (or of the extension) pauses the copy; it follows the
+//   notebook again when the same notebook comes back in that tab;
 // - VS Code to browser: the user's edits are sent as they type (a short pause
 //   first), cells added, removed or moved are sent in order, and running a
 //   cell runs it in the browser.
@@ -19,6 +23,8 @@ const POLL_MS = 1000;
 const PUSH_DELAY_MS = 400;
 /** A run started from VS Code waits this long for a quick answer; longer runs are followed by polling. */
 const RUN_WAIT_MS = 1500;
+/** How long a mirror waits for its tab's notebook to come back (a reload) before letting go. */
+const AWAY_MS = 3 * 60_000;
 
 type Request = (method: string, params: unknown) => Promise<unknown>;
 
@@ -77,9 +83,23 @@ export class ChromeMirrors implements vscode.Disposable {
     await vscode.window.showNotebookDocument(document, { preview: false });
   }
 
-  /** A Chrome tab's notebook went away (or changed): its mirror stops following it. */
+  /** The notebook each tab last showed, so a reload is told from going to another notebook. */
+  private readonly keys = new Map<number, string>();
+
+  /**
+   * A Chrome tab's notebook went away (a reload, the extension reloading, the
+   * tab closed) or came (back): its mirror pauses, then follows it again when
+   * the same notebook returns, or lets go when another one does.
+   */
   browserChanged(tab: number, info: NotebookInfo | null): void {
-    for (const mirror of this.mirrors.values()) if (mirror.tab === tab && !info) mirror.detach("The notebook's Chrome tab was closed or left the notebook; this copy no longer follows it.");
+    const before = this.keys.get(tab);
+    if (info?.key) this.keys.set(tab, info.key);
+    for (const mirror of this.mirrors.values()) {
+      if (mirror.tab !== tab) continue;
+      if (!info) mirror.away();
+      else if (before && info.key && before !== info.key) mirror.detach("The Chrome tab now shows another notebook; this copy no longer follows it.");
+      else mirror.back();
+    }
   }
 
   private attach(document: vscode.NotebookDocument): void {
@@ -160,6 +180,8 @@ interface Known {
   source: string;
   executionCount: number | null;
   running: boolean;
+  /** Fingerprint of the outputs shown here; null: not read yet, read them. */
+  outputsHash: string | null;
 }
 
 class Mirror {
@@ -167,10 +189,16 @@ class Mirror {
   private readonly pushes = new Map<vscode.NotebookCell, ReturnType<typeof setTimeout>>();
   private structure?: ReturnType<typeof setTimeout>;
   private readonly executions = new Map<string, vscode.NotebookCellExecution>();
+  /** Set while the tab's notebook is away (reloading): when it fires, the mirror lets go. */
+  private awayTimer?: ReturnType<typeof setTimeout>;
+  private awayNote?: vscode.Disposable;
   private readonly timer: ReturnType<typeof setInterval>;
   /** Pushes to the browser, one at a time and in order. */
   private queue: Promise<unknown> = Promise.resolve();
   private polling = false;
+  /** Runs started here whose run_cells has not answered, and a count of those started: a poll read across one is stale. */
+  private runsInFlight = 0;
+  private runsStarted = 0;
   private detached = false;
   private language = "python";
 
@@ -182,7 +210,7 @@ class Mirror {
   ) {
     this.known = document.getCells().flatMap((cell) => {
       const id = idOf(cell);
-      return id ? [{ id, type: typeOf(cell), source: cell.document.getText(), executionCount: cell.executionSummary?.executionOrder ?? null, running: false }] : [];
+      return id ? [{ id, type: typeOf(cell), source: cell.document.getText(), executionCount: cell.executionSummary?.executionOrder ?? null, running: false, outputsHash: null }] : [];
     });
     this.language = document.getCells().find((cell) => cell.kind === vscode.NotebookCellKind.Code)?.document.languageId ?? "python";
     this.timer = setInterval(() => void this.poll(), POLL_MS);
@@ -192,6 +220,8 @@ class Mirror {
     clearInterval(this.timer);
     clearTimeout(this.structure);
     for (const timer of this.pushes.values()) clearTimeout(timer);
+    clearTimeout(this.awayTimer);
+    this.awayNote?.dispose();
     for (const execution of this.executions.values()) execution.end(undefined);
     this.executions.clear();
   }
@@ -201,6 +231,23 @@ class Mirror {
     this.detached = true;
     this.dispose();
     void vscode.window.showWarningMessage(message);
+  }
+
+  /** The tab's notebook went away (often a reload): wait for it before letting go. */
+  away(): void {
+    if (this.detached || this.awayTimer) return;
+    this.awayNote = vscode.window.setStatusBarMessage("$(sync~spin) Notebook in Chrome is reloading: waiting for it");
+    this.awayTimer = setTimeout(() => this.detach("The notebook's Chrome tab was closed or left the notebook; this copy no longer follows it."), AWAY_MS);
+  }
+
+  /** The tab shows the notebook (again): follow it. Outputs are read again in case the page lost some. */
+  back(): void {
+    if (!this.awayTimer) return;
+    clearTimeout(this.awayTimer);
+    this.awayTimer = undefined;
+    this.awayNote?.dispose();
+    this.awayNote = undefined;
+    for (const known of this.known) known.outputsHash = null;
   }
 
   private op(op: BrowserOp): Promise<unknown> {
@@ -273,7 +320,8 @@ class Mirror {
       }
     }
     const { cells: remote } = await this.op({ op: "get_cells" }) as { cells: CellInfo[] };
-    this.known = remote.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running }));
+    const previous = new Map(this.known.map((k) => [k.id, k.outputsHash]));
+    this.known = remote.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: previous.get(c.id) ?? null }));
     await this.saved();
   }
 
@@ -296,21 +344,28 @@ class Mirror {
       await this.flush(cell).catch((e) => this.failed(e));
       const id = idOf(cell);
       if (!id) continue;
-      this.started(cell, id);
+      this.started(cell, id, true);
+      this.runsInFlight++;
+      this.runsStarted++;
       try {
         const { results } = await this.op({ op: "run_cells", cellIds: [id], timeoutMs: RUN_WAIT_MS, stopOnError: true }) as { results: { status: string; executionCount?: number | null; outputs: CellInfo["outputs"] }[] };
         const result = results[0];
         // Still running: polling sees it finish.
         if (result && result.status !== "timeout") this.finished(cell, id, result.executionCount ?? null, result.outputs ?? [], result.status !== "error");
+        else if (result) this.showLive(id, result.outputs ?? []);
         const known = this.known.find((k) => k.id === id);
         if (known) {
           known.running = result?.status === "timeout";
           if (!known.running && result?.executionCount != null) known.executionCount = result.executionCount;
+          // Polling compares the browser's outputs from here.
+          known.outputsHash = null;
         }
       } catch (e) {
         this.executions.get(id)?.end(false, Date.now());
         this.executions.delete(id);
         this.failed(e);
+      } finally {
+        this.runsInFlight--;
       }
     }
   }
@@ -319,36 +374,64 @@ class Mirror {
     await this.op({ op: "interrupt" }).catch((e) => this.failed(e));
   }
 
-  private started(cell: vscode.NotebookCell, id: string): void {
+  /**
+   * Show a cell as running. `clear`: a run started here, which starts from no
+   * output; a run seen in the browser keeps what is shown, and its outputs
+   * follow the browser's.
+   */
+  private started(cell: vscode.NotebookCell, id: string, clear = false): void {
     if (this.executions.has(id)) return;
     try {
       const execution = this.controller.createNotebookCellExecution(cell);
       execution.start(Date.now());
-      void execution.clearOutput();
+      if (clear) void execution.clearOutput();
       this.executions.set(id, execution);
+      if (clear) {
+        const known = this.known.find((k) => k.id === id);
+        if (known) known.outputsHash = null;
+      }
     } catch {
       // Another kernel is selected for this notebook.
     }
   }
 
-  private finished(cell: vscode.NotebookCell, id: string, executionCount: number | null, outputs: CellInfo["outputs"], success: boolean): void {
-    if (!this.executions.has(id)) this.started(cell, id);
-    const execution = this.executions.get(id);
-    if (!execution) return;
+  /**
+   * A cell's run ended, or its outputs or count changed in the browser
+   * without a run seen here (a fast run, outputs cleared): show what it holds.
+   */
+  private finished(cell: vscode.NotebookCell, id: string, executionCount: number | null, outputs: CellInfo["outputs"], success: boolean | undefined): boolean {
+    let execution = this.executions.get(id);
+    const timed = !!execution;
+    if (!execution) {
+      try {
+        execution = this.controller.createNotebookCellExecution(cell);
+        execution.start();
+      } catch {
+        return false; // Another kernel is selected for this notebook.
+      }
+    }
     this.executions.delete(id);
     if (executionCount) execution.executionOrder = executionCount;
     void execution.replaceOutput(editorOutputs(outputs));
-    execution.end(success, Date.now());
+    execution.end(success, timed ? Date.now() : undefined);
+    return true;
+  }
+
+  /** What a running cell has printed so far, shown as it comes. */
+  private showLive(id: string, outputs: CellInfo["outputs"]): void {
+    void this.executions.get(id)?.replaceOutput(editorOutputs(outputs));
   }
 
   // ---------------------------------------------------------------- browser -> VS Code
 
   private async poll(): Promise<void> {
-    if (this.polling || this.detached || this.document.isClosed) return;
+    if (this.polling || this.detached || this.awayTimer || this.document.isClosed) return;
     this.polling = true;
     try {
-      const { cells: remote } = await this.op({ op: "get_cells" }) as { cells: CellInfo[] };
-      if (this.busy()) return;
+      const runs = this.runsStarted;
+      const { cells: remote } = await this.op({ op: "get_cells", outputsHash: true }) as { cells: CellInfo[] };
+      // Read before a run started here reached the browser: it would end that run's spinner.
+      if (this.busy() || this.awayTimer || this.runsInFlight || runs !== this.runsStarted) return;
       await this.enqueue(() => this.pull(remote));
     } catch {
       // Not reachable now (bridge or tab away for a moment): try again on the next tick.
@@ -373,6 +456,7 @@ class Mirror {
     }
     const edit = new vscode.WorkspaceEdit();
     let edits = 0;
+    const changed: { cell: vscode.NotebookCell; known: Known; remote: CellInfo }[] = [];
     for (const [i, r] of remote.entries()) {
       const known = this.known[i]!;
       const cell = local[i]!;
@@ -383,27 +467,48 @@ class Mirror {
       }
       known.source = r.source;
       const running = !!r.running;
-      if (running && !known.running) this.started(cell, r.id);
-      if (!running && (known.running || (r.executionCount ?? null) !== known.executionCount) && (r.executionCount ?? null) !== null) {
-        const { cells } = await this.op({ op: "get_cells", cellIds: [r.id], includeOutputs: true }) as { cells: CellInfo[] };
-        const outputs = cells[0]?.outputs ?? [];
-        this.finished(cell, r.id, r.executionCount ?? null, outputs, !outputs.some((o) => o.kind === "error"));
-      }
+      const count = r.executionCount ?? null;
+      // Also after a rebuild, which ends the runs it shows: one still running gets its spinner back.
+      if (running) this.started(cell, r.id);
+      const ended = !running && this.executions.has(r.id);
+      const outputsChanged = r.outputsHash !== undefined && r.outputsHash !== known.outputsHash;
+      const countChanged = !running && count !== known.executionCount;
       known.running = running;
-      known.executionCount = r.executionCount ?? null;
+      // Compared on what the browser answers, not on run events: whatever the
+      // page says about runs, a changed output is read and shown.
+      if (ended || outputsChanged || countChanged) changed.push({ cell, known, remote: r });
+      else known.executionCount = count;
     }
     if (edits) {
       await vscode.workspace.applyEdit(edit);
       await this.saved();
     }
+    if (!changed.length) return;
+    const { cells } = await this.op({ op: "get_cells", cellIds: changed.map((c) => c.remote.id), includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
+    const read = new Map(cells.map((c) => [c.id, c]));
+    for (const { cell, known, remote: r } of changed) {
+      const now = read.get(r.id);
+      if (!now || cell.index < 0) continue;
+      const outputs = now.outputs ?? [];
+      const count = now.executionCount ?? null;
+      if (now.running) {
+        // Shown as running nowhere (another kernel selected): try again on the next tick.
+        if (!this.executions.has(r.id)) continue;
+        this.showLive(r.id, outputs);
+      } else if (!this.finished(cell, r.id, count, outputs, count === null ? undefined : !outputs.some((o) => o.kind === "error"))) {
+        continue;
+      }
+      known.outputsHash = now.outputsHash ?? null;
+      if (!now.running) known.executionCount = count;
+    }
   }
 
   /** Cells were added, removed or moved in the browser: read the whole notebook again. */
   private async rebuild(): Promise<void> {
-    const { cells } = await this.op({ op: "get_cells", includeOutputs: true }) as { cells: CellInfo[] };
+    const { cells } = await this.op({ op: "get_cells", includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
     for (const execution of this.executions.values()) execution.end(undefined);
     this.executions.clear();
-    this.known = cells.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running }));
+    this.known = cells.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: c.outputsHash ?? null }));
     const edit = new vscode.WorkspaceEdit();
     edit.set(this.document.uri, [vscode.NotebookEdit.replaceCells(new vscode.NotebookRange(0, this.document.cellCount), cells.map((c) => cellData(c, this.language)))]);
     await vscode.workspace.applyEdit(edit);

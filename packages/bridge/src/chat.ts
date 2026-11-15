@@ -67,6 +67,8 @@ export interface ChatHost {
   meta?: { load(): NotebookMeta | null; save(patch: Partial<Pick<NotebookMeta, "machine">>): void };
   /** Forget terminal screens tied to the old notebook machine. */
   machineReset?(): void;
+  /** The notebook's machine was read (its boot id): a notebook renamed on Kaggle is found by it. */
+  machineSeen?(boot: string): void;
   workspaceRoot: string;
   /** Save the transcript: debounced as it changes (in the background), and on close (`sync`). */
   persist?(chat: Chat, sync: boolean): void;
@@ -622,8 +624,16 @@ export class Chat {
       this.setCodeState({ state: "missing", why: describeFailure(e) });
       throw e;
     }
-    if (st.state === "ready") this.show(`The project's code is on the notebook's machine at ${st.place.dir} (branch ${st.place.branch}).`, `${st.place.dir}
+    if (st.state === "ready") {
+      this.show(`The project's code is on the notebook's machine at ${st.place.dir} (branch ${st.place.branch}).`, `${st.place.dir}
 ${st.place.branch}`);
+      // The code is back on a replaced machine: its notice is answered, unless a Restore is running it.
+      for (const [id, { card }] of [...this.cards]) {
+        if (card.kind === "session" && card.state === "open" && !card.progress) {
+          this.closeCard(id, "done", "Code put back on the machine from the header. Packages and other files were not restored.", "ok");
+        }
+      }
+    }
     else this.show(st.state === "error" ? `Project code: ${st.why}` : st.why, st.why);
     return this.codeState!;
   }
@@ -1081,6 +1091,7 @@ ${st.place.branch}`);
     const entry = this.cards.get(cardId);
     if (!entry || entry.card.state !== "open" || !entry.card.actions.some((a) => a.id === actionId)) return false;
     if (actionId === "dismiss") {
+      entry.card.dismissed = true;
       this.closeCard(cardId, "done", "Dismissed");
       return true;
     }
@@ -1278,6 +1289,7 @@ ${st.place.branch}`);
           const previous = this.host.meta?.load()?.machine;
           const known = this.boot ?? previous?.boot;
           if (known && known !== result.boot) this.onMachineReplaced();
+          this.host.machineSeen?.(result.boot);
           const changed = this.boot !== result.boot;
           this.boot = result.boot;
           const now = Date.now();

@@ -61,6 +61,8 @@ export interface CellInfo {
   running?: boolean;
   /** Present only when outputs were requested. */
   outputs?: CellOutput[];
+  /** Present only when `outputsHash` was requested: changes whenever the cell's outputs change. */
+  outputsHash?: string;
   /** True while a review of this cell is pending. */
   pendingReview?: boolean;
   /** Set by a `summary` read: `source` then holds only the first line. */
@@ -146,8 +148,12 @@ export interface AppliedChange {
  */
 export type NotebookOp =
   | { op: "info" }
-  /** `summary`: each source is cut to its first line (with `lineCount`), for outlines of big notebooks. */
-  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean; summary?: boolean }
+  /**
+   * `summary`: each source is cut to its first line (with `lineCount`), for outlines of big notebooks.
+   * `outputsHash`: each code cell carries a short fingerprint of its outputs instead of them,
+   * so a reader that polls fetches only the outputs that changed.
+   */
+  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean; summary?: boolean; outputsHash?: boolean }
   | { op: "update_cell"; cellId: string; source: string; review: boolean; byUser?: boolean }
   | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean; byUser?: boolean }
   | { op: "delete_cell"; cellId: string; review: boolean; byUser?: boolean }

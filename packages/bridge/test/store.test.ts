@@ -25,6 +25,20 @@ describe("ChatStore", () => {
     expect(store.loadMeta("k")).toMatchObject({ projectName: "Project", title: "train.ipynb", machine: { boot: "boot-a", seenAt: 123 } });
   });
 
+  it("moves a renamed notebook's conversation and project to its new key", () => {
+    const store = new ChatStore(mkdtempSync(join(tmpdir(), "ainb-store-")));
+    const messages = [msg([{ type: "text", text: "reproduce the paper" }], "user")];
+    store.save({ key: "kaggle:/code/u/notebook5e1f", agentId: "codex", messages });
+    store.saveMeta("kaggle:/code/u/notebook5e1f", { projectId: "p1", projectName: "GEPA", title: "old", machine: { boot: "b", seenAt: 1 } });
+    store.save({ key: "kaggle:/code/u/gepa-3", agentId: "codex", messages: [msg([{ type: "notice", level: "info", text: "x" }], "system")] });
+    store.saveMeta("kaggle:/code/u/gepa-3", { projectId: "scratch", title: "gepa-3", url: "https://new" });
+    store.move("kaggle:/code/u/notebook5e1f", "kaggle:/code/u/gepa-3");
+    expect(store.load("kaggle:/code/u/gepa-3")?.messages.map((m) => m.parts)).toEqual(messages.map((m) => m.parts));
+    expect(store.loadMeta("kaggle:/code/u/gepa-3")).toMatchObject({ projectId: "p1", projectName: "GEPA", title: "gepa-3", url: "https://new", machine: { boot: "b" } });
+    expect(store.load("kaggle:/code/u/notebook5e1f")).toBeNull();
+    expect(store.loadMeta("kaggle:/code/u/notebook5e1f")).toBeNull();
+  });
+
   it("settles what was still waiting when the transcript was saved", () => {
     const store = new ChatStore(mkdtempSync(join(tmpdir(), "ainb-store-")));
     const review = { reviewId: "r1", cellId: "c1", kind: "update" as const, cellType: "code" as const, before: "a", after: "b" };

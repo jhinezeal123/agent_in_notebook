@@ -115,3 +115,17 @@ ${o.traceback ?? ""}`.trim());
   }
   return [body, error].filter(Boolean).join("\n");
 }
+
+/**
+ * A short fingerprint of a cell's outputs (FNV-1a over their JSON, plus its
+ * length): equal outputs give equal fingerprints, in any page and after a reload.
+ */
+export function outputsFingerprint(outputs: readonly CellOutput[]): string {
+  const json = JSON.stringify(outputs);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < json.length; i++) {
+    h ^= json.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${json.length.toString(36)}.${(h >>> 0).toString(36)}`;
+}

@@ -67,7 +67,6 @@ export class JupyterAdapter implements NotebookAdapter {
     const panel = this.panel;
     const nb = panel.content;
     const k = this.kernel();
-    const status = k?.status;
     const selected = nb.widgets.filter((w: Any) => nb.isSelectedOrActive?.(w)).map((w: Any) => w.model.id);
     return {
       platform: this.platform,
@@ -76,17 +75,54 @@ export class JupyterAdapter implements NotebookAdapter {
       cellCount: nb.widgets.length,
       activeCellId: nb.activeCell?.model?.id ?? null,
       selectedCellIds: selected,
-      kernel: !k ? "disconnected" : status === "idle" ? "idle" : status === "busy" ? "busy" : status === "dead" ? "disconnected" : "unknown",
+      kernel: this.kernelState(k, nb.widgets),
       language: String(nb.model?.defaultKernelLanguage || panel.sessionContext?.kernelPreference?.language || "python"),
       docPath: typeof panel.context?.path === "string" ? panel.context.path : undefined,
       serverTerminals: this.terminalsAvailable() && this.server.usable,
     };
   }
 
+  /**
+   * The kernel's state. A connection that came back while a cell runs (Kaggle
+   * reconnects its socket) reads "unknown" until the kernel next says idle or
+   * busy, which a long run never does: a cell seen running means busy.
+   */
+  private kernelState(k: Any, widgets: Any[]): NotebookInfo["kernel"] {
+    if (!k) return "disconnected";
+    const status = k.status;
+    if (status === "idle" || status === "busy") return status;
+    if (status === "dead") return "disconnected";
+    return widgets.some((w) => this.running(w)) ? "busy" : "unknown";
+  }
+
   private running(cell: Any): boolean {
     if (cell.model.type !== "code") return false;
-    if (typeof cell.model.executionState === "string") return cell.model.executionState === "running";
+    if (cell.model.executionState === "running") return true;
+    if (this.futureRunning(cell.outputArea?.future)) return true;
+    // Older JupyterLab shows "[*]"; Kaggle draws a spinner instead, so this alone misses its runs.
     return /\*/.test(cell.promptNode?.textContent ?? "");
+  }
+
+  /** Kernel futures seen, and those whose run has ended. */
+  private readonly seenFutures = new WeakSet<object>();
+  private readonly doneFutures = new WeakSet<object>();
+
+  /**
+   * A cell's output area keeps the future of its last run (not disposed when
+   * it ends), so a future whose `done` has not settled is a run in progress:
+   * true on any JupyterLab 4 and whatever the page draws as the prompt.
+   */
+  private futureRunning(future: Any): boolean {
+    if (!future || typeof future !== "object" || future.isDisposed || this.doneFutures.has(future)) return false;
+    if (!this.seenFutures.has(future)) {
+      this.seenFutures.add(future);
+      const end = () => { this.doneFutures.add(future); };
+      Promise.resolve(future.done).then(end, end);
+      // First sight: an old future settles on the next microtask; until then
+      // only trust it while the kernel is busy.
+      return this.kernel()?.status === "busy";
+    }
+    return true;
   }
 
   private toInfo(cell: Any, index: number, includeOutputs: boolean): CellInfo {

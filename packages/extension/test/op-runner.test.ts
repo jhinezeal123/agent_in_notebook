@@ -104,6 +104,27 @@ function setup() {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe("OpRunner", () => {
+  it("gives each code cell a fingerprint of its outputs, which changes with them", async () => {
+    const { adapter, runner } = setup();
+    adapter.cells.push({ id: "m", type: "markdown", source: "# hi" });
+    const read = async () => (await runner.run({ op: "get_cells", outputsHash: true }) as { cells: CellInfo[] }).cells;
+    const first = await read();
+    expect(first.every((c) => c.outputs === undefined)).toBe(true);
+    expect(first.find((c) => c.id === "m")!.outputsHash).toBeUndefined();
+    const before = first.find((c) => c.id === "a")!.outputsHash;
+    expect(before).toBe(first.find((c) => c.id === "c")!.outputsHash);
+
+    adapter.cells[0]!.outputs = [{ kind: "stream", name: "stderr", text: "1/294" }];
+    const after = (await read()).find((c) => c.id === "a")!.outputsHash;
+    expect(after).not.toBe(before);
+    adapter.cells[0]!.outputs = [{ kind: "stream", name: "stderr", text: "2/294" }];
+    expect((await read()).find((c) => c.id === "a")!.outputsHash).not.toBe(after);
+
+    const both = await runner.run({ op: "get_cells", cellIds: ["a"], includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
+    expect(both.cells[0]!.outputs).toEqual([{ kind: "stream", name: "stderr", text: "2/294" }]);
+    expect(both.cells[0]!.outputsHash).toBeTruthy();
+  });
+
   it("applies edits directly without review", async () => {
     const { adapter, runner } = setup();
     expect(await runner.run({ op: "update_cell", cellId: "a", source: "x = 5", review: false })).toEqual({ applied: true });

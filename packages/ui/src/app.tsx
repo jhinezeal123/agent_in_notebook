@@ -489,13 +489,14 @@ function machineResources(machine?: MachineStats): { key: string; label: string;
       warn: machine.memAvailable < machine.memTotal * 0.1,
     });
   }
-  const gpu = machine.gpus?.[0];
-  if (gpu && gpu.memTotal > 0) {
+  // Every GPU of the machine (Kaggle's T4 x2 has two), as "GPU 12% · 3%".
+  const gpus = (machine.gpus ?? []).filter((g) => g.memTotal > 0);
+  if (gpus.length) {
     out.push({
       key: "gpu",
-      label: `GPU ${percent(gpu.memUsed, gpu.memTotal)}%`,
-      title: `${machine.gpus!.map((g) => `${g.name}: ${gb(g.memUsed)} of ${gb(g.memTotal)}, ${Math.round(g.util)}% busy`).join("\n")}\n${asOf}`,
-      warn: gpu.memUsed > gpu.memTotal * 0.9,
+      label: `GPU ${gpus.map((g) => `${percent(g.memUsed, g.memTotal)}%`).join(" · ")}`,
+      title: `${gpus.map((g, i) => `GPU ${i} ${g.name}: ${gb(g.memUsed)} of ${gb(g.memTotal)} memory, ${Math.round(g.util)}% busy`).join("\n")}\n${asOf}`,
+      warn: gpus.some((g) => g.memUsed > g.memTotal * 0.9),
     });
   }
   if (machine.diskTotal !== undefined && machine.diskFree !== undefined && machine.diskTotal > 0) {

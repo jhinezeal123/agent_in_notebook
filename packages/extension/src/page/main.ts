@@ -25,12 +25,13 @@ function start(adapter: NotebookAdapter) {
     );
   });
 
-  // Announce now, and again whenever the open notebook changes (JupyterLab tabs).
+  // Announce now, and again whenever the open notebook changes (JupyterLab
+  // tabs) or its cell count does (a notebook still loading when first seen).
   let lastKey = "";
   const announce = () => {
     try {
       const info = adapter.info();
-      const key = `${info.platform}|${info.title}|${info.docPath ?? ""}`;
+      const key = `${info.platform}|${info.title}|${info.docPath ?? ""}|${info.cellCount}`;
       if (key !== lastKey) {
         lastKey = key;
         post({ kind: "ready", info });
