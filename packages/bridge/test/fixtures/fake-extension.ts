@@ -242,6 +242,7 @@ export class FakeExtension {
   patches: MessagePatch[] = [];
   usage: ChatUsage | undefined;
   statuses: string[] = [];
+  private notebooks = new Map<number, FakeNotebook>();
   /** Accept (true) / reject (false) every review as it opens, or leave pending (undefined). */
   autoReview: boolean | undefined = undefined;
 
@@ -264,8 +265,9 @@ export class FakeExtension {
     this.rpc = new RpcPeer({ send: (env: Envelope) => this.ws.send(JSON.stringify(env)) });
     this.ws.on("message", (d) => void this.rpc.receive(JSON.parse(String(d))));
     this.rpc.handle("notebook.op", ({ tabId, op }: { tabId: number; op: NotebookOp }) => {
-      if (tabId !== this.tabId) throw new Error("no notebook in that tab");
-      return this.notebook.handle(op);
+      const notebook = this.notebooks.get(tabId);
+      if (!notebook) throw new Error("no notebook in that tab");
+      return notebook.handle(op);
     });
     this.rpc.on("chat.patch", (p: MessagePatch) => {
       const old = this.messages.get(p.id);
@@ -277,16 +279,21 @@ export class FakeExtension {
     this.rpc.on("chat.usage", (p: { usage: ChatUsage }) => (this.usage = p.usage));
     this.rpc.on("chat.snapshot", (p: ChatSnapshot) => this.snapshots.push(p));
     this.rpc.on("chat.status", (p: { status: string }) => this.statuses.push(p.status));
-    this.notebook.onEvent = (event) => {
-      this.rpc.emit("notebook.event", { tabId: this.tabId, event });
+    this.attachNotebook(this.tabId, this.notebook);
+    return this.rpc.request("hello", { token, wire: WIRE_VERSION, extensionVersion: "test" });
+  }
+
+  attachNotebook(tabId: number, notebook: FakeNotebook): void {
+    this.notebooks.set(tabId, notebook);
+    notebook.onEvent = (event) => {
+      this.rpc.emit("notebook.event", { tabId, event });
       const e = event as { type: string; review?: ReviewInfo };
       if (e.type === "review_opened" && this.autoReview !== undefined) {
         const id = e.review!.reviewId;
         const accept = this.autoReview;
-        setTimeout(() => this.notebook.resolve(id, accept), 30);
+        setTimeout(() => notebook.resolve(id, accept), 30);
       }
     };
-    return this.rpc.request("hello", { token, wire: WIRE_VERSION, extensionVersion: "test" });
   }
 
   request<T>(method: string, params: unknown): Promise<T> {

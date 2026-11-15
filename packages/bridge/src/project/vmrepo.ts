@@ -8,10 +8,12 @@
 
 import type { NotebookInfo, NotebookOp } from "@ainb/protocol";
 import { capText } from "@ainb/protocol";
+import { posix } from "node:path";
 import type { KernelExec } from "../notebook/kernel.js";
 import { reachable } from "../notebook/nbfile.js";
 import { runInSession } from "../notebook/setup.js";
-import { hello, stat, writeFile } from "../notebook/vmfs.js";
+import { hello, readFile, stat, writeFile } from "../notebook/vmfs.js";
+import { keyHash } from "../store.js";
 import { git, GitFailed, githubToken, identity, redact, remoteOf, signsIn } from "./github.js";
 import type { Worktree } from "./worktree.js";
 
@@ -23,12 +25,12 @@ export interface CodeProject {
   githubUrl: string | null;
 }
 
-/** The terminal session on the notebook's machine the bridge clones and pushes in (the agent can look: shell_wait). */
-export const CODE_SESSION = "project";
 /** Files bigger than this stay on the machine (GitHub refuses files over 100 MB). */
 const BIG_MB = 50;
 const CLONE_WAIT_MS = 180_000;
 const PUSH_WAIT_MS = 120_000;
+/** A push still running after PUSH_WAIT_MS is watched this much longer, then left to the machine. */
+const PUSH_EXTRA_WAIT_MS = 180_000;
 
 export interface CodePlace {
   projectId: string;
@@ -36,6 +38,7 @@ export interface CodePlace {
   dir: string;
   branch: string;
   remote: string;
+  session: string;
   /** The chat's worktree on the user's computer. */
   worktree: string;
 }
@@ -55,10 +58,35 @@ export interface SyncResult {
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/**
+ * Stop unless the clone is as the bridge left it: a git checkout of the
+ * project's repository, on the chat's branch. It is never switched or repaired
+ * here (the work in it is the agent's); the line it prints says what to do.
+ */
+function verifyCheckout(dir: string, branch: string, remote: string): string[] {
+  const stop = (format: string, ...args: string[]) => `{ printf ${q(`ainb-checkout: ${format}\\n`)} ${args.join(" ")}; exit 1; }`;
+  return [
+    `cd ${q(dir)}`,
+    `[ -d .git ] || ${stop("%s is not a git checkout any more.", q(dir))}`,
+    `[ "$(git config --get remote.origin.url)" = ${q(remote)} ] || ${stop("The remote origin of %s is no longer the project repository. Nothing is saved from it until origin is set back.", q(dir))}`,
+    'ainb_head="$(git symbolic-ref -q --short HEAD || echo "no branch")"',
+    `[ "$ainb_head" = ${q(branch)} ] || ${stop("The checkout at %s is on %s, not on the branch of this chat. Nothing is saved from it until that branch is checked out again: git -C %s checkout %s", q(dir), '"$ainb_head"', q(dir), q(branch))}`,
+  ];
+}
+
+/** What verifyCheckout said is wrong with the clone, if it stopped the script. */
+function checkoutProblem(out: string): string | null {
+  return out.match(/^ainb-checkout: (.+)$/m)?.[1]?.trim() ?? null;
+}
+
+const credentialLine = (token: string) => Buffer.from(`https://x-access-token:${token}@github.com\n`, "utf8");
+
 export class CodeSync {
   private place: CodePlace | null = null;
   /** Clones and pushes one at a time. */
   private chain: Promise<unknown> = Promise.resolve();
+  /** The file on the machine git reads the GitHub token from, and the token last written to it. */
+  private credentials: { file: string; token: string } | null = null;
 
   constructor(
     private readonly call: (op: NotebookOp, timeoutMs?: number) => Promise<unknown>,
@@ -85,9 +113,10 @@ export class CodeSync {
   }
 
   private async ensureNow(project: CodeProject, worktree: () => Promise<Worktree>): Promise<CodeState> {
+    const previous = this.place;
+    this.place = null;
     const remote = remoteOf(project);
     if (!remote) {
-      this.place = null;
       return { state: "none", why: `The project ${project.name} has no GitHub repository, so its code is not put on the notebook's machine. Its shared artifacts can still be read and written.` };
     }
     let info: NotebookInfo;
@@ -100,51 +129,69 @@ export class CodeSync {
     let token: string | undefined;
     try {
       const wt = await worktree();
+      // Nothing changed since the last turn and the clone is still on the chat's branch (one small read on
+      // the machine): no terminal script. syncBack checks the rest (the remote, a new token) before it pushes.
+      if (previous && previous.projectId === project.id && previous.remote === remote && previous.worktree === wt.path && previous.branch === wt.branch) {
+        const head = await readFile(this.exec(), `${previous.dir}/.git/HEAD`, 4096).then((r) => r.data.toString("utf8").trim(), () => null);
+        if (head === `ref: refs/heads/${previous.branch}`) {
+          this.place = previous;
+          return { state: "ready", place: previous };
+        }
+      }
       token = signsIn(remote) ? await githubToken() : undefined;
       const exec = this.exec();
-      const known = this.place?.worktree === wt.path && this.place.projectId === project.id ? this.place : null;
-      if (known) {
-        const [there] = await stat(exec, [`${known.dir}/.git`]);
-        if (there?.dir) return { state: "ready", place: known };
-      }
       const branch = wt.branch;
-      if (!known) await this.publish(wt, remote, token);
       const h = await hello(exec);
       if (!h.posix) return { state: "none", why: "The notebook's machine does not run Linux or macOS; the project's code is put only on those." };
       const name = remote.replace(/[\\/]+$/, "").split(/[\\/]/).pop()!.replace(/\.git$/i, "") || "project";
-      const dir = `${h.cwd.replace(/\/+$/, "")}/${name}`;
+      const key = keyHash(JSON.stringify([this.target, project.id, remote, branch]));
+      const dir = posix.join(h.home, ".ainb-projects", `${key}-${name}`);
+      const session = `project-${key.slice(0, 16)}`;
+      const known = previous?.worktree === wt.path && previous.dir === dir;
+      if (!known) await this.publish(wt, remote, token);
       const credentials = `${h.home.replace(/\/+$/, "")}/.ainb-git-credentials`;
-      // The token goes to a file only git reads, never through a cell, the terminal's screen or the chat.
-      if (token) await writeFile(exec, credentials, Buffer.from(`https://x-access-token:${token}@github.com\n`, "utf8"));
-      const who = await identity(wt.path);
+      const [checkout] = await stat(exec, [`${dir}/.git`]);
+      // Written again when the token changed (the user signed in again), or the machine may have been replaced.
+      const configureCredentials = !!token && (!known || !checkout?.dir || this.credentials?.file !== credentials || this.credentials.token !== token);
+      if (token && configureCredentials) {
+        await writeFile(exec, credentials, credentialLine(token));
+        this.credentials = { file: credentials, token };
+      }
+      const who = checkout?.dir ? null : await identity(wt.path);
       const script = [
         "(",
         "set -e",
-        ...(token ? [`chmod 600 ${q(credentials)}`, `git config --global credential.helper ${q(`store --file=${credentials}`)}`] : []),
-        `git config --global user.name ${q(who.name)}`,
-        `git config --global user.email ${q(who.email)}`,
-        `if [ -d ${q(`${dir}/.git`)} ]; then`,
-        `  cd ${q(dir)}`,
-        `  git fetch -q origin ${q(branch)}`,
-        // A clone left from another branch (the notebook moved to another project of the same repository) moves to this one.
-        `  if [ "$(git branch --show-current)" != ${q(branch)} ]; then git checkout -q -B ${q(branch)} FETCH_HEAD; fi`,
-        "else",
-        `  git clone -q --branch ${q(branch)} ${q(remote)} ${q(dir)}`,
-        `  cd ${q(dir)}`,
-        "fi",
-        `git branch -q --set-upstream-to=origin/${branch} 2>/dev/null || true`,
+        // A refused token fails the command; git never waits for a name typed in the terminal.
+        "export GIT_TERMINAL_PROMPT=0",
+        ...(configureCredentials ? [`chmod 600 ${q(credentials)}`, `git config --global credential.helper ${q(`store --file=${credentials}`)}`] : []),
+        ...(who ? [
+          `if [ ! -d ${q(dir)}/.git ]; then`,
+          // What a clone that was cut short left is set aside, and the clone made again.
+          `  if [ -e ${q(dir)} ]; then mv ${q(dir)} ${q(dir)}.broken-$(date +%s); fi`,
+          `  rm -rf ${q(dir)}.tmp-*`,
+          `  mkdir -p ${q(posix.dirname(dir))}`,
+          // Cloned beside its place and moved there whole, so a clone cut short is never taken for the checkout.
+          `  git clone -q --branch ${q(branch)} ${q(remote)} ${q(dir)}.tmp-$$`,
+          `  git -C ${q(dir)}.tmp-$$ config --local user.name ${q(who.name)}`,
+          `  git -C ${q(dir)}.tmp-$$ config --local user.email ${q(who.email)}`,
+          `  mv ${q(dir)}.tmp-$$ ${q(dir)}`,
+          "fi",
+        ] : []),
+        ...verifyCheckout(dir, branch, remote),
         'echo "ainb-ready $(git rev-parse --short HEAD)"',
         ")",
       ].join("\n");
-      const r = await runInSession(this.call, this.target, CODE_SESSION, script, CLONE_WAIT_MS);
+      const r = await runInSession(this.call, this.target, session, script, CLONE_WAIT_MS);
       const out = redact(r.output, token);
-      if (r.running) return { state: "error", why: `Cloning the project's code is still running on the notebook's machine (terminal session "${CODE_SESSION}"). It is used once it finishes.` };
+      if (r.running) return { state: "error", why: `Cloning the project's code is still running on the notebook's machine (terminal session "${session}"). It is used once it finishes.` };
+      const problem = checkoutProblem(out);
+      if (problem) return { state: "error", why: problem };
       if (r.exitCode !== 0 || !/ainb-ready/.test(out)) {
         const offline = /could not resolve host|network is unreachable|temporary failure in name resolution/i.test(out);
         const hint = offline && info.platform === "kaggle" ? " Turn on Internet in the Kaggle notebook's settings (Session options), then try again." : "";
         return { state: "error", why: `Could not clone the project's code on the notebook's machine:\n${capText(out, 1500)}${hint}` };
       }
-      this.place = { projectId: project.id, dir, branch, remote, worktree: wt.path };
+      this.place = { projectId: project.id, dir, branch, remote, session, worktree: wt.path };
       this.log(`Code of ${project.name} on the notebook's machine at ${dir}, branch ${branch}.`);
       return { state: "ready", place: this.place };
     } catch (e) {
@@ -159,23 +206,37 @@ export class CodeSync {
       if (/couldn't find remote ref|could not find remote ref/i.test(e.message)) return false;
       throw e;
     });
+    if (await git(wt.path, ["branch", "--show-current"]) !== wt.branch) throw new Error(`Check out ${wt.branch} in the local worktree.`);
     if (fetched) await git(wt.path, ["merge", "-q", "--ff-only", "FETCH_HEAD"]);
-    await git(wt.path, ["push", "-q", remote, `HEAD:refs/heads/${wt.branch}`], token);
+    const ref = `refs/heads/${wt.branch}`;
+    await git(wt.path, ["push", "-q", remote, `${ref}:${ref}`], token);
   }
 
   /**
    * After a turn: commit what changed on the machine (big files stay there),
    * push the branch, and bring it into the worktree on the user's computer.
    */
-  syncBack(message: string): Promise<SyncResult | null> {
+  syncBack(place: CodePlace, message: string, onWaiting: () => void): Promise<SyncResult> {
     return this.serial(async () => {
-      const place = this.place;
-      if (!place) return null;
       const token = signsIn(place.remote) ? await githubToken().catch(() => undefined) : undefined;
+      // The user signed in to GitHub again since the clone: the machine gets the new token before it pushes.
+      let renewed: string[] = [];
+      if (token && this.credentials && this.credentials.token !== token) {
+        const { file } = this.credentials;
+        try {
+          await writeFile(this.exec(), file, credentialLine(token));
+          this.credentials = { file, token };
+          renewed = [`chmod 600 ${q(file)}`];
+        } catch {
+          // The push says what is wrong if the old token no longer works.
+        }
+      }
       const script = [
         "(",
         "set -e",
-        `cd ${q(place.dir)}`,
+        "export GIT_TERMINAL_PROMPT=0",
+        ...renewed,
+        ...verifyCheckout(place.dir, place.branch, place.remote),
         // Big files git does not track already are kept out of commits, on the machine.
         `find . -path ./.git -prune -o -type f -size +${BIG_MB}M -print | sed 's|^\\./||' | while IFS= read -r f; do`,
         '  if ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then',
@@ -185,20 +246,23 @@ export class CodeSync {
         "done",
         "git add -A",
         `if ! git diff --cached --quiet; then git commit -q -m ${q(message)}; echo ainb-committed; fi`,
-        `git push -q origin HEAD:refs/heads/${q(place.branch)} 2>&1`,
+        ...verifyCheckout(place.dir, place.branch, place.remote),
+        `git push -q origin ${q(`refs/heads/${place.branch}:refs/heads/${place.branch}`)} 2>&1`,
         'echo "ainb-pushed $(git rev-parse --short HEAD)"',
         ")",
       ].join("\n");
       let r;
       try {
-        r = await runInSession(this.call, this.target, CODE_SESSION, script, PUSH_WAIT_MS);
+        r = await runInSession(this.call, this.target, place.session, script, PUSH_WAIT_MS, onWaiting, PUSH_EXTRA_WAIT_MS);
       } catch (e) {
         return { changed: false, text: `Could not save the code from the notebook's machine: ${(e as Error).message}` };
       }
       const out = redact(r.output, token);
       const bigs = [...out.matchAll(/^ainb-big (.+)$/gm)].map((m) => m[1]!.trim());
       const note = bigs.length ? ` Left on the machine (over ${BIG_MB} MB): ${bigs.slice(0, 10).join(", ")}${bigs.length > 10 ? "…" : ""}.` : "";
-      if (r.running) return { changed: false, text: `Pushing the code from the notebook's machine is taking long; it goes on there (terminal session "${CODE_SESSION}").` };
+      if (r.running) return { changed: false, text: `Pushing the code from the notebook's machine is still not done; it goes on there (terminal session "${place.session}"). What it pushes reaches this computer after a later message.` };
+      const problem = checkoutProblem(out);
+      if (problem) return { changed: false, text: `The code on the notebook's machine was not saved. ${problem}` };
       if (r.exitCode !== 0 || !/ainb-pushed/.test(out)) {
         if (/no such file or directory/i.test(out) && out.includes(place.dir)) {
           // The machine was replaced: ensure() clones the branch again next turn.
@@ -210,6 +274,7 @@ export class CodeSync {
       try {
         before = await git(place.worktree, ["rev-parse", "HEAD"]);
         await git(place.worktree, ["fetch", "-q", place.remote, `refs/heads/${place.branch}`], token);
+        if (await git(place.worktree, ["branch", "--show-current"]) !== place.branch) throw new Error(`Check out ${place.branch} in the local worktree.`);
         await git(place.worktree, ["merge", "-q", "--ff-only", "FETCH_HEAD"]);
       } catch (e) {
         return { changed: true, text: `The code was pushed to GitHub (branch ${place.branch}), but not brought into the worktree on this computer: ${(e as Error).message}` };

@@ -58,7 +58,7 @@ export class ProjectLinks {
     if (!meta.projectId) {
       try {
         const scratch = await this.scratchOrThrow(wait);
-        this.store.saveMeta(key, { projectId: scratch.id, projectName: scratch.name, cache: cacheOf(scratch) });
+        if (!this.store.loadMeta(key)?.projectId) this.store.saveMeta(key, { projectId: scratch.id, projectName: scratch.name, cache: cacheOf(scratch) });
         return { project: readyOf(scratch, true), orx: scratch };
       } catch (e) {
         return { project: { id: null, name: SCRATCH_NAME, state: "pending", scratch: true, error: describeFailure(e) } };
@@ -67,7 +67,9 @@ export class ProjectLinks {
     try {
       const orx = await this.projects.getProject(meta.projectId, wait);
       const cache = cacheOf(orx);
-      if (orx.name !== meta.projectName || JSON.stringify(cache) !== JSON.stringify(meta.cache)) this.store.saveMeta(key, { projectName: orx.name, cache });
+      if ((orx.name !== meta.projectName || JSON.stringify(cache) !== JSON.stringify(meta.cache)) && this.store.loadMeta(key)?.projectId === meta.projectId) {
+        this.store.saveMeta(key, { projectName: orx.name, cache });
+      }
       return { project: readyOf(orx, orx.id === scratchId), orx };
     } catch (e) {
       if (e instanceof OrxApiError && e.status === 404) {
@@ -75,7 +77,9 @@ export class ProjectLinks {
           // Scratch was deleted in OpenResearch: its notebooks move to a new one.
           try {
             const scratch = await this.projects.ensureScratch();
-            this.store.saveMeta(key, { projectId: scratch.id, projectName: scratch.name, cache: cacheOf(scratch) });
+            if (this.store.loadMeta(key)?.projectId === meta.projectId) {
+              this.store.saveMeta(key, { projectId: scratch.id, projectName: scratch.name, cache: cacheOf(scratch) });
+            }
             return { project: readyOf(scratch, true), orx: scratch, notice: "The Scratch project was deleted in OpenResearch, so this notebook moved to a new Scratch project." };
           } catch (again) {
             return { project: { id: null, name: SCRATCH_NAME, state: "pending", scratch: true, error: describeFailure(again) } };
@@ -191,7 +195,7 @@ function readyOf(orx: OrxProject, scratch: boolean): ChatProject {
 }
 
 /** What a notebook keeps of its project, to work on while OpenResearch is not running. */
-function cacheOf(orx: OrxProject): ProjectCache {
+export function cacheOf(orx: OrxProject): ProjectCache {
   return { id: orx.id, name: orx.name, repoPath: orx.repoPath, githubUrl: orx.githubUrl ?? null, artifactsDir: orx.artifactsDir };
 }
 

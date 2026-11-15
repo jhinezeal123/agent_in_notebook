@@ -36,9 +36,11 @@ export function worktreePath(projectId: string, notebookKey: string): string {
 export async function ensureWorktree(repoPath: string, projectId: string, notebookKey: string, title: string): Promise<Worktree> {
   if (!repoPath || !existsSync(repoPath)) throw new Error(`The project's repository is not at ${repoPath || "a known place"} on this computer.`);
   const path = worktreePath(projectId, notebookKey);
+  const suffix = keyHash(notebookKey).slice(0, 6);
   if (existsSync(join(path, ".git"))) {
-    const branch = await git(path, ["branch", "--show-current"]).catch(() => "");
-    if (branch) return { path, branch };
+    const branch = await git(path, ["branch", "--show-current"]);
+    if (branch.startsWith("notebook/") && branch.endsWith(`-${suffix}`)) return { path, branch };
+    throw new Error(`Check out the notebook branch in ${path} before syncing its code.`);
   }
   await git(repoPath, ["rev-parse", "--verify", "HEAD"]).catch(() => {
     throw new Error("The project's repository has no commit yet; a branch for the notebook needs one.");
@@ -46,7 +48,7 @@ export async function ensureWorktree(repoPath: string, projectId: string, notebo
   // A worktree folder deleted by hand is still registered: forget it first.
   await git(repoPath, ["worktree", "prune"]).catch(() => {});
   await mkdir(dirname(path), { recursive: true });
-  const branch = `notebook/${slug(title)}-${keyHash(notebookKey).slice(0, 6)}`;
+  const branch = `notebook/${slug(title)}-${suffix}`;
   const exists = await git(repoPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).then(() => true, () => false);
   if (exists) await git(repoPath, ["worktree", "add", "-q", path, branch]);
   else {
