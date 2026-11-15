@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { formatLaunchCommand, type AgentInfo, type ChatSettings, type ChatSnapshot, type Part } from "@ainb/protocol";
-import { Bridge } from "../src/server.js";
+import { Bridge, sanitizeCells } from "../src/server.js";
 import { keyHash } from "../src/store.js";
 import { FakeExtension, FakeNotebook, TINY_PNG } from "./fixtures/fake-extension.js";
 
@@ -870,5 +870,27 @@ describe("agent lifecycle", () => {
     expect(text).toContain("RESULT notebook_info (error): notebook_info failed: no notebook in that tab");
     again.close();
     editor.close();
+  });
+});
+
+describe("sanitizeCells", () => {
+  it("keeps well-formed attached cells once each, with short labels", () => {
+    const cells = sanitizeCells([
+      { cellId: "a", index: 2, label: "x".repeat(500) },
+      { cellId: "a", index: 9, label: "again" },
+      { cellId: 5, index: 1, label: "bad id" },
+      null,
+      { cellId: "b", index: -3 },
+    ]);
+    expect(cells).toEqual([
+      { cellId: "a", index: 2, label: "x".repeat(120) },
+      { cellId: "b", index: 0, label: "" },
+    ]);
+  });
+
+  it("accepts nothing that is not a list, and at most twenty cells", () => {
+    expect(sanitizeCells("a")).toEqual([]);
+    expect(sanitizeCells(undefined)).toEqual([]);
+    expect(sanitizeCells(Array.from({ length: 30 }, (_, i) => ({ cellId: `c${i}`, index: i, label: "" })))).toHaveLength(20);
   });
 });

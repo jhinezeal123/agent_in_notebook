@@ -1,9 +1,9 @@
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatCode, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
-import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
+import { DEFAULT_PREFS, type AttachedCell, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
-import { Message, PendingPrompt, type PartActions } from "./parts.js";
+import { AttachedChip, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { Icon, type IconName } from "./icons.js";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
@@ -23,6 +23,10 @@ export function App() {
   /** A suggestion put in the input box. */
   const [draft, setDraft] = useState<{ text: string } | null>(null);
   const [changingOption, setChangingOption] = useState(false);
+  /** Cells the user attached ("Attach to Chat" in the notebook), sent with the next message. */
+  const [attached, setAttached] = useState<AttachedCell[]>([]);
+  /** Counts the times the user attached cells, so the input box takes the focus each time. */
+  const [attachedAt, setAttachedAt] = useState(0);
   const tabRef = useRef(tabId);
   tabRef.current = tabId;
   const agentRef = useRef(prefs.agentId);
@@ -39,6 +43,11 @@ export function App() {
       else if (e.event === "notebooks") setChoices(e.params);
       else if (e.event === "prefs") setPrefsState({ ...DEFAULT_PREFS, ...e.params });
       else if (e.event === "command" && e.params === "chat.clear") clearRef.current();
+      else if (e.event === "attachments") {
+        if (e.params.tabId !== tabRef.current) return;
+        setAttached(e.params.cells);
+        if (e.params.added) setAttachedAt((n) => n + 1);
+      }
       else if (e.event === "notebook") {
         if (e.params.tabId === tabRef.current) setNotebook(e.params.info);
       } else if (e.event === "bridge") {
@@ -75,8 +84,10 @@ export function App() {
     setChat(null);
     setNotebook(null);
     setLoadedTab(null);
+    setAttached([]);
     if (tabId === null) return;
     void client.request<NotebookInfo | null>("tab.notebook", { tabId }).then((info) => tabRef.current === tabId && setNotebook(info), () => {});
+    void client.request<AttachedCell[]>("attachments.get", { tabId }).then((cells) => tabRef.current === tabId && setAttached(cells), () => {});
     if (connected) void client.request<ChatSnapshot | null>("chat.get", { tabId }).then((c) => {
       if (!stale) { setChat(c); setLoadedTab(tabId); }
     }, (e) => { if (!stale) setError((e as Error).message); });
@@ -150,9 +161,14 @@ export function App() {
     if (!c || c.agentId !== prefs.agentId) c = (await openChat(prefs.agentId)) ?? null;
     if (!c) return false;
     if (c.tabId !== tabRef.current) return false;
-    const ok = await run(client.request("chat.send", { chatId: c.chatId, text }));
-    return ok !== undefined;
+    const cells = attached;
+    const ok = await run(client.request("chat.send", { chatId: c.chatId, text, ...(cells.length ? { cells } : {}) }));
+    if (ok === undefined) return false;
+    // The cells went with this message; cells attached meanwhile stay for the next one.
+    if (cells.length) void client.request("attachments.remove", { tabId: c.tabId, cellIds: cells.map((x) => x.cellId) }).catch(() => {});
+    return true;
   };
+  const detach = (cellId: string) => tabId !== null && void run(client.request("attachments.remove", { tabId, cellIds: [cellId] }));
 
   /** Clear Chat: close the chat, which forgets its saved conversation. */
   const clearRef = useRef(() => {});
@@ -272,7 +288,8 @@ export function App() {
             history={history}
             running={running}
             draft={draft}
-            placeholder={`Ask ${agentName}…`}
+            focusAt={attachedAt}
+            placeholder={attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}…`}
             disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agentReady}
             onSend={send}
             onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
@@ -281,6 +298,9 @@ export function App() {
                 notebook={notebook}
                 settings={settings}
                 onSettings={updateSettings}
+                attached={attached}
+                onFocusCell={actions.focusCell}
+                onDetach={detach}
                 project={live?.project}
                 onShowProject={() => live?.project?.id && void run(client.request("project.show", { projectId: live.project.id }))}
                 onMoveProject={moveProject}
@@ -532,10 +552,13 @@ function ResourceChip({ resource, at }: { resource: Resource; at: number }) {
   );
 }
 
-function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject, saving, onSaveNotebook, verifying, onVerifyNotebook }: {
+function ComposerContext({ notebook, settings, onSettings, attached, onFocusCell, onDetach, project, onShowProject, onMoveProject, saving, onSaveNotebook, verifying, onVerifyNotebook }: {
   notebook: NotebookInfo;
   settings: ChatSettings;
   onSettings: (s: ChatSettings) => void;
+  attached: AttachedCell[];
+  onFocusCell: (cellId: string) => void;
+  onDetach: (cellId: string) => void;
   project?: ChatProject;
   onShowProject: () => void;
   onMoveProject: () => void;
@@ -544,9 +567,12 @@ function ComposerContext({ notebook, settings, onSettings, project, onShowProjec
   verifying: boolean;
   onVerifyNotebook: () => void;
 }) {
-  const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
+  // The cells the Cell mode may change, as the bridge picks them: pinned, else attached, else selected.
+  const targets = settings.targetCellIds.length ? settings.targetCellIds
+    : attached.length ? attached.map((c) => c.cellId)
+    : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
   const pinned = settings.targetCellIds.length > 0;
-  if (!project && settings.scope !== "cell") return null;
+  if (!project && settings.scope !== "cell" && !attached.length) return null;
   return (
     <div class="ctx-row">
       {project && (
@@ -560,8 +586,9 @@ function ComposerContext({ notebook, settings, onSettings, project, onShowProjec
           <button class="ctx-btn" disabled={saving || project.state !== "ready"} title={saving ? "Saving…" : `Save this notebook, with its outputs, to the artifacts of ${project.name}`} aria-label="Save to project" onClick={onSaveNotebook}><Icon name="save" /></button>
         </span>
       )}
+      {attached.map((cell) => <AttachedChip key={cell.cellId} cell={cell} onFocus={() => onFocusCell(cell.cellId)} onRemove={() => onDetach(cell.cellId)} />)}
       {settings.scope === "cell" && (
-        <span class="ctx-chip cells" title={pinned ? "The agent may change these pinned cells" : "The agent may change the selected cell"}>
+        <span class="ctx-chip cells" title={pinned ? "The agent may change these pinned cells" : attached.length ? "The agent may change the attached cells" : "The agent may change the selected cell"}>
           <Icon name="cell" />
           <span class="ctx-name" title={targets.join(", ") || undefined}>{targets.length ? targets.map((t) => t.slice(0, 8)).join(", ") : "Select a cell"}</span>
           {pinned ? (
@@ -673,12 +700,14 @@ function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; a
   );
 }
 
-function Composer({ history, running, disabled, draft, placeholder, onSend, onStop, context, tools }: {
+function Composer({ history, running, disabled, draft, focusAt, placeholder, onSend, onStop, context, tools }: {
   history: string[];
   running: boolean;
   disabled: boolean;
   /** Text put in the box from outside (a suggestion); a new object each time. */
   draft: { text: string } | null;
+  /** Changes when the box should take the focus (cells were attached). */
+  focusAt: number;
   placeholder: string;
   onSend: (t: string) => Promise<boolean>;
   onStop: () => void;
@@ -696,6 +725,9 @@ function Composer({ history, running, disabled, draft, placeholder, onSend, onSt
     setText(draft.text);
     area.current?.focus();
   }, [draft]);
+  useEffect(() => {
+    if (focusAt) area.current?.focus();
+  }, [focusAt]);
   const submit = async () => {
     const t = text.trim();
     if (!t || disabled || sending.current) return;

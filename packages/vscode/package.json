@@ -356,6 +356,12 @@
         "title": "Open File",
         "category": "Project Code",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ainb.attachCell",
+        "title": "Attach to Chat",
+        "category": "Agent in Notebook",
+        "icon": "$(attach)"
       }
     ],
     "keybindings": [
@@ -641,6 +647,29 @@
         {
           "command": "ainb.code.openFile",
           "when": "false"
+        },
+        {
+          "command": "ainb.attachCell",
+          "when": "(notebookType == jupyter-notebook || notebookType == ainb-chrome-notebook)"
+        }
+      ],
+      "notebook/cell/title": [
+        {
+          "command": "ainb.attachCell",
+          "when": "(notebookType == jupyter-notebook || notebookType == ainb-chrome-notebook)",
+          "group": "inline@100"
+        },
+        {
+          "command": "ainb.attachCell",
+          "when": "(notebookType == jupyter-notebook || notebookType == ainb-chrome-notebook)",
+          "group": "ainb@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "ainb.attachCell",
+          "when": "resourceScheme == vscode-notebook-cell && (notebookType == jupyter-notebook || notebookType == ainb-chrome-notebook)",
+          "group": "ainb@1"
         }
       ]
     },

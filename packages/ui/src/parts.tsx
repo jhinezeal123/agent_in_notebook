@@ -1,6 +1,6 @@
 import { memo } from "preact/compat";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { chatImageDataUrl, diffLines, diffStats, withContext, type ChatCard, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
+import { chatImageDataUrl, diffLines, diffStats, withContext, type AttachedCell, type ChatCard, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 import { externalChatUrl } from "./chat-links.js";
 import { chatImageSource } from "./images.js";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
@@ -111,6 +111,21 @@ function messageText(msg: ChatMessage): string {
     .trim();
 }
 
+/** A cell attached to a message: its position and first line; click to show it, x to take it off. */
+export function AttachedChip({ cell, onFocus, onRemove }: { cell: AttachedCell; onFocus: () => void; onRemove?: () => void }) {
+  return (
+    <span class="ctx-chip attached" title={`Cell [${cell.index}] · id ${cell.cellId}${cell.label ? `\n${cell.label}` : ""}\nClick to show it in the notebook.`}>
+      <Icon name="attach" />
+      <button class="ctx-name ctx-link" onClick={onFocus}>
+        <span class="attached-index">[{cell.index}]</span> {cell.label || "(empty cell)"}
+      </button>
+      {onRemove && (
+        <button class="ctx-btn" title="Remove from this message" aria-label={`Remove cell ${cell.index}`} onClick={onRemove}><Icon name="close" /></button>
+      )}
+    </span>
+  );
+}
+
 /**
  * One message. Memoized: streaming replaces only the message that changed, so
  * the rest of a long transcript is not rendered again on every update.
@@ -121,7 +136,17 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
   const host = usePanelHost();
   if (msg.role === "user") {
     const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
-    return <div class="msg user"><Markdown text={text} /></div>;
+    const cells = msg.parts.flatMap((p) => (p.type === "cells" ? p.cells : []));
+    return (
+      <div class="msg user">
+        <Markdown text={text} />
+        {cells.length > 0 && (
+          <div class="msg-cells">
+            {cells.map((cell) => <AttachedChip key={cell.cellId} cell={cell} onFocus={() => actions.focusCell(cell.cellId)} />)}
+          </div>
+        )}
+      </div>
+    );
   }
   // A card the user dismissed is gone from the chat.
   // (Older transcripts only say so in the outcome.)

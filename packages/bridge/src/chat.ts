@@ -12,6 +12,7 @@ import {
   isChatImageMime,
   type AgentOption,
   type AppliedChange,
+  type AttachedCell,
   type CellInfo,
   type CellRun,
   type ChatCard,
@@ -37,7 +38,7 @@ import {
 } from "@ainb/protocol";
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
-import { cellRunBlock, litReview, machineLine, playbook, projectContext, projectUnavailable, recap, runDuration, runState, turnContext } from "./instructions.js";
+import { attachedCellsBlock, cellRunBlock, litReview, machineLine, playbook, projectContext, projectUnavailable, recap, runDuration, runState, turnContext } from "./instructions.js";
 import { RecentRuns } from "./notebook/exec.js";
 import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
@@ -122,6 +123,8 @@ interface TurnInput {
   context?: string;
   /** Cells the `cell` scope may edit this turn, when the user pinned none. */
   targets?: string[];
+  /** Cells the user attached to the message: shown to the agent as they are when the turn starts. */
+  cells?: AttachedCell[];
 }
 
 interface ReviewState {
@@ -367,9 +370,12 @@ export class Chat {
 
   send(text: string, extra: Omit<TurnInput, "text"> = {}): void {
     if (this.closed) return;
-    const msg = this.newMessage("user", [{ type: "text", text }]);
+    const parts: Part[] = [{ type: "text", text }];
+    if (extra.cells?.length) parts.push({ type: "cells", cells: extra.cells });
+    const msg = this.newMessage("user", parts);
     this.touch(msg);
-    const input: TurnInput = { text, ...extra };
+    // Attached cells are what the `cell` scope may edit, unless the user pinned others.
+    const input: TurnInput = { text, ...(extra.cells?.length ? { targets: extra.cells.map((c) => c.cellId) } : {}), ...extra };
     if (this.status === "running" || this.current || this.busyJob) {
       this.queue.push(input);
       return;
@@ -499,9 +505,23 @@ export class Chat {
       this.kernelNotes = [];
     }
     if (input.context) blocks.push(input.context);
+    if (input.cells?.length) blocks.push(await this.attachedBlock(input.cells));
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file, runLines, this.machine ? machineLine(this.machine, Date.now()) : null));
     blocks.push(input.text);
     return blocks.join("\n\n");
+  }
+
+  /** The cells the user attached, read now with their outputs. */
+  private async attachedBlock(attached: AttachedCell[]): Promise<string> {
+    let found: CellInfo[] | null = null;
+    if (this.notebook) {
+      try {
+        found = (await this.call({ op: "get_cells", cellIds: attached.map((c) => c.cellId), includeOutputs: true })).cells;
+      } catch {
+        // The agent is told to read them itself.
+      }
+    }
+    return attachedCellsBlock(attached, found, (c) => renderCell(c, true));
   }
 
   // ------------------------------------------------------------ project

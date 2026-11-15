@@ -3,7 +3,7 @@
 // channel); a short context block rides every turn, so mode changes reach the
 // agent without restarting it.
 
-import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type CellInfo, type CellRun, type ChatMessage, type ChatProject, type ChatSettings, type MachineStats, type NotebookInfo } from "@ainb/protocol";
+import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type AttachedCell, type CellInfo, type CellRun, type ChatMessage, type ChatProject, type ChatSettings, type MachineStats, type NotebookInfo } from "@ainb/protocol";
 import type { ProjectBrief } from "./research/links.js";
 
 const PLATFORM_NAME = { colab: "Google Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
@@ -140,6 +140,47 @@ export function cellRunBlock(action: "fix" | "explain" | "summarize", run: CellR
   return `<cell-run>\n${happened}\n${cell}\nWhat to do: ${what}\nAnswer in the language the user has been writing in this chat; if they have not written yet, in English.\n</cell-run>`;
 }
 
+/** Attached cells are shown in full up to about this many characters; the rest are named. */
+const ATTACHED_BUDGET = 30_000;
+
+/**
+ * The cells the user attached to their message, as they are now (`found`,
+ * with outputs; null when the notebook could not be read), so the agent knows
+ * which cells "this cell" means without reading the notebook first.
+ */
+export function attachedCellsBlock(attached: AttachedCell[], found: CellInfo[] | null, render: (c: CellInfo) => string, budget = ATTACHED_BUDGET): string {
+  const ref = (c: { index: number; cellId?: string; id?: string }) => `[${c.index}] ${c.id ?? c.cellId}`;
+  const lines = ['The user attached these cells to their message: "this cell", "these cells" or "here" mean them. Use the cell ids; positions may have changed.'];
+  const block = () => `<attached-cells>\n${lines.join("\n")}\n</attached-cells>`;
+  if (!found) {
+    lines.push(`They could not be read now; Read them in the notebook: ${attached.map(ref).join(", ")}.`);
+    return block();
+  }
+  const byId = new Map(found.map((c) => [c.id, c]));
+  const shown: string[] = [];
+  const notShown: string[] = [];
+  const gone: string[] = [];
+  let used = 0;
+  for (const a of attached) {
+    const c = byId.get(a.cellId);
+    if (!c) {
+      gone.push(a.cellId);
+      continue;
+    }
+    const text = render(c);
+    if (shown.length && used + text.length > budget) {
+      notShown.push(ref(c));
+      continue;
+    }
+    shown.push(text);
+    used += text.length;
+  }
+  if (shown.length) lines.push("They are shown as they are now, with their outputs.", ...shown);
+  if (notShown.length) lines.push(`Also attached, not shown here to save space (Read them): ${notShown.join(", ")}.`);
+  if (gone.length) lines.push(`Attached but no longer in the notebook (deleted since): ${gone.join(", ")}.`);
+  return block();
+}
+
 /**
  * A bounded recap of the conversation, for an agent that starts mid-chat
  * (after a switch or a crash) and has none of it in its own session.
@@ -151,6 +192,7 @@ export function recap(messages: ChatMessage[], maxChars = 6000): string {
     const text = m.parts
       .map((p) => {
         if (p.type === "text") return p.text;
+        if (p.type === "cells") return `[attached cells: ${p.cells.map((c) => `[${c.index}] ${c.cellId}`).join(", ")}]`;
         if (p.type === "tool" && p.notebook) return `[tool: ${p.title} — ${p.status}]`;
         if (p.type === "review") return `[change to cell ${p.review.cellId}: ${p.status}]`;
         return "";

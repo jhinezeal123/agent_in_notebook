@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import { OpRunner, type BridgeEvents, type ChatProject, type ChatSnapshot, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
+import { OpRunner, firstLine, type BridgeEvents, type ChatProject, type ChatSnapshot, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import { DEFAULT_PREFS, type PanelEvent, type PanelRequest, type PanelResponse, type Prefs } from "../../ui/src/panel-messages.js";
 import type { SelectedChat, StudioView } from "../../studio/src/messages.js";
 import { BridgeLink } from "./bridge.js";
@@ -38,7 +38,33 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ainb.chooseOrx", () => studio.chooseOrx()),
     vscode.commands.registerCommand("ainb.clearChat", () => panel.clearChat()),
     vscode.commands.registerCommand("ainb.stopBridge", () => panel.stopBridge()),
+    vscode.commands.registerCommand("ainb.attachCell", (arg?: unknown) => panel.attachCells(arg)),
   );
+}
+
+/**
+ * The cells "Attach to Chat" is about: the cell whose toolbar or context menu
+ * was used (with the rest of the selection, when it is part of one), or the
+ * cell whose editor was right-clicked, or else the selected cells.
+ */
+function cellsToAttach(arg: unknown): vscode.NotebookCell[] {
+  const selected = (editor: vscode.NotebookEditor | undefined) =>
+    editor ? editor.selections.flatMap((range) => editor.notebook.getCells(range)) : [];
+  const isCell = (x: unknown): x is vscode.NotebookCell =>
+    !!x && typeof x === "object" && "notebook" in x && "document" in x && typeof (x as { index?: unknown }).index === "number";
+  if (isCell(arg)) {
+    const editor = vscode.window.visibleNotebookEditors.find((e) => e.notebook === arg.notebook);
+    const selection = selected(editor);
+    return selection.length > 1 && selection.includes(arg) ? selection : [arg];
+  }
+  if (arg instanceof vscode.Uri && arg.scheme === "vscode-notebook-cell") {
+    const uri = arg.toString();
+    for (const document of vscode.workspace.notebookDocuments) {
+      const cell = document.getCells().find((c) => c.document.uri.toString() === uri);
+      if (cell) return [cell];
+    }
+  }
+  return selected(vscode.window.activeNotebookEditor);
 }
 
 interface OpenNotebook {
@@ -262,6 +288,52 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     const chat = this.selected;
     if (chat?.kind === "research") this.studio.open({ view: "chat", projectId: chat.projectId, sessionId: chat.sessionId });
     else await vscode.commands.executeCommand("ainb.chat.focus");
+  }
+
+  /** "Attach to Chat" on notebook cells: they go with the next message of that notebook's chat, which comes to the front. */
+  async attachCells(arg?: unknown): Promise<void> {
+    const cells = cellsToAttach(arg).filter((cell) => cell.index >= 0);
+    const document = cells[0]?.notebook;
+    if (!document) {
+      void vscode.window.showInformationMessage("Select a cell in a notebook, then attach it to the chat.");
+      return;
+    }
+    let tabId: number | null = null;
+    let idOf: (cell: vscode.NotebookCell) => string | null;
+    if (document.notebookType === MIRROR_TYPE) {
+      // A Chrome tab's notebook: the agent knows its cells by the browser's ids.
+      const tab = mirrorTab(document.uri);
+      if (tab !== null) tabId = -tab;
+      idOf = (cell) => (typeof cell.metadata.id === "string" && cell.metadata.id ? cell.metadata.id : null);
+    } else {
+      if (vscode.window.activeNotebookEditor?.notebook === document && !this.notebooks.has(document)) this.activeChanged();
+      const notebook = this.notebooks.get(document);
+      tabId = notebook?.tabId ?? null;
+      idOf = (cell) => notebook?.adapter.cellId(cell) ?? null;
+    }
+    if (tabId === null || !this.core.exists(tabId)) {
+      void vscode.window.showWarningMessage(
+        document.notebookType === MIRROR_TYPE
+          ? "This notebook's Chrome tab is not connected right now. Check that the tab is still open, then try again."
+          : "The chat cannot work with this notebook. Open a Jupyter notebook (.ipynb) and try again.",
+      );
+      return;
+    }
+    const attached = [...new Set(cells)].sort((a, b) => a.index - b.index).flatMap((cell) => {
+      const cellId = idOf(cell);
+      return cellId ? [{ cellId, index: cell.index, label: firstLine(cell.document.getText(), 60) }] : [];
+    });
+    if (attached.length < cells.length) {
+      void vscode.window.showWarningMessage(attached.length
+        ? "Some of these cells are still being copied to the Chrome tab and were not attached. Try them again in a moment."
+        : "This cell is still being copied to the Chrome tab. Try again in a moment.");
+    }
+    if (!attached.length) return;
+    // The chat shows this notebook (it may show a research chat or another notebook), then gets the cells.
+    this.leaveResearch(tabId);
+    await this.core.handle("notebooks.select", { tabId }).catch(() => {});
+    this.core.attach(tabId, attached);
+    await vscode.commands.executeCommand("ainb.chat.focus");
   }
 
   private closeNotebook(document: vscode.NotebookDocument): void {

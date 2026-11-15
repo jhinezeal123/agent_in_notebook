@@ -169,6 +169,71 @@ describe("Run approval deadlines", () => {
   });
 });
 
+describe("Attached cells", () => {
+  it("shows the attached cells, as they are now and with outputs, before the notebook context", async () => {
+    const { chat, cell, notebookOp } = setup();
+    cell.source = "df = load()\ndf.head()";
+    cell.outputs = [{ kind: "error", ename: "KeyError", evalue: "'price'", traceback: "KeyError: 'price'" }];
+    chat.send("why does this fail?", { cells: [{ cellId: "a", index: 0, label: "df = load()" }] });
+    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
+    const prompt = agent.prompt.mock.calls[0]![0] as string;
+    expect(notebookOp).toHaveBeenCalledWith(1, expect.objectContaining({ op: "get_cells", cellIds: ["a"], includeOutputs: true }), expect.any(Number));
+    expect(prompt).toContain("<attached-cells>");
+    expect(prompt).toContain("### cell [0] id=a code");
+    expect(prompt).toContain("df.head()");
+    expect(prompt).toContain("KeyError: 'price'");
+    expect(prompt.indexOf("<attached-cells>")).toBeLessThan(prompt.lastIndexOf("<notebook-context>"));
+    expect(prompt.trimEnd().endsWith("why does this fail?")).toBe(true);
+  });
+
+  it("keeps the attached cells on the user's message", () => {
+    const { chat } = setup();
+    const cells = [{ cellId: "a", index: 0, label: "x = 1" }];
+    chat.send("explain", { cells });
+    const message = chat.messages.find((m) => m.role === "user")!;
+    expect(message.parts).toEqual([{ type: "text", text: "explain" }, { type: "cells", cells }]);
+  });
+
+  it("sends no attached-cells block without attachments", async () => {
+    const { chat } = setup();
+    chat.send("hello");
+    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
+    expect(agent.prompt.mock.calls[0]![0]).not.toContain("<attached-cells>");
+    expect(chat.messages.find((m) => m.role === "user")!.parts).toEqual([{ type: "text", text: "hello" }]);
+  });
+
+  it("makes the attached cells the editable cells in cell scope, over the selection", async () => {
+    const { chat, info } = setup({ scope: "cell", review: false });
+    info.activeCellId = "other";
+    info.selectedCellIds = ["other"];
+    chat.send("fix it", { cells: [{ cellId: "a", index: 0, label: "x = 1" }] });
+    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
+    expect(agent.prompt.mock.calls[0]![0]).toContain("Editable cell(s): a.");
+  });
+
+  it("leaves pinned cells editable when others are attached", async () => {
+    const { chat } = setup({ scope: "cell", review: false, targetCellIds: ["pinned"] });
+    chat.send("look at this", { cells: [{ cellId: "a", index: 0, label: "x = 1" }] });
+    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
+    expect(agent.prompt.mock.calls[0]![0]).toContain("Editable cell(s): pinned.");
+  });
+
+  it("says which attached cells were deleted before the turn", async () => {
+    const { chat, notebookOp, info, cell } = setup();
+    notebookOp.mockImplementation(async (_tab, raw) => {
+      const op = raw as { op: string; cellIds?: string[] };
+      if (op.op === "info") return info;
+      if (op.op === "get_cells") return { cells: op.cellIds ? [cell].filter((c) => op.cellIds!.includes(c.id)) : [cell] };
+      return {};
+    });
+    chat.send("compare", { cells: [{ cellId: "a", index: 0, label: "x = 1" }, { cellId: "gone", index: 3, label: "y = 2" }] });
+    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
+    const prompt = agent.prompt.mock.calls[0]![0] as string;
+    expect(prompt).toContain("### cell [0] id=a code");
+    expect(prompt).toContain("Attached but no longer in the notebook (deleted since): gone.");
+  });
+});
+
 describe("Cell run cards", () => {
   it("opens a system error card with Fix, Explain and Dismiss while idle", () => {
     const { chat } = setup();

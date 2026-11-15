@@ -84,8 +84,22 @@ export interface ChatCard {
   progress?: { done: number; total: number };
 }
 
+/** A cell the user attached to a message: what they ask about, or want changed. */
+export interface AttachedCell {
+  cellId: string;
+  /** Its position when it was attached (0-based). */
+  index: number;
+  /** The first line of its source, short. */
+  label: string;
+}
+
+/** At most this many cells go with one message. */
+export const ATTACHED_CELLS_MAX = 20;
+
 export type Part =
   | { type: "text"; text: string }
+  /** Cells the user attached to the message (user messages only). */
+  | { type: "cells"; cells: AttachedCell[] }
   | { type: "thought"; text: string }
   | { type: "image"; mime: ChatImageMime; data: string; alt?: string }
   | {
@@ -296,7 +310,7 @@ export interface BridgeMethods {
   /** Put the project's code on the notebook's machine now (cheap when it is already there). */
   "chat.pushCode": { params: { chatId: string }; result: ChatCode };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };
-  "chat.send": { params: { chatId: string; text: string }; result: { accepted: boolean } };
+  "chat.send": { params: { chatId: string; text: string; cells?: AttachedCell[] }; result: { accepted: boolean } };
   "chat.cancel": { params: { chatId: string }; result: { cancelled: boolean } };
   "chat.close": { params: { chatId: string }; result: { closed: boolean } };
   "chat.settings": { params: { chatId: string; settings: ChatSettings }; result: ChatSnapshot };

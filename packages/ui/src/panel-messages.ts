@@ -1,6 +1,6 @@
 // The chat UI <-> its host (the VS Code extension), over the webview's messages.
 
-import type { AgentInfo, ChatSettings, NotebookInfo, Scope } from "@ainb/protocol";
+import type { AgentInfo, AttachedCell, ChatSettings, NotebookInfo, Scope } from "@ainb/protocol";
 
 /** `replaced`: another VS Code window took over the bridge; no automatic reconnect. */
 export type ConnState = "disconnected" | "connecting" | "connected" | "unpaired" | "replaced";
@@ -46,8 +46,10 @@ export type PanelEvent =
   | { event: "notebooks"; params: NotebookChoice[] }
   /** The prefs changed outside the panel (New Chat picked an agent). */
   | { event: "prefs"; params: Prefs }
+  /** The cells attached to the next message about a notebook; `added`: the user just attached some. */
+  | { event: "attachments"; params: { tabId: number; cells: AttachedCell[]; added?: boolean } }
   /** A command from the view's title bar. */
   | { event: "command"; params: "chat.clear" }
   | { event: "bridge"; params: { method: string; params: unknown } };
 
-export type { ChatSettings };
+export type { AttachedCell, ChatSettings };

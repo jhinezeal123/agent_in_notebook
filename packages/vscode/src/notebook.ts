@@ -43,6 +43,11 @@ export class VSCodeNotebook implements NotebookAdapter {
     for (const subscription of this.subscriptions) subscription.dispose();
   }
 
+  /** The id the chat and the agent know this cell by. */
+  cellId(cell: vscode.NotebookCell): string {
+    return this.id(cell);
+  }
+
   private id(cell: vscode.NotebookCell): string {
     const uri = cell.document.uri.toString();
     const existing = this.ids.get(uri);

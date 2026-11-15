@@ -4,7 +4,7 @@
 // supplies its own notebooks through `LocalNotebooks`; the browser tests run
 // this with none.
 
-import type { BridgeEvents, BrowserNotebook, BrowserOp, NotebookInfo } from "@ainb/protocol";
+import { ATTACHED_CELLS_MAX, type AttachedCell, type BridgeEvents, type BrowserNotebook, type BrowserOp, type NotebookInfo } from "@ainb/protocol";
 import type { BridgeState, NotebookChoice, PanelEvent } from "../../ui/src/panel-messages.js";
 
 export interface PanelBridge {
@@ -50,6 +50,11 @@ export const isChrome = (tabId: number) => tabId < 0;
 export class PanelCore {
   /** Notebooks open in Chrome tabs, by Chrome tab id. */
   private readonly browser = new Map<number, NotebookInfo>();
+  /**
+   * Cells attached to the next message, by notebook. Kept here, not in the
+   * panel, so cells attached before the chat view first opens are not lost.
+   */
+  private readonly attachments = new Map<number, AttachedCell[]>();
   activeTab: number | null = null;
 
   constructor(
@@ -138,6 +143,26 @@ export class PanelCore {
     this.localChanged();
   }
 
+  /** "Attach to Chat" on cells of a notebook: they join that notebook's next message. A cell attached again keeps its place, with its label updated. */
+  attach(tabId: number, cells: AttachedCell[]): void {
+    const fresh = new Map(cells.map((c) => [c.cellId, c]));
+    const before = this.attached(tabId);
+    const kept = before.map((c) => fresh.get(c.cellId) ?? c);
+    const known = new Set(before.map((c) => c.cellId));
+    const next = [...kept, ...[...fresh.values()].filter((c) => !known.has(c.cellId))].slice(-ATTACHED_CELLS_MAX);
+    this.setAttachments(tabId, next, true);
+  }
+
+  attached(tabId: number): AttachedCell[] {
+    return this.attachments.get(tabId) ?? [];
+  }
+
+  private setAttachments(tabId: number, cells: AttachedCell[], added = false): void {
+    if (cells.length) this.attachments.set(tabId, cells);
+    else this.attachments.delete(tabId);
+    this.post({ event: "attachments", params: { tabId, cells, ...(added ? { added } : {}) } });
+  }
+
   /** What the panel itself does to a notebook (the agent's operations go through its chat). */
   private userOp(tabId: number, op: BrowserOp): Promise<unknown> {
     if (isChrome(tabId)) return this.bridge.request("browser.op", { tabId: chromeTab(tabId), op });
@@ -169,6 +194,16 @@ export class PanelCore {
         return;
       }
       case "tab.notebook": return this.info((params as { tabId: number }).tabId);
+      case "attachments.get": return this.attached((params as { tabId: number }).tabId);
+      case "attachments.remove": {
+        // `cellIds` absent: all of them (the message they rode on was sent).
+        const { tabId, cellIds } = params as { tabId: number; cellIds?: string[] };
+        const gone = cellIds && new Set(cellIds);
+        const before = this.attached(tabId);
+        const after = gone ? before.filter((c) => !gone.has(c.cellId)) : [];
+        if (after.length !== before.length) this.setAttachments(tabId, after);
+        return;
+      }
       case "notebook.focus": {
         const { tabId, cellId } = params as { tabId: number; cellId: string };
         return this.userOp(tabId, { op: "focus_cell", cellId });

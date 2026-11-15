@@ -329,6 +329,11 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .ctx-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ctx-name:last-child { margin-right: 4px; }
 .ctx-chip.cells .ctx-name { font-family: var(--mono); font-size: 11px; }
+.ctx-chip.attached { max-width: min(260px, 100%); }
+.ctx-chip.attached .ctx-link { text-align: left; }
+.attached-index { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.msg-cells { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; white-space: normal; }
+.msg-cells .ctx-chip { padding-right: 6px; }
 .ctx-btn { border: 0; background: transparent; color: var(--muted); width: 18px; height: 18px; flex: none; border-radius: var(--r-sm); display: inline-grid; place-items: center; padding: 0; cursor: pointer; }
 .ctx-btn:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .ctx-btn svg.i { width: 13px; height: 13px; }

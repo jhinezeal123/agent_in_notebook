@@ -12,11 +12,13 @@ import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import {
+  ATTACHED_CELLS_MAX,
   DEFAULT_SETTINGS,
   isBrowserOp,
   RpcPeer,
   WIRE_VERSION,
   type AppliedChange,
+  type AttachedCell,
   type BridgeMethods,
   type ChatMessage,
   type ChatSettings,
@@ -369,7 +371,8 @@ export class Bridge {
       guard<"chat.send">((p) => {
         const chat = this.chatById(p.chatId);
         if (!p.text.trim()) throw new Error("empty message");
-        chat.send(p.text);
+        const cells = sanitizeCells(p.cells);
+        chat.send(p.text, cells.length ? { cells } : {});
         return { accepted: true };
       }),
     );
@@ -676,6 +679,21 @@ function sanitizeSettings(s: Partial<ChatSettings> | undefined): ChatSettings {
     targetCellIds: Array.isArray(s?.targetCellIds) ? s!.targetCellIds.filter((x) => typeof x === "string").slice(0, 50) : [],
     notebookOnly: typeof s?.notebookOnly === "boolean" ? s.notebookOnly : DEFAULT_SETTINGS.notebookOnly,
   };
+}
+
+/** Cells attached to a message, as the panel sent them: well-formed, short, one entry per cell. */
+export function sanitizeCells(raw: unknown): AttachedCell[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const cells: AttachedCell[] = [];
+  for (const c of raw as Partial<AttachedCell>[]) {
+    if (!c || typeof c.cellId !== "string" || !c.cellId || c.cellId.length > 200 || seen.has(c.cellId)) continue;
+    seen.add(c.cellId);
+    const index = typeof c.index === "number" && Number.isSafeInteger(c.index) && c.index >= 0 ? c.index : 0;
+    cells.push({ cellId: c.cellId, index, label: typeof c.label === "string" ? c.label.slice(0, 120) : "" });
+    if (cells.length >= ATTACHED_CELLS_MAX) break;
+  }
+  return cells;
 }
 
 function isLoopback(req: IncomingMessage): boolean {
