@@ -113,6 +113,7 @@ const RUN_CARDS_OPEN = 5;
 const LONG_RUN_MS = 60_000;
 const MACHINE_MIN_MS = 20_000;
 const MACHINE_SAVE_MS = 5 * 60_000;
+const MACHINE_POLL_MS = 30_000;
 const AUTOSAVE_MS = 10 * 60_000;
 
 interface TurnInput {
@@ -184,6 +185,8 @@ export class Chat {
   private machineRead: Promise<void> | null = null;
   private boot: string | undefined;
   private machineSavedAt = 0;
+  /** Re-reads the machine's numbers while the chat is open, so the header follows a running cell. */
+  private machinePoll: ReturnType<typeof setInterval> | null = null;
   private lastSyncAt = 0;
   /** Last attempt that confirmed the code is saved, not merely scheduled or attempted. */
   private lastSavedAt = 0;
@@ -347,6 +350,8 @@ export class Chat {
     this.closed = true;
     if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
     this.autosaveTimer = null;
+    if (this.machinePoll) clearInterval(this.machinePoll);
+    this.machinePoll = null;
     this.turn?.controller.abort();
     if (this.busyJob) this.cancelCellJob();
     this.queue = [];
@@ -1189,6 +1194,10 @@ ${st.place.branch}`);
           gpus: result.gpus,
         };
         this.host.emit("chat.machine", { chatId: this.id, tabId: this.tabId, machine: this.machine });
+        if (!this.machinePoll) {
+          this.machinePoll = setInterval(() => void this.refreshMachine(), MACHINE_POLL_MS);
+          this.machinePoll.unref?.();
+        }
       } catch {
         // A busy, disconnected or non-Python kernel leaves the last good numbers in place.
       }

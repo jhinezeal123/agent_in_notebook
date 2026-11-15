@@ -76,11 +76,12 @@ export function machineLine(m: MachineStats, now: number): string | null {
     const low = m.diskFree < m.diskTotal * 0.05;
     parts.push(`disk ${gb(m.diskTotal - m.diskFree)} of ${gb(m.diskTotal)} GB used${low ? " · DISK NEARLY FULL" : ""}`);
   }
-  const gpu = m.gpus?.[0];
-  if (gpu && gpu.memTotal > 0) {
+  // Every GPU (Kaggle's T4 x2 has two), numbered when there are several.
+  const gpus = (m.gpus ?? []).filter((g) => g.memTotal > 0);
+  gpus.forEach((gpu, i) => {
     const low = gpu.memUsed > gpu.memTotal * 0.9;
-    parts.push(`GPU ${gpu.name} ${gb(gpu.memUsed)} of ${gb(gpu.memTotal)} GB, ${Math.round(gpu.util)}% busy${low ? " · GPU MEMORY NEARLY FULL" : ""}`);
-  }
+    parts.push(`GPU${gpus.length > 1 ? ` ${i}` : ""} ${gpu.name} ${gb(gpu.memUsed)} of ${gb(gpu.memTotal)} GB, ${Math.round(gpu.util)}% busy${low ? " · GPU MEMORY NEARLY FULL" : ""}`);
+  });
   if (!parts.length) return null;
   const minutes = Math.floor((now - m.at) / 60_000);
   return `Machine: ${parts.join(" · ")}${minutes >= 1 ? ` (read ${minutes} min ago)` : ""}`;

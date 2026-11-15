@@ -489,12 +489,12 @@ function machineResources(machine?: MachineStats): { key: string; label: string;
       warn: machine.memAvailable < machine.memTotal * 0.1,
     });
   }
-  // Every GPU of the machine (Kaggle's T4 x2 has two), as "GPU 12% · 3%".
+  // Just "GPU": the numbers for every GPU (Kaggle's T4 x2 has two) are in the tooltip.
   const gpus = (machine.gpus ?? []).filter((g) => g.memTotal > 0);
   if (gpus.length) {
     out.push({
       key: "gpu",
-      label: `GPU ${gpus.map((g) => `${percent(g.memUsed, g.memTotal)}%`).join(" · ")}`,
+      label: "GPU",
       title: `${gpus.map((g, i) => `GPU ${i} ${g.name}: ${gb(g.memUsed)} of ${gb(g.memTotal)} memory, ${Math.round(g.util)}% busy`).join("\n")}\n${asOf}`,
       warn: gpus.some((g) => g.memUsed > g.memTotal * 0.9),
     });
