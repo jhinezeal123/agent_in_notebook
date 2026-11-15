@@ -7,7 +7,7 @@
 // (searched and read with OpenResearch's `orx discover` and `orx paper`).
 
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { z } from "zod";
 import { capLines, capText } from "@ainb/protocol";
@@ -16,6 +16,7 @@ import { check, Denied, machine, resolve, tool, type ToolContext, type ToolDef, 
 import { FileTooBig, readFile as vmReadFile, writeFile as vmWriteFile } from "../notebook/vmfs.js";
 import type { ProjectLinks } from "../research/links.js";
 import type { ResearchProjects } from "../research/projects.js";
+import { keyHash } from "../store.js";
 
 /** What the artifact tools need of the project. */
 export interface ArtifactsProject {
@@ -27,9 +28,11 @@ export interface ArtifactsProject {
 export interface ProjectToolContext extends ToolContext {
   research: ResearchProjects;
   links: ProjectLinks;
+  /** The notebook's stable address, when it has one: saved copies of the notebook are marked with it. */
+  notebookKey?: string;
   /** The chat's project: OpenResearch's record, or what the notebook kept of it while OpenResearch is not running; else throws Denied saying why. */
   project(): Promise<ArtifactsProject>;
-  /** Artifact paths (relative to the artifacts folder) this chat wrote: replacing any other asks first. */
+  /** Project and relative path of each artifact this chat wrote: replacing any other asks first. */
   created: Set<string>;
   /** Ask the user a yes/no question in the chat; true for yes. */
   confirm(summary: string, detail: string, yes: string, no: string): Promise<boolean>;
@@ -91,37 +94,58 @@ function inside(base: string, path: string): boolean {
   return r === "" || (!r.startsWith("..") && !isAbsolute(r) && !r.split(sep).includes(".."));
 }
 
-async function writeAtomic(file: string, data: Buffer | string): Promise<void> {
+async function writeAtomic(file: string, data: Buffer | string, createOnly = false): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, data);
-    await rename(temporary, file);
+    if (!createOnly) await rename(temporary, file);
+    else {
+      try {
+        await link(temporary, file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;
+        // Some drives have no hard links (exFAT, FAT32, some network and cloud-synced folders),
+        // and say so in different ways: create the file itself there.
+        await createFile(file, data);
+      }
+    }
   } finally {
     await rm(temporary, { force: true });
   }
 }
 
+/** Write a file that must not exist yet (EEXIST if it does); nothing is left of it if the write fails. */
+async function createFile(file: string, data: Buffer | string): Promise<void> {
+  const handle = await open(file, "wx");
+  try {
+    await handle.writeFile(data);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await rm(file, { force: true });
+    throw error;
+  }
+  await handle.close();
+}
+
 /**
  * Write an artifact. In review mode it waits for the user; replacing a file
- * this chat did not write always does. `user`: the user asked (a button), so
- * nothing is asked.
+ * this chat did not write always does.
  */
-async function saveArtifact(ctx: ProjectToolContext, project: ArtifactsProject, rel: string, data: Buffer | string, what: string, opts: { user?: boolean; preview?: string } = {}): Promise<string> {
+async function saveArtifact(ctx: ProjectToolContext, project: ArtifactsProject, rel: string, data: Buffer | string, what: string, opts: { preview?: string } = {}): Promise<string> {
   const clean = artifactRel(rel);
   if (!clean) throw new Denied("Name the file to write in the shared artifacts.");
-  const d = opts.user ? null : check(ctx, "save", null);
+  const d = check(ctx, "save", null);
   const { file, exists, dir } = await artifactTarget(project, clean, true);
   if (dir) throw new Denied(`artifacts/${clean} is a folder.`);
-  if (d) {
-    const foreign = exists && !ctx.created.has(clean);
-    if (foreign || (d.allow && d.askBeforeRun)) {
-      const summary = foreign ? `Replace artifacts/${clean} in ${project.name}? This chat did not write it.` : `Save ${what} to artifacts/${clean} in ${project.name}`;
-      const ok = await ctx.confirm(summary, opts.preview ?? sizeText(Buffer.byteLength(data)), foreign ? "Replace" : "Save", "Don't save");
-      if (!ok) throw new Denied("The user declined. Nothing was saved.");
-    }
+  const written = JSON.stringify([project.id, clean]);
+  const foreign = exists && !ctx.created.has(written);
+  if (foreign || (d.allow && d.askBeforeRun)) {
+    const summary = foreign ? `Replace artifacts/${clean} in ${project.name}? This chat did not write it.` : `Save ${what} to artifacts/${clean} in ${project.name}`;
+    const ok = await ctx.confirm(summary, opts.preview ?? sizeText(Buffer.byteLength(data)), foreign ? "Replace" : "Save", "Don't save");
+    if (!ok) throw new Denied("The user declined. Nothing was saved.");
   }
   await writeAtomic(file, data);
-  ctx.created.add(clean);
+  ctx.created.add(written);
   ctx.links.markDirty(project.id);
   return `artifacts/${clean}`;
 }
@@ -190,17 +214,62 @@ async function listFiles(dir: string, max: number): Promise<{ files: Listed[]; m
 // ------------------------------------------------------------ shared with the chat's button
 
 /** Save the notebook (with outputs unless `outputs` is false) to artifacts/notebooks/. */
-export async function saveNotebook(ctx: ProjectToolContext, opts: { name?: string; outputs?: boolean; user?: boolean } = {}): Promise<{ path: string; cells: number; bytes: number; project: ArtifactsProject }> {
+export async function saveNotebook(ctx: ProjectToolContext, opts: { name?: string; outputs?: boolean; user?: { notebookKey: string } } = {}): Promise<{ path: string; cells: number; bytes: number; project: ArtifactsProject }> {
   const project = await ctx.project();
   const info = await ctx.call({ op: "info" });
   const outputs = opts.outputs !== false;
   const { cells } = await ctx.call({ op: "get_cells", includeOutputs: outputs });
-  const text = toIpynb(outputs ? cells : cells.map((c) => ({ ...c, outputs: [], executionCount: null })), info.language);
+  // Every copy says which notebook it is of, whoever saved it (the agent's tool or the user's button):
+  // the button keeps replacing that copy instead of starting another beside it.
+  const key = opts.user?.notebookKey ?? ctx.notebookKey;
+  const owner = key ? keyHash(key) : undefined;
+  const text = toIpynb(outputs ? cells : cells.map((c) => ({ ...c, outputs: [], executionCount: null })), info.language, owner);
   const bytes = Buffer.byteLength(text);
   if (bytes > NOTEBOOK_MAX) throw new Denied(`The notebook is ${sizeText(bytes)} with its outputs, more than ${sizeText(NOTEBOOK_MAX)}. Save it without outputs (outputs: false).`);
-  const name = `${slug(opts.name ?? info.title)}.ipynb`;
-  const path = await saveArtifact(ctx, project, `notebooks/${name}`, text, `the notebook (${cells.length} cells${outputs ? "" : ", no outputs"})`, { user: opts.user });
+  const name = slug(opts.name ?? info.title);
+  if (opts.user && owner) {
+    const rel = await saveNotebookFromButton(project, name, owner, text);
+    ctx.created.add(JSON.stringify([project.id, rel]));
+    ctx.links.markDirty(project.id);
+    return { path: `artifacts/${rel}`, cells: cells.length, bytes, project };
+  }
+  const path = await saveArtifact(ctx, project, `notebooks/${name}.ipynb`, text, `the notebook (${cells.length} cells${outputs ? "" : ", no outputs"})`);
   return { path, cells: cells.length, bytes, project };
+}
+
+async function saveNotebookFromButton(project: ArtifactsProject, name: string, owner: string, text: string): Promise<string> {
+  const standard = `notebooks/${name}.ipynb`;
+  const distinct = `notebooks/${name}-${owner}.ipynb`;
+  // Keep using a suffixed file even if the original name becomes free.
+  for (const rel of [distinct, standard]) {
+    const { file, exists, dir } = await artifactTarget(project, rel, true);
+    if (!exists || dir || !await belongsToNotebook(file, owner)) continue;
+    await writeAtomic(file, text);
+    return rel;
+  }
+  for (const rel of [standard, distinct]) {
+    const { file } = await artifactTarget(project, rel, true);
+    try {
+      await writeAtomic(file, text, true);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (!await belongsToNotebook(file, owner)) continue;
+      await writeAtomic(file, text);
+    }
+    return rel;
+  }
+  throw new Denied("Both notebook filenames are already in use. Rename the notebook and save it again.");
+}
+
+async function belongsToNotebook(file: string, owner: string): Promise<boolean> {
+  const info = await lstat(file).catch(() => null);
+  if (!info?.isFile() || info.size > NOTEBOOK_MAX) return false;
+  try {
+    return JSON.parse(await readFile(file, "utf8"))?.metadata?.agent_in_notebook?.notebook === owner;
+  } catch (error) {
+    if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 // ------------------------------------------------------------ the tools

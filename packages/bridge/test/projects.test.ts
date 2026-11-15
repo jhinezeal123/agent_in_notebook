@@ -2,13 +2,14 @@
 // agent and a stand-in for OpenResearch's API: which project a notebook
 // belongs to, what the agent is told about it, and the project tools.
 
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ChatSettings, ChatSnapshot, Part } from "@ainb/protocol";
 import { Bridge } from "../src/server.js";
+import { runInSession } from "../src/notebook/setup.js";
 import { ChatStore, keyHash } from "../src/store.js";
 import { worktreePath } from "../src/project/worktree.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
@@ -46,26 +47,28 @@ afterAll(async () => {
 
 const script = (steps: unknown[]) => `SCRIPT: ${JSON.stringify(steps)}`;
 
-async function open(key: string, opts: { projectId?: string; settings?: Partial<ChatSettings>; port?: number; ready?: boolean } = {}) {
+async function open(key: string, opts: { projectId?: string; settings?: Partial<ChatSettings>; port?: number; ready?: boolean; ext?: FakeExtension } = {}) {
   const nb = new FakeNotebook([{ type: "code", source: "x = 1" }]);
-  const ext = new FakeExtension(nb, nextTab++);
-  await ext.connect(opts.port ?? port, TOKEN);
+  const tabId = nextTab++;
+  const ext = opts.ext ?? new FakeExtension(nb, tabId);
+  if (opts.ext) ext.attachNotebook(tabId, nb);
+  else await ext.connect(opts.port ?? port, TOKEN);
   const snap = await ext.request<ChatSnapshot>("chat.open", {
-    tabId: ext.tabId,
+    tabId,
     agentId: "fake",
     settings: { scope: "write", review: false, targetCellIds: [], notebookOnly: true, ...opts.settings },
     platform: "colab",
     notebookKey: key,
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
   });
-  await ext.waitFor(() => ext.statuses.includes("idle"), 30_000, "agent start");
+  await ext.waitFor(() => ext.snapshots.some((s) => s.chatId === snap.chatId && s.status === "idle"), 30_000, "agent start");
   if (opts.ready !== false) await ext.waitFor(() => project(ext, snap)?.state === "ready", 15_000, "project ready");
   return { nb, ext, chatId: snap.chatId, first: snap };
 }
 
 /** The chat's project as last sent. */
 function project(ext: FakeExtension, first?: ChatSnapshot) {
-  return (ext.snapshots.at(-1) ?? first)?.project;
+  return (ext.snapshots.findLast((s) => !first || s.chatId === first.chatId) ?? first)?.project;
 }
 
 async function turn(ext: FakeExtension, chatId: string, text: string) {
@@ -130,6 +133,29 @@ describe("which project a notebook belongs to", () => {
     expect(await turn(ext, chatId, "ECHO_PROJECT")).toMatch(/moved this notebook to the project Vision/);
     await expect(ext.request("notebook.link", { notebookKey: "colab:/drive/move", projectId: "proj_nope" })).rejects.toThrow(/project not found/);
     ext.close();
+  });
+
+  it("keeps project tool calls in the original project until the next turn", async () => {
+    const a = orx.addProject("Move from");
+    const b = orx.addProject("Move to");
+    const key = "colab:/drive/move-mid-turn";
+    const { ext, chatId } = await open(key, { projectId: a.id, settings: { notebookOnly: false } });
+    try {
+      const write = (path: string) => ({ server: "project", tool: "artifact_write", args: { path, content: path } });
+      const sending = turn(ext, chatId, script([write("before.txt"), { permission: "Pause between writes" }, write("after.txt")]));
+      await ext.waitFor(() => ext.parts().some((p) => p.type === "prompt" && !p.answer), 15_000, "pause after first write");
+      expect(existsSync(join(a.artifactsDir, "before.txt"))).toBe(true);
+      await ext.request("notebook.link", { notebookKey: key, projectId: b.id });
+      const prompt = ext.parts().find((p) => p.type === "prompt" && !p.answer);
+      if (prompt?.type === "prompt") await ext.request("chat.answer", { chatId, promptId: prompt.promptId, optionId: "deny" });
+      expect(await sending).toContain("Wrote artifacts/after.txt");
+      expect(existsSync(join(a.artifactsDir, "after.txt"))).toBe(true);
+      expect(existsSync(join(b.artifactsDir, "after.txt"))).toBe(false);
+      expect(await turn(ext, chatId, script([write("next.txt")]))).toContain("Wrote artifacts/next.txt");
+      expect(existsSync(join(b.artifactsDir, "next.txt"))).toBe(true);
+    } finally {
+      ext.close();
+    }
   });
 });
 
@@ -267,6 +293,42 @@ describe("project tools", () => {
     expect(ext.parts().some((x) => x.type === "prompt")).toBe(false);
     ext.close();
   });
+
+  it("keeps one copy when the agent saves the notebook after the user did", async () => {
+    const p = orx.addProject("Button then agent");
+    const { ext, chatId } = await open("colab:/drive/button-agent", { projectId: p.id, settings: { scope: "auto", review: false } });
+    const saved = { path: "artifacts/notebooks/test.ipynb" };
+    expect(await ext.request("chat.saveNotebook", { chatId })).toEqual(saved);
+    expect(await turn(ext, chatId, script([{ server: "project", tool: "save_notebook", args: {} }]))).toContain("RESULT save_notebook: Saved artifacts/notebooks/test.ipynb");
+    expect(await ext.request("chat.saveNotebook", { chatId })).toEqual(saved);
+    expect(readdirSync(join(p.artifactsDir, "notebooks"))).toEqual(["test.ipynb"]);
+    ext.close();
+  });
+
+  it("keeps same-title notebook saves separate and leaves an existing legacy copy intact", async () => {
+    const p = orx.addProject("Save collisions");
+    mkdirSync(join(p.artifactsDir, "notebooks"), { recursive: true });
+    const legacy = join(p.artifactsDir, "notebooks", "test.ipynb");
+    writeFileSync(legacy, "legacy notebook");
+    const a = await open("colab:/drive/same-title-a", { projectId: p.id });
+    const b = await open("colab:/drive/same-title-b", { projectId: p.id, ext: a.ext });
+    const save = (chat: typeof a) => chat.ext.request<{ path: string }>("chat.saveNotebook", { chatId: chat.chatId });
+    const content = (path: string) => readFileSync(join(p.artifactsDir, path.slice("artifacts/".length)), "utf8");
+    try {
+      b.nb.cells[0]!.source = "x = 2";
+      const [first, second] = await Promise.all([save(a), save(b)]);
+      expect(first.path).not.toBe(second.path);
+      expect(content(first.path)).toContain("x = 1");
+      expect(content(second.path)).toContain("x = 2");
+      expect(readFileSync(legacy, "utf8")).toBe("legacy notebook");
+      a.nb.cells[0]!.source = "x = 3";
+      expect(await save(a)).toEqual(first);
+      expect(content(first.path)).toContain("x = 3");
+      expect(content(second.path)).toContain("x = 2");
+    } finally {
+      a.ext.close();
+    }
+  });
 });
 
 describe("the research literature", () => {
@@ -324,57 +386,72 @@ describe("the project's code on the notebook's machine", () => {
     delete process.env.AINB_GITHUB_TOKEN;
   });
 
+  it("keeps watching a push after its initial wait and returns the eventual result", async () => {
+    const nb = new FakeNotebook([]);
+    const session = "project-slow";
+    let notify!: () => void;
+    const waiting = new Promise<void>((resolve) => { notify = resolve; });
+    const pending = runInSession(async (op) => nb.handle(op), "test-slow-project-sync", session, "forever", 20, notify);
+    await waiting;
+    nb.vm.background(session, "\r\nainb-pushed deadbeef\r\n\u001b]7770;prompt;0\u0007");
+    expect(await pending).toMatchObject({ running: false, exitCode: 0, output: expect.stringContaining("ainb-pushed deadbeef") });
+  });
+
+  it("stops watching a push that never ends, so later turns are not held up", async () => {
+    const nb = new FakeNotebook([]);
+    let waited = false;
+    const r = await runInSession(async (op) => nb.handle(op), "test-stuck-project-sync", "project-stuck", "forever", 20, () => { waited = true; }, 200);
+    expect(waited).toBe(true);
+    expect(r).toMatchObject({ running: true, exitCode: null });
+  });
+
   /** A file as text, whatever line ends git checked it out with (Windows). */
   const fileText = (file: string) => readFileSync(file, "utf8").replace(/\r\n/g, "\n");
   /** git on this computer, for the test's own checks. */
   const g = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe" }).toString().trim();
 
-  /**
-   * The machine's side, as a real one would do it: the clone script answers
-   * ready; the push script stands for the agent's work, committing `change`
-   * to the branch on "GitHub".
-   */
-  function machine(nb: FakeNotebook, remote: string, change: () => Record<string, string> | null) {
+  /** Run the bridge scripts with real Git, in a temporary simulated VM home. */
+  function machine(nb: FakeNotebook, beforePush: (dir: string) => void = () => {}) {
     const seen: string[] = [];
+    const root = mkdtempSync(join(tmpdir(), "ainb-vm-git-")).replaceAll("\\", "/");
+    const bash = process.platform === "win32" ? resolve(g(home, "--exec-path"), "../../../bin/bash.exe") : "bash";
+    const onDisk = (path: string) => path.replace(/^\/root(?=\/)/, root);
     nb.vm.run = (command) => {
       seen.push(command);
-      if (command.includes("git clone") || command.includes("git fetch -q origin")) return { output: "ainb-ready abc1234\n", status: 0 };
-      if (command.includes("git push")) {
-        const files = change();
-        const branch = /refs\/heads\/'([^']+)'/.exec(command)![1]!;
-        if (files) {
-          const work = mkdtempSync(join(tmpdir(), "vm-clone-"));
-          g(work, "clone", "-q", "--branch", branch, remote, ".");
-          g(work, "config", "user.name", "VM");
-          g(work, "config", "user.email", "vm@example.com");
-          for (const [path, content] of Object.entries(files)) {
-            mkdirSync(dirname(join(work, path)), { recursive: true });
-            writeFileSync(join(work, path), content);
-          }
-          g(work, "add", "-A");
-          g(work, "commit", "-q", "-m", "work on the machine");
-          g(work, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
-        }
-        return { output: `${files ? "ainb-committed\n" : ""}ainb-pushed def5678\n`, status: 0 };
-      }
-      return undefined;
+      const dir = command.match(/^cd '(\/root\/[^']+)'$/m)?.[1];
+      if (!dir) return undefined;
+      const credentials = nb.vm.read("/root/.ainb-git-credentials");
+      if (credentials) writeFileSync(join(root, ".ainb-git-credentials"), credentials);
+      if (command.includes("git push")) beforePush(onDisk(dir));
+      const result = spawnSync(bash, ["-s"], {
+        input: command.replaceAll("/root/", `${root}/`),
+        encoding: "utf8",
+        env: { ...process.env, GIT_CONFIG_GLOBAL: join(root, ".gitconfig") },
+        timeout: 15_000,
+      });
+      if (result.error) throw result.error;
+      if (existsSync(join(onDisk(dir), ".git", "HEAD"))) nb.vm.write(`${dir}/.git/HEAD`, fileText(join(onDisk(dir), ".git", "HEAD")));
+      return { output: result.stdout + result.stderr, status: result.status ?? 1 };
     };
-    return seen;
+    return { seen, onDisk };
   }
 
   it("clones the chat's branch there with OpenResearch's token, and brings the work back after each turn", async () => {
     const p = orx.addProject("Remote", { code: { "src/train.py": "lr = 0.1\n" }, git: true });
     const remote = orx.remotes.get(p.id)!;
     const { nb, ext, chatId } = await open("colab:/drive/remote", { projectId: p.id, settings: { scope: "auto", review: false } });
-    let next: Record<string, string> | null = { "src/train.py": "lr = 0.05\n", "notes/run.md": "# Run\n" };
-    const seen = machine(nb, remote, () => {
-      const c = next;
-      next = null;
-      return c;
+    let next = true;
+    const { seen } = machine(nb, (dir) => {
+      if (!next) return;
+      next = false;
+      writeFileSync(join(dir, "src", "train.py"), "lr = 0.05\n");
+      mkdirSync(join(dir, "notes"), { recursive: true });
+      writeFileSync(join(dir, "notes", "run.md"), "# Run\n");
     });
     const text = await turn(ext, chatId, "ECHO_PROJECT");
     // The agent is told where the code is.
-    expect(text).toMatch(/<project-code>\nThe project's code is cloned on the notebook's machine at \/content\/remote: git, branch notebook\/test-\w+/);
+    const dir = text.match(/<project-code>\nThe project's code is cloned on the notebook's machine at (\/root\/\.ainb-projects\/[\da-f]{32}-remote): git, branch notebook\/test-\w+/)?.[1];
+    expect(dir).toBeDefined();
     // The chat's branch is on "GitHub", in a worktree the bridge made (no OpenResearch session behind it).
     const wt = worktreePath(p.id, "colab:/drive/remote");
     const branch = g(wt, "branch", "--show-current");
@@ -383,7 +460,7 @@ describe("the project's code on the notebook's machine", () => {
     expect(g(remote, "branch", "--list", branch)).toContain(branch);
     // The machine clones it, signed in by a file the token goes to; the token is in no command.
     const clone = seen.find((c) => c.includes("git clone"))!;
-    expect(clone).toContain(`git clone -q --branch '${branch}' 'https://github.com/test/remote.git' '/content/remote'`);
+    expect(clone).toContain(`git clone -q --branch '${branch}' 'https://github.com/test/remote.git' '${dir}'`);
     expect(clone).toContain("credential.helper 'store --file=/root/.ainb-git-credentials'");
     expect(nb.vm.read("/root/.ainb-git-credentials")).toBe(`https://x-access-token:${TOKEN_GH}@github.com\n`);
     expect(seen.join("\n")).not.toContain(TOKEN_GH);
@@ -399,16 +476,60 @@ describe("the project's code on the notebook's machine", () => {
     expect(base[0]).toBe(g(p.repoPath, "rev-parse", "HEAD"));
     expect(base[1]).toBe("main");
     // The next turn does not clone again while the clone is there.
-    nb.vm.write("/content/remote/.git/HEAD", "ref: refs/heads/x\n");
     const before = seen.filter((c) => c.includes("git clone")).length;
     await turn(ext, chatId, "again");
     expect(seen.filter((c) => c.includes("git clone"))).toHaveLength(before);
+    // Nor does it run a script to look at the clone: one small read tells it is still on the branch.
+    expect(seen.filter((c) => c.includes("ainb-ready"))).toHaveLength(1);
     // What the agent reads never shows the token.
     nb.vm.write("/content/leak.txt", `token=${TOKEN_GH}\n`);
     const read = await turn(ext, chatId, script([{ tool: "Read", args: { file_path: "/content/leak.txt" } }]));
     expect(read).toContain("token=***");
     expect(read).not.toContain(TOKEN_GH);
     ext.close();
+  });
+
+  it("isolates two notebook checkouts and syncs after the agent crashes", async () => {
+    const p = orx.addProject("Shared VM", { code: { "base.txt": "base\n" }, git: true });
+    const aKey = "colab:/drive/shared-vm-a";
+    const bKey = "colab:/drive/shared-vm-b";
+    const a = await open(aKey, { projectId: p.id });
+    const b = await open(bKey, { projectId: p.id, ext: a.ext });
+    b.nb.vm = a.nb.vm;
+    const { seen, onDisk } = machine(a.nb);
+    try {
+      const vmPath = (text: string) => text.match(/at (\/root\/\.ainb-projects\/[^:]+): git/)![1]!;
+      const path = (text: string) => onDisk(vmPath(text));
+      const aText = await turn(a.ext, a.chatId, "ECHO_PROJECT");
+      const aDir = path(aText);
+      const bDir = path(await turn(b.ext, b.chatId, "ECHO_PROJECT"));
+      expect(aDir).not.toBe(bDir);
+      expect(new Set(a.nb.vm.shells.keys()).size).toBe(2);
+      writeFileSync(join(aDir, "a.txt"), "A\n");
+      writeFileSync(join(bDir, "b.txt"), "B\n");
+      await turn(a.ext, a.chatId, "CRASH");
+      const aWorktree = worktreePath(p.id, aKey);
+      const bWorktree = worktreePath(p.id, bKey);
+      await a.ext.waitFor(() => existsSync(join(aWorktree, "a.txt")), 15_000, "sync after crash");
+      expect(existsSync(join(aWorktree, "b.txt"))).toBe(false);
+      expect(existsSync(join(bWorktree, "a.txt"))).toBe(false);
+      const aBranch = g(aDir, "branch", "--show-current");
+      g(aDir, "checkout", "-qb", "unexpected");
+      // The simulated machine's files follow the real checkout only when a script runs: show it the new HEAD.
+      a.nb.vm.write(`${vmPath(aText)}/.git/HEAD`, fileText(join(aDir, ".git", "HEAD")));
+      const pushes = () => seen.filter((command) => command.includes("git push")).length;
+      const before = pushes();
+      // The agent is told which branch the checkout is on and how to get back, not that a clone failed.
+      const told = (await turn(a.ext, a.chatId, "ECHO_PROJECT")).replace(/\s+/g, " ");
+      expect(told).toContain("is on unexpected, not on the branch of this chat");
+      expect(told).toContain(`checkout ${aBranch}`);
+      expect(told).not.toContain("Could not clone");
+      expect(pushes()).toBe(before);
+      expect(g(aDir, "branch", "--show-current")).toBe("unexpected");
+      expect(g(orx.remotes.get(p.id)!, "rev-parse", aBranch)).toBe(g(aWorktree, "rev-parse", "HEAD"));
+    } finally {
+      a.ext.close();
+    }
   });
 
   it("tells the agent the code stays read-only when the project has no GitHub repository", async () => {

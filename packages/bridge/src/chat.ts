@@ -40,11 +40,11 @@ import { ShellSessions } from "./notebook/shell.js";
 import { callTool, Denied, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
 import { PROJECT_TOOLS, saveNotebook, type ProjectToolContext } from "./project/tools.js";
 import { redactTokens, remoteOf } from "./project/github.js";
-import { CodeSync } from "./project/vmrepo.js";
-import type { ProjectBrief, ProjectLinks, ProjectResolution } from "./research/links.js";
+import { CodeSync, type CodePlace } from "./project/vmrepo.js";
+import { cacheOf as projectCache, type ProjectBrief, type ProjectLinks, type ProjectResolution } from "./research/links.js";
 import type { ProjectCache } from "./store.js";
 import { ensureWorktree } from "./project/worktree.js";
-import { describeFailure, type OrxProject, type ResearchProjects } from "./research/projects.js";
+import { describeFailure, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
 
 /** How the chat reaches its notebook and the chat UI. */
@@ -127,7 +127,7 @@ export class Chat {
   /** Recap to hand a session that joins mid-conversation. */
   private pendingRecap = "";
   private current: ChatMessage | null = null;
-  private turn: { controller: AbortController; prompting: boolean } | null = null;
+  private turn: { controller: AbortController; prompting: boolean; project: ProjectCache | null; code: CodePlace | null } | null = null;
   private queue: string[] = [];
   private turnTargets: string[] = [];
   private reviews = new Map<string, ReviewState>();
@@ -161,12 +161,11 @@ export class Chat {
   private lastProjectNote = "";
   /** The notebook moved to another project: the agent gets the new one's full context. */
   private projectMoved = false;
+  private projectRevision = 0;
   /** Artifacts this chat wrote (it may replace them without asking). */
   private readonly createdArtifacts = new Set<string>();
   /** The project's code on the notebook's machine (a clone of the chat's branch). */
   private readonly code: CodeSync | null;
-  /** The project as OpenResearch last described it. */
-  private lastOrx: ProjectCache | null = null;
   /** What the agent was last told about the code, and what the user was. */
   private lastCodeNote = "";
   private lastCodeShown = "";
@@ -316,7 +315,7 @@ export class Chat {
   private async runTurn(text: string): Promise<void> {
     const reply = this.newMessage("agent", []);
     this.current = reply;
-    const turn = { controller: new AbortController(), prompting: false };
+    const turn: NonNullable<Chat["turn"]> = { controller: new AbortController(), prompting: false, project: null, code: null };
     this.turn = turn;
     this.setStatus("running");
     try {
@@ -335,7 +334,6 @@ export class Chat {
         this.addPart(reply, { type: "notice", level: "info", text: `The agent stopped early (${res.stopReason}). Say "continue" to go on.` });
       }
       this.setStatus("idle");
-      void this.syncCode(firstLine(text, 72));
     } catch (e) {
       if (this.closed) return;
       const msg = (e as Error).message ?? String(e);
@@ -349,6 +347,7 @@ export class Chat {
         this.addPart(reply, { type: "notice", level: "error", text: capText(this.error ?? msg, 2000) });
       }
     } finally {
+      if (turn.prompting && turn.code) void this.syncCode(turn.code, firstLine(text, 72));
       this.closeOpenTools(reply);
       this.current = null;
       this.turn = null;
@@ -364,6 +363,8 @@ export class Chat {
   }
 
   private async buildPrompt(text: string): Promise<string> {
+    const rules = this.sessionFresh || this.rulesDue;
+    const project = await this.projectBlock(rules || !!this.pendingRecap);
     let cells: CellInfo[] | null = null;
     let file: string | null = null;
     try {
@@ -381,7 +382,6 @@ export class Chat {
           ? [this.notebook.activeCellId]
           : [];
     const blocks: string[] = [];
-    const rules = this.sessionFresh || this.rulesDue;
     if (rules) blocks.push(playbook(this.notebook, file, !!this.host.project));
     this.rulesDue = false;
     if (this.pendingRecap) blocks.push(this.pendingRecap);
@@ -393,7 +393,6 @@ export class Chat {
     const outline = cells ? JSON.stringify(cells.map((c) => [c.id, c.type, c.source])) : "";
     const unchanged = !!cells && !rules && !this.pendingRecap && outline === this.lastOutline;
     this.lastOutline = outline;
-    const project = await this.projectBlock(rules || !!this.pendingRecap);
     if (project) blocks.push(project);
     const code = await this.codeBlock(rules || !!this.pendingRecap);
     if (code) blocks.push(code);
@@ -412,32 +411,46 @@ export class Chat {
    * its last message, else nothing. Never waits on OpenResearch to start.
    */
   private async projectBlock(full: boolean): Promise<string | null> {
-    if (!this.host.project) return null;
-    const res = await this.host.project.resolve(false).catch((e): ProjectResolution | null => {
-      if (this.project) this.project = { ...this.project, state: "unavailable", error: describeFailure(e) };
+    const turn = this.turn;
+    const host = this.host.project;
+    if (!host || !turn) return null;
+    let revision = this.projectRevision;
+    let moved = this.projectMoved;
+    const cached = host.cached();
+    let project = this.project;
+    const res = await host.resolve(false).catch((e): ProjectResolution | null => {
+      if (project) project = { ...project, state: "unavailable", error: describeFailure(e) };
       return null;
     });
-    if (res) this.setProject(res);
-    this.lastOrx = res?.orx ? { id: res.orx.id, name: res.orx.name, repoPath: res.orx.repoPath, githubUrl: res.orx.githubUrl ?? null, artifactsDir: res.orx.artifactsDir } : this.host.project?.cached() ?? null;
+    if (res) {
+      project = res.project;
+      if (revision === this.projectRevision) {
+        this.setProject(res);
+        // A move this answer itself showed (Scratch was replaced) is told in this turn's brief.
+        moved = this.projectMoved;
+        revision = this.projectRevision;
+      }
+    }
+    turn.project = usableProject(res?.orx, project, cached);
     if (res?.orx) {
       try {
         // Told once (again after a compaction or a move); changes later are the user's to mention.
         let text: string | null = null;
-        if (full || this.projectMoved || this.lastBrief?.id !== res.orx.id) {
-          const brief = await this.host.project.links.brief(res.orx);
-          const note = this.projectMoved ? `The user moved this notebook to the project ${brief.name}. What you were told about another project no longer applies.` : undefined;
+        if (full || moved || this.lastBrief?.id !== res.orx.id) {
+          const brief = await host.links.brief(res.orx);
+          const note = moved ? `The user moved this notebook to the project ${brief.name}. What you were told about another project no longer applies.` : undefined;
           text = projectContext(brief, note);
           this.lastBrief = brief;
         }
-        this.projectMoved = false;
+        if (revision === this.projectRevision) this.projectMoved = false;
         this.lastProjectNote = "";
         return text;
       } catch (e) {
-        if (this.project) this.project = { ...this.project, state: "unavailable", error: describeFailure(e) };
+        if (project) project = { ...project, state: "unavailable", error: describeFailure(e) };
       }
     }
-    if (!this.project) return null;
-    const note = projectUnavailable(this.project);
+    if (!project) return null;
+    const note = projectUnavailable(project);
     if (!full && note === this.lastProjectNote) return null;
     this.lastProjectNote = note;
     return note;
@@ -449,8 +462,9 @@ export class Chat {
    * is told where, when that changes; the user sees it once.
    */
   private async codeBlock(full: boolean): Promise<string | null> {
-    const orx = this.lastOrx;
-    if (!this.code || !orx || !this.notebookKey) return null;
+    const turn = this.turn;
+    const orx = turn?.project;
+    if (!this.code || !turn || !orx || !this.notebookKey) return null;
     const key = this.notebookKey;
     const title = this.notebook?.title?.replace(/\.ipynb$/i, "") || "notebook";
     if (!this.code.current && remoteOf(orx)) this.show("Putting the project's code on the notebook's machine…", "preparing");
@@ -462,6 +476,7 @@ export class Chat {
     let note: string;
     if (st.state === "ready") {
       const p = st.place;
+      turn.code = p;
       note = [
         "<project-code>",
         `The project's code is cloned on the notebook's machine at ${p.dir}: git, branch ${p.branch}, remote origin on GitHub (signed in, you may push this branch).`,
@@ -487,18 +502,23 @@ export class Chat {
   }
 
   /** After a turn: what changed on the machine goes to the branch and the user's computer. */
-  private async syncCode(subject: string): Promise<void> {
-    if (!this.code?.current) return;
-    const r = await this.code.syncBack(`Notebook chat: ${subject}`).catch((e: Error) => ({ changed: false, text: `Could not save the code from the notebook's machine: ${e.message}` }));
-    if (this.closed || !r) return;
+  private async syncCode(place: CodePlace, subject: string): Promise<void> {
+    if (!this.code) return;
+    const r = await this.code.syncBack(place, `Notebook chat: ${subject}`, () => {
+      if (!this.closed) this.system(`Pushing the code from the notebook's machine is taking longer than usual (terminal session "${place.session}").`);
+    }).catch((e: Error) => ({ changed: false, text: `Could not save the code from the notebook's machine: ${e.message}` }));
+    if (r.changed) this.host.project?.links.markDirty(place.projectId);
+    if (this.closed) return;
     if (r.text) this.system(r.text);
-    if (r.changed && this.project?.id) this.host.project?.links.markDirty(this.project.id);
   }
 
   /** The project as OpenResearch just described it; a change reaches the chat UI. */
   setProject(res: ProjectResolution, moved = false): void {
     const before = this.project;
-    if (moved || (before?.id && res.project.id && before.id !== res.project.id)) this.projectMoved = true;
+    if (moved || (before?.id && res.project.id && before.id !== res.project.id)) {
+      this.projectMoved = true;
+      this.projectRevision++;
+    }
     this.project = res.project;
     if (res.notice) this.system(res.notice);
     if (JSON.stringify(before) !== JSON.stringify(res.project)) this.host.emit("chat.snapshot", this.snapshot());
@@ -513,22 +533,29 @@ export class Chat {
     if (!host) throw new Denied("This chat has no project: its notebook has no stable address.");
     const res = await host.resolve(true);
     this.setProject(res);
-    if (res.orx) return { id: res.orx.id, name: res.orx.name, repoPath: res.orx.repoPath, githubUrl: res.orx.githubUrl ?? null, artifactsDir: res.orx.artifactsDir };
     const p = res.project;
+    const usable = usableProject(res.orx, p, host.cached());
+    if (usable) return usable;
     if (p.state === "missing") throw new Denied(p.error ?? `The project ${p.name} no longer exists.`);
-    const cached = host.cached();
-    if (cached) return cached;
     throw new Denied(`The project is not available right now: ${p.error ?? "OpenResearch is not running."}`);
   }
 
-  private projectToolContext(): ProjectToolContext {
+  private projectToolContext(turn = this.turn): ProjectToolContext {
     const host = this.host.project;
     if (!host) throw new Denied("This chat has no project: its notebook has no stable address.");
     const ctx = this.toolContext();
     return Object.assign(ctx, {
       research: host.research,
       links: host.links,
-      project: () => this.requireProject(),
+      notebookKey: this.notebookKey,
+      project: async () => {
+        // A turn stays in the project it started in, even if the notebook is moved meanwhile.
+        if (turn?.project) return turn.project;
+        // Not there when the turn started (OpenResearch was still starting): wait for it now.
+        const project = await this.requireProject();
+        if (turn) turn.project ??= project;
+        return project;
+      },
       created: this.createdArtifacts,
       confirm: async (summary: string, detail: string, yes: string, no: string) => {
         const answer = await this.ask(summary, detail, [
@@ -559,7 +586,8 @@ export class Chat {
 
   /** "Save notebook to project" in the chat. */
   async saveNotebookNow(): Promise<string> {
-    const r = await saveNotebook(this.projectToolContext(), { user: true });
+    if (!this.notebookKey) throw new Denied("This chat has no project: its notebook has no stable address.");
+    const r = await saveNotebook(this.projectToolContext(null), { user: { notebookKey: this.notebookKey } });
     this.system(`Saved the notebook to ${r.path} in ${r.project.name}.`);
     return r.path;
   }
@@ -1168,6 +1196,17 @@ interface SentPart {
   text?: string;
   json?: string;
   image?: Extract<Part, { type: "image" }>;
+}
+
+/**
+ * The project the tools work in: OpenResearch's record when it answered, else
+ * what the notebook kept of that same project (not of one it was in before);
+ * null when the project is gone or was never seen.
+ */
+function usableProject(orx: ProjectResolution["orx"], project: ChatProject | undefined, cached: ProjectCache | null): ProjectCache | null {
+  if (orx) return projectCache(orx);
+  if (!project || project.state === "missing") return null;
+  return cached && cached.id === project.id ? cached : null;
 }
 
 function findTool(msg: ChatMessage, id: string) {

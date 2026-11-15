@@ -107,13 +107,13 @@ Mỗi notebook thuộc về **một project** của OpenResearch. Notebook chưa
   - project đã từng mở thì bridge nhớ đường dẫn repo, GitHub và thư mục artifacts của nó, nên đồng bộ code và shared artifacts vẫn chạy khi OpenResearch tắt.
 - **Code của project nằm trên máy notebook** (project phải có repo GitHub). Agent sống trên VM và không đụng tới máy bạn:
   - Trước lượt chat đầu tiên, bridge tự tạo (bằng `git worktree add`) cho notebook chat một **nhánh riêng** `notebook/<tên>-<mã>` trong một **worktree riêng** ở `~/.agent-in-notebook/worktrees/`, rồi đẩy nhánh lên GitHub.
-  - Bridge đặt **token GitHub của OpenResearch** (`gh auth token`) lên VM, vào một file chỉ git đọc (`~/.ainb-git-credentials`). Token không đi qua cell hay cuộc chat, và được che thành `***` trong mọi thứ agent đọc. Sau đó VM `git clone` nhánh đó vào thư mục làm việc (ví dụ `/content/<repo>`), ở phiên terminal `project`.
+  - Bridge đặt **token GitHub của OpenResearch** (`gh auth token`) lên VM, vào file `~/.ainb-git-credentials` mà Git dùng để xác thực. VM clone nhánh đó vào một checkout riêng dưới `~/.ainb-projects/`, trong một phiên terminal riêng. Chat hiển thị đường dẫn checkout.
   - Agent sửa, chạy và commit code ngay trên VM bằng tool quen thuộc của nó; cần nhánh khác thì tự `git fetch`. Shared artifacts và kết quả thử nghiệm thì qua tool `project` của bridge.
   - **Sau mỗi lượt**, VM commit phần còn lại và push nhánh; bridge kéo về worktree trên máy bạn. Mục **Chat Worktree** ở thanh bên phải hiện worktree đó; nút **Changes** liệt kê file đã đổi. File trên 50 MB ở lại trên VM.
   - Colab bị thay máy mới thì lượt sau tự clone lại. Phần chưa push trên máy cũ thì mất.
   - Kaggle cần bật Internet trong cài đặt notebook thì mới clone được.
   - Project không có GitHub (như Scratch): code không lên máy notebook; chat vẫn dùng được shared artifacts.
-- **Save to project** (nút dưới ô chat, hoặc lệnh trong Command Palette): lưu notebook kèm output vào artifacts của project. Muốn chat Research làm tiếp thì mở một chat Research trong project; nó thấy nhánh `notebook/…` và notebook đã lưu.
+- **Save to project** (nút dưới ô chat, hoặc lệnh trong Command Palette): lưu notebook kèm output vào artifacts của project. Nếu tên file đã thuộc về notebook khác hoặc là bản lưu cũ chưa có danh tính, bản lưu mới dùng tên có hậu tố riêng. Muốn chat Research làm tiếp thì mở một chat Research trong project; nó thấy nhánh `notebook/…` và notebook đã lưu.
 - **Kernel Environment** theo project: mỗi project có thể có script riêng. Notebook chạy script của project mình, không có thì chạy script chung.
 - **Settings › Agents**: nút **Copy from research chats** thêm vào chat Notebook các agent ACP đã thêm trong OpenResearch. New Chat báo khi OpenResearch thấy agent chưa đăng nhập.
 - Biến môi trường của OpenResearch không bao giờ được gửi lên máy notebook.

@@ -57,7 +57,7 @@ const KERNELS: Record<string, { name: string; display_name: string }> = {
 };
 
 /** The editor's cells (with outputs) as the text of an .ipynb file, laid out as Jupyter saves it. */
-export function toIpynb(cells: CellInfo[], language: string): string {
+export function toIpynb(cells: CellInfo[], language: string, notebookOwner?: string): string {
   const lang = (language || "python").toLowerCase();
   const kernel = KERNELS[lang] ?? { name: lang, display_name: language };
   const nb = {
@@ -73,7 +73,11 @@ export function toIpynb(cells: CellInfo[], language: string): string {
           }
         : { cell_type: "markdown", id: c.id, metadata: {}, source: toLines(c.source) },
     ),
-    metadata: { kernelspec: { ...kernel, language: lang }, language_info: { name: lang } },
+    metadata: {
+      ...(notebookOwner ? { agent_in_notebook: { notebook: notebookOwner } } : {}),
+      kernelspec: { ...kernel, language: lang },
+      language_info: { name: lang },
+    },
     nbformat: 4,
     nbformat_minor: 5,
   };

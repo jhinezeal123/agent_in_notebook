@@ -42,6 +42,9 @@ export async function runInSession(
   session: string,
   script: string,
   waitMs: number,
+  /** Called when `waitMs` passed and the script still runs; it is then watched for `extraWaitMs` more. */
+  onWaiting?: () => void,
+  extraWaitMs = 180_000,
 ): Promise<SetupResult> {
   const info = (await call({ op: "info" })) as NotebookInfo;
   if (!reachable(info)) throw new Error(`This notebook's kernel runs ${info.language}; the setup runs only through a Python kernel.`);
@@ -55,7 +58,13 @@ export async function runInSession(
     if (sh.state === "running") throw new Error(`The previous ${session === SETUP_SESSION ? "setup" : "command"} is still running on the notebook's machine (terminal session "${session}").`);
     await sh.start(exec, script);
     const cmd = sh.command!;
-    const { paused } = await sh.pollUntil(exec, () => !!cmd.end, deadline);
+    let { paused } = await sh.pollUntil(exec, () => !!cmd.end, deadline);
+    if (onWaiting && !cmd.end && sh.state !== "exited") {
+      onWaiting();
+      // A background sync still needs to fetch the commit when the push ends,
+      // but never waits without end: later turns queue behind it.
+      ({ paused } = await sh.pollUntil(exec, () => !!cmd.end, Date.now() + extraWaitMs));
+    }
     const report = sh.report(paused);
     const running = !cmd.end;
     return { output: (report.full ?? report.text).trimEnd(), exitCode: running ? null : (cmd.status ?? null), running };
