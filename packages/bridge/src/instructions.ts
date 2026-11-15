@@ -3,7 +3,7 @@
 // channel); a short context block rides every turn, so mode changes reach the
 // agent without restarting it.
 
-import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type CellInfo, type ChatMessage, type ChatProject, type ChatSettings, type NotebookInfo } from "@ainb/protocol";
+import { capText, firstLine, SCOPE_HINT, SCOPE_LABEL, type CellInfo, type CellRun, type ChatMessage, type ChatProject, type ChatSettings, type MachineStats, type NotebookInfo } from "@ainb/protocol";
 import type { ProjectBrief } from "./research/links.js";
 
 const PLATFORM_NAME = { colab: "Google Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
@@ -23,11 +23,12 @@ You are helping the user with a ${where} notebook open in ${editor}. You work on
 - The notebook is ${nbFile}, kept in step with ${editor}: Read shows it as cells with their outputs, current even while a cell runs; Edit changes text inside a cell; NotebookEdit replaces, inserts, deletes or moves cells; Write replaces it whole (.ipynb JSON). Commands may change the file too (nbformat, jupytext, jq); the change reaches ${editor}. Cells are matched by their ids: keep them.
 - run_cells, run_all, wait_for_cells, interrupt_kernel: run the notebook's cells. read_output pages through a long output.
 - run_code, wait_for_code: run code on the kernel, with the notebook's variables, without adding a cell.
+- kernel_state: inspect the Python kernel's current variables (type, shape/length, size, device), without guessing what earlier cells defined.
 - await_review: wait for the user's decision on a change awaiting review.${colab}
 
 Rules:
 1. Any shell or file tools of your own act on the user's computer, not on the notebook's machine. Use the notebook server's tools.
-2. Read the notebook before changing it; the user edits it too.
+2. Read the notebook before changing it; the user edits it too. <notebook-context> says which cells were edited since they last ran and what the user ran since your last turn; trust it over the outputs you remember.
 3. Follow the mode given in <notebook-context>. The tools refuse what the mode forbids; do not work around a refusal, tell the user what you would do instead.
 4. With review on, every change to the notebook is shown to the user as a diff, and commands wait for approval. A rejected change was not applied: do not retry it unchanged.
 5. Steps the notebook needs in order to run again from the top (installs it imports, downloads it reads, data preparation) go in its cells, shell commands prefixed with "!"; everything else can happen in the terminal.
@@ -40,9 +41,54 @@ Rules:
 
 const OUTLINE_MAX_CELLS = 80;
 
+export function runState(cells: CellInfo[]): string[] {
+  const code = cells.filter((c) => c.type === "code");
+  const refs = (list: CellInfo[]) => list.map((c) => `[${c.index}] ${c.id}`).join(", ");
+  const lines: string[] = [];
+  const running = code.filter((c) => c.running);
+  if (running.length) lines.push(`Running now: ${refs(running)}`);
+  const stale = code.filter((c) => c.stale);
+  if (stale.length) lines.push(`Edited since they last ran (what they define may be out of date): ${refs(stale)}`);
+  for (let i = 1; i < code.length; i++) {
+    const before = code[i - 1]!;
+    const after = code[i]!;
+    if (before.executionCount != null && after.executionCount != null && after.executionCount < before.executionCount) {
+      lines.push(`Executed out of top-to-bottom order: [${after.index}] ran before [${before.index}].`);
+      break;
+    }
+  }
+  const latest = code.reduce<CellInfo | undefined>((best, c) => c.executionCount != null && (best?.executionCount == null || c.executionCount > best.executionCount) ? c : best, undefined);
+  if (latest) {
+    const notRun = code.filter((c) => c.executionCount == null && c.index < latest.index);
+    if (notRun.length) lines.push(`Not run, above cells that ran: ${refs(notRun.slice(0, 10))}${notRun.length > 10 ? `, … ${notRun.length - 10} more` : ""}`);
+  }
+  return lines;
+}
+
+export function machineLine(m: MachineStats, now: number): string | null {
+  const gb = (n: number) => (n / 1_000_000_000).toFixed(n >= 100_000_000_000 ? 0 : 1);
+  const parts: string[] = [];
+  if (m.memTotal !== undefined && m.memAvailable !== undefined && m.memTotal > 0) {
+    const low = m.memAvailable < m.memTotal * 0.1;
+    parts.push(`RAM ${gb(m.memTotal - m.memAvailable)} of ${gb(m.memTotal)} GB used${low ? " · LOW MEMORY" : ""}`);
+  }
+  if (m.diskTotal !== undefined && m.diskFree !== undefined && m.diskTotal > 0) {
+    const low = m.diskFree < m.diskTotal * 0.05;
+    parts.push(`disk ${gb(m.diskTotal - m.diskFree)} of ${gb(m.diskTotal)} GB used${low ? " · DISK NEARLY FULL" : ""}`);
+  }
+  const gpu = m.gpus?.[0];
+  if (gpu && gpu.memTotal > 0) {
+    const low = gpu.memUsed > gpu.memTotal * 0.9;
+    parts.push(`GPU ${gpu.name} ${gb(gpu.memUsed)} of ${gb(gpu.memTotal)} GB, ${Math.round(gpu.util)}% busy${low ? " · GPU MEMORY NEARLY FULL" : ""}`);
+  }
+  if (!parts.length) return null;
+  const minutes = Math.floor((now - m.at) / 60_000);
+  return `Machine: ${parts.join(" · ")}${minutes >= 1 ? ` (read ${minutes} min ago)` : ""}`;
+}
+
 /** `outlineUnchanged`: the agent got this same outline with its previous message. */
 /** `file`: the notebook's file on its machine. */
-export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null, settings: ChatSettings, targets: string[], outlineUnchanged = false, file: string | null = null): string {
+export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null, settings: ChatSettings, targets: string[], outlineUnchanged = false, file: string | null = null, runLines: string[] | null = null, machine: string | null = null): string {
   if (!info) {
     return `<notebook-context>\nNo notebook is attached right now (the tab may have navigated or reloaded). Tools will fail until it is back.\n</notebook-context>`;
   }
@@ -51,9 +97,11 @@ export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null,
     `Kernel: ${info.kernel}. Language: ${info.language}.`,
     `Mode: ${SCOPE_LABEL[settings.scope]}. ${SCOPE_HINT[settings.scope]}${settings.review ? " Review is ON: each change waits for the user's approval." : ""}`,
   ];
+  if (machine) lines.splice(2, 0, machine);
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.length ? targets.join(", ") : "none — ask the user to select one"}.`);
   if (settings.notebookOnly) lines.push("Notebook only: requests to use your own tools on the user's computer (shell, file edits, web) are refused. Work through the notebook server's tools.");
   lines.push(`Active cell: ${info.activeCellId ?? "none"}.`);
+  if (runLines?.length) lines.push("Run state:", ...runLines);
   if (cells && outlineUnchanged) {
     lines.push(`Outline: ${cells.length} cells, unchanged since your previous message.`);
   } else if (cells) {
@@ -64,6 +112,31 @@ export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null,
     if (cells.length > OUTLINE_MAX_CELLS) lines.push(`… ${cells.length - OUTLINE_MAX_CELLS} more; Read the notebook file.`);
   }
   return `<notebook-context>\n${lines.join("\n")}\n</notebook-context>`;
+}
+
+export function runDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** The failed (or finished) cell behind a card action, with exactly what the agent needs. */
+export function cellRunBlock(action: "fix" | "explain" | "summarize", run: CellRun, rendered: string | null): string {
+  const after = run.durationMs === undefined ? "" : ` after ${runDuration(run.durationMs)}`;
+  const result = run.status === "error" ? "failed" : run.status === "interrupted" ? "was interrupted" : "finished";
+  const label = action === "fix" ? "Fix" : action === "explain" ? "Explain" : "Summarize result";
+  const happened = run.by === "agent"
+    ? `A cell you started earlier (cell [${run.index}], id ${run.cellId}) ${result}${after}. The user pressed "${label}".`
+    : `The user ran cell [${run.index}] (id ${run.cellId}) themselves; it ${result}${after}. They pressed "${label}".`;
+  const what = action === "fix"
+    ? "Find the cause and fix it in the notebook, following the current mode. Change only what the fix needs. Do not run anything the mode does not allow; say which cell to run again."
+    : action === "explain"
+      ? "Explain what went wrong and what would fix it. Change nothing."
+      : "Say what the run produced and whether it looks right (final metrics, warnings, anything unusual). Change nothing.";
+  const cell = rendered ?? `The cell could not be read now: ${run.ename ?? "Error"}${run.evalue ? `: ${run.evalue}` : ""}`;
+  return `<cell-run>\n${happened}\n${cell}\nWhat to do: ${what}\nAnswer in the language the user has been writing in this chat; if they have not written yet, in English.\n</cell-run>`;
 }
 
 /**

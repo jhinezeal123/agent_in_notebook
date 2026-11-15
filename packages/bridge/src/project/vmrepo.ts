@@ -50,6 +50,8 @@ export type CodeState =
   | { state: "error"; why: string };
 
 export interface SyncResult {
+  /** False when saving failed or is still busy; autosave retries quietly. */
+  ok: boolean;
   /** Something was committed or pushed. */
   changed: boolean;
   /** Short, for the chat. */
@@ -255,20 +257,20 @@ export class CodeSync {
       try {
         r = await runInSession(this.call, this.target, place.session, script, PUSH_WAIT_MS, onWaiting, PUSH_EXTRA_WAIT_MS);
       } catch (e) {
-        return { changed: false, text: `Could not save the code from the notebook's machine: ${(e as Error).message}` };
+        return { ok: false, changed: false, text: `Could not save the code from the notebook's machine: ${(e as Error).message}` };
       }
       const out = redact(r.output, token);
       const bigs = [...out.matchAll(/^ainb-big (.+)$/gm)].map((m) => m[1]!.trim());
       const note = bigs.length ? ` Left on the machine (over ${BIG_MB} MB): ${bigs.slice(0, 10).join(", ")}${bigs.length > 10 ? "…" : ""}.` : "";
-      if (r.running) return { changed: false, text: `Pushing the code from the notebook's machine is still not done; it goes on there (terminal session "${place.session}"). What it pushes reaches this computer after a later message.` };
+      if (r.running) return { ok: false, changed: false, text: `Pushing the code from the notebook's machine is still not done; it goes on there (terminal session "${place.session}"). What it pushes reaches this computer after a later message.` };
       const problem = checkoutProblem(out);
-      if (problem) return { changed: false, text: `The code on the notebook's machine was not saved. ${problem}` };
+      if (problem) return { ok: false, changed: false, text: `The code on the notebook's machine was not saved. ${problem}` };
       if (r.exitCode !== 0 || !/ainb-pushed/.test(out)) {
         if (/no such file or directory/i.test(out) && out.includes(place.dir)) {
           // The machine was replaced: ensure() clones the branch again next turn.
-          return { changed: false, text: "The project's code is no longer on the notebook's machine (it was restarted). It is cloned again on the next message; what was not pushed before is lost." };
+          return { ok: false, changed: false, text: "The project's code is no longer on the notebook's machine (it was restarted). It is cloned again on the next message; what was not pushed before is lost." };
         }
-        return { changed: false, text: `Could not push the code from the notebook's machine:\n${capText(out, 1200)}` };
+        return { ok: false, changed: false, text: `Could not push the code from the notebook's machine:\n${capText(out, 1200)}` };
       }
       let before = "";
       try {
@@ -277,11 +279,11 @@ export class CodeSync {
         if (await git(place.worktree, ["branch", "--show-current"]) !== place.branch) throw new Error(`Check out ${place.branch} in the local worktree.`);
         await git(place.worktree, ["merge", "-q", "--ff-only", "FETCH_HEAD"]);
       } catch (e) {
-        return { changed: true, text: `The code was pushed to GitHub (branch ${place.branch}), but not brought into the worktree on this computer: ${(e as Error).message}` };
+        return { ok: false, changed: true, text: `The code was pushed to GitHub (branch ${place.branch}), but not brought into the worktree on this computer: ${(e as Error).message}` };
       }
       const after = await git(place.worktree, ["rev-parse", "HEAD"]).catch(() => before);
       const changed = after !== before;
-      return { changed, text: changed ? `Saved the code from the notebook's machine to branch ${place.branch}.${note}` : note.trim() };
+      return { ok: true, changed, text: changed ? `Saved the code from the notebook's machine to branch ${place.branch}.${note}` : note.trim() };
     });
   }
 

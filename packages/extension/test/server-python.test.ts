@@ -118,7 +118,7 @@ describe("machine_exec", () => {
       showReview: () => ({ decided: new Promise(() => {}), resolve: () => {} }),
       onSelectionChange: () => {},
     };
-    return { runner: new OpRunner(a, () => {}), executed };
+    return { runner: new OpRunner(a, () => {}, { pollMs: null }), executed };
   };
 
   it("goes through the server's terminal when there is one, else the kernel", async () => {

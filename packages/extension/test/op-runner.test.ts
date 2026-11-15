@@ -1,12 +1,12 @@
 // OpRunner with an in-memory adapter: review bookkeeping, run sequencing, guards.
 
-import { describe, expect, it } from "vitest";
-import type { CellInfo, CellType, NotebookEvent, NotebookInfo, ReviewInfo, RunResult } from "@ainb/protocol";
+import { describe, expect, it, vi } from "vitest";
+import type { CellInfo, CellOutput, CellType, NotebookEvent, NotebookInfo, ReviewInfo, RunResult } from "@ainb/protocol";
 import { OpRunner, OutputCollector, type Execution, type NotebookAdapter } from "@ainb/protocol";
 
 class MemoryAdapter implements NotebookAdapter {
   readonly platform = "jupyter" as const;
-  cells: { id: string; type: CellType; source: string }[] = [
+  cells: { id: string; type: CellType; source: string; running?: boolean; executionCount?: number | null; outputs?: CellOutput[] }[] = [
     { id: "a", type: "code", source: "x = 1" },
     { id: "b", type: "code", source: "raise ValueError()" },
     { id: "c", type: "code", source: "y = 2" },
@@ -14,12 +14,18 @@ class MemoryAdapter implements NotebookAdapter {
   shown: { review: ReviewInfo; decide: (accept: boolean) => void }[] = [];
   ran: string[] = [];
   slow = new Set<string>();
+  skip = new Set<string>();
+  editWhileRunning = new Map<string, string>();
+  failOutputs = false;
+  kernel: NotebookInfo["kernel"] = "idle";
   private n = 0;
+  private execution = 0;
 
   info(): NotebookInfo {
-    return { platform: "jupyter", title: "t", url: "u", cellCount: this.cells.length, activeCellId: "a", selectedCellIds: ["a"], kernel: "idle", language: "python" };
+    return { platform: "jupyter", title: "t", url: "u", cellCount: this.cells.length, activeCellId: "a", selectedCellIds: ["a"], kernel: this.kernel, language: "python" };
   }
-  getCells(opts: { cellIds?: string[] }): CellInfo[] {
+  getCells(opts: { cellIds?: string[]; includeOutputs?: boolean }): CellInfo[] {
+    if (this.failOutputs && opts.includeOutputs) throw new Error("outputs are reloading");
     const all = this.cells.map((c, index) => ({ ...c, index }));
     return opts.cellIds ? all.filter((c) => opts.cellIds!.includes(c.id)) : all;
   }
@@ -41,12 +47,21 @@ class MemoryAdapter implements NotebookAdapter {
   }
   async runCell(id: string, timeoutMs: number): Promise<RunResult> {
     this.ran.push(id);
+    if (this.skip.has(id)) return { cellId: id, status: "skipped", outputs: [], message: "not run for this test" };
+    const c = this.cells.find((x) => x.id === id)!;
+    c.running = true;
+    if (this.editWhileRunning.has(id)) c.source = this.editWhileRunning.get(id)!;
     if (this.slow.has(id)) {
       await new Promise((r) => setTimeout(r, timeoutMs + 5));
       return { cellId: id, status: "timeout", outputs: [] };
     }
-    const c = this.cells.find((x) => x.id === id)!;
-    return c.source.startsWith("raise") ? { cellId: id, status: "error", outputs: [{ kind: "error", ename: "ValueError", evalue: "" }] } : { cellId: id, status: "ok", outputs: [] };
+    c.running = false;
+    c.executionCount = ++this.execution;
+    const result: RunResult = c.source.startsWith("raise")
+      ? { cellId: id, status: "error", executionCount: c.executionCount, outputs: [{ kind: "error", ename: "ValueError", evalue: "" }] }
+      : { cellId: id, status: "ok", executionCount: c.executionCount, outputs: [] };
+    c.outputs = result.outputs;
+    return result;
   }
   executed: string[] = [];
   /** Code containing "slow" ends only when `finish` is called. */
@@ -82,7 +97,7 @@ class MemoryAdapter implements NotebookAdapter {
 function setup() {
   const adapter = new MemoryAdapter();
   const events: NotebookEvent[] = [];
-  const runner = new OpRunner(adapter, (e) => events.push(e));
+  const runner = new OpRunner(adapter, (e) => events.push(e), { pollMs: null });
   return { adapter, events, runner };
 }
 
@@ -136,11 +151,103 @@ describe("OpRunner", () => {
     expect(r.results[1]).toMatchObject({ status: "skipped", message: expect.stringContaining("awaits review") });
   });
 
+  it("emits cell_run before a run_cells result and clears skipped agent runs", async () => {
+    const { adapter, events, runner } = setup();
+    const result = await runner.run({ op: "run_cells", cellIds: ["a", "b"], timeoutMs: 5000, stopOnError: true }) as { results: RunResult[] };
+    expect(result.results.map((r) => r.status)).toEqual(["ok", "error"]);
+    const runs = events.flatMap((e) => e.type === "cell_run" ? [e.run] : []);
+    expect(runs.map((r) => [r.cellId, r.status, r.by])).toEqual([["a", "ok", "agent"], ["b", "error", "agent"]]);
+    expect(events.at(-1)?.type).toBe("cell_run");
+
+    adapter.skip.add("c");
+    await runner.run({ op: "run_cells", cellIds: ["c"], timeoutMs: 5000, stopOnError: true });
+    expect(runner.watcher.agentRuns.size).toBe(0);
+  });
+
+  it("marks a cell stale after its source changes and clears that on the next run", async () => {
+    const { runner } = setup();
+    await runner.run({ op: "run_cells", cellIds: ["a"], timeoutMs: 5000, stopOnError: true });
+    await runner.run({ op: "update_cell", cellId: "a", source: "x = 5", review: false });
+    let result = await runner.run({ op: "get_cells", summary: true }) as { cells: CellInfo[] };
+    expect(result.cells.find((c) => c.id === "a")?.stale).toBe(true);
+
+    await runner.run({ op: "run_cells", cellIds: ["a"], timeoutMs: 5000, stopOnError: true });
+    result = await runner.run({ op: "get_cells" }) as { cells: CellInfo[] };
+    expect(result.cells.find((c) => c.id === "a")?.stale).toBeUndefined();
+  });
+
+  it("marks a cell stale when its source changes during runCell", async () => {
+    const { adapter, runner } = setup();
+    adapter.editWhileRunning.set("a", "x = 99");
+    await runner.run({ op: "run_cells", cellIds: ["a"], timeoutMs: 5000, stopOnError: true });
+    const result = await runner.run({ op: "get_cells" }) as { cells: CellInfo[] };
+    expect(result.cells.find((c) => c.id === "a")?.stale).toBe(true);
+  });
+
+  it("does not fail a completed run when its outputs cannot be read", async () => {
+    const { adapter, events, runner } = setup();
+    adapter.failOutputs = true;
+    const first = await runner.run({ op: "run_cells", cellIds: ["a"], timeoutMs: 5000, stopOnError: true }) as { results: RunResult[] };
+    expect(first.results[0]?.status).toBe("ok");
+    expect(events.filter((e) => e.type === "cell_run")).toEqual([]);
+    expect(runner.watcher.agentRuns.size).toBe(0);
+
+    adapter.failOutputs = false;
+    adapter.cells[0]!.executionCount = 2;
+    runner.watcher.tick();
+    const runs = events.flatMap((e) => e.type === "cell_run" ? [e.run] : []);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.by).toBe("user");
+  });
+
   it("stops waiting when the time budget runs out", async () => {
     const { adapter, runner } = setup();
     adapter.slow.add("a");
     const r = (await runner.run({ op: "run_cells", cellIds: ["a", "c"], timeoutMs: 30, stopOnError: true })) as { results: RunResult[] };
     expect(r.results.map((x) => x.status)).toEqual(["timeout", "skipped"]);
+  });
+
+  it("stops its polling timer on dispose", async () => {
+    vi.useFakeTimers();
+    const adapter = new MemoryAdapter();
+    const runner = new OpRunner(adapter, () => {}, { pollMs: 10 });
+    try {
+      const reads = vi.spyOn(adapter, "getCells");
+      reads.mockClear();
+      await vi.advanceTimersByTimeAsync(35);
+      expect(reads.mock.calls.length).toBeGreaterThan(0);
+      runner.dispose();
+      reads.mockClear();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      runner.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits kernel_changed only when the adapter's kernel state changes", async () => {
+    vi.useFakeTimers();
+    const adapter = new MemoryAdapter();
+    const events: NotebookEvent[] = [];
+    const runner = new OpRunner(adapter, (event) => events.push(event), { pollMs: 10 });
+    try {
+      adapter.kernel = "disconnected";
+      await vi.advanceTimersByTimeAsync(10);
+      expect(events.filter((event) => event.type === "kernel_changed")).toEqual([{ type: "kernel_changed", kernel: "disconnected" }]);
+      adapter.kernel = "busy";
+      await vi.advanceTimersByTimeAsync(10);
+      adapter.kernel = "idle";
+      await vi.advanceTimersByTimeAsync(10);
+      expect(events.filter((event) => event.type === "kernel_changed")).toEqual([
+        { type: "kernel_changed", kernel: "disconnected" },
+        { type: "kernel_changed", kernel: "busy" },
+        { type: "kernel_changed", kernel: "idle" },
+      ]);
+    } finally {
+      runner.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("journals the agent's applied changes for undo, but not the user's own", async () => {

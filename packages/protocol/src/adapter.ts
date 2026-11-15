@@ -5,8 +5,10 @@ import {
   type AppliedChange,
   type CellInfo,
   type CellOutput,
+  type CellRunState,
   type CellType,
   type ExecResult,
+  type KernelState,
   type NotebookEvent,
   type NotebookInfo,
   type NotebookOp,
@@ -14,11 +16,14 @@ import {
   type RunResult,
 } from "./notebook.js";
 import { normalizeIpynbOutput } from "./outputs.js";
+import { RunWatcher } from "./run-watcher.js";
 
 export interface NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
   info(): NotebookInfo;
   getCells(opts: { cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean }): CellInfo[];
+  /** Run state of every code cell, cheaper than getCells. Without it the watcher uses getCells({}). */
+  runStates?(): CellRunState[];
   /** Returns false when the source was already equal. */
   setSource(cellId: string, source: string): boolean | Promise<boolean>;
   insertCell(index: number, type: CellType, source: string): Promise<string>;
@@ -63,6 +68,8 @@ export interface Execution {
 
 let reviewSeq = 0;
 
+const RUN_POLL_MS = 1000;
+
 /**
  * Runs NotebookOps against an adapter and owns the pending reviews. Every
  * change it applies for the agent is reported as `change_applied`, with what
@@ -71,15 +78,57 @@ let reviewSeq = 0;
 export class OpRunner {
   private reviews = new Map<string, { info: ReviewInfo; resolve(accept: boolean): void | Promise<void> }>();
   private readonly executions = new Executions();
+  readonly watcher: RunWatcher;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private lastKernel: KernelState | undefined;
 
   constructor(
     private readonly adapter: NotebookAdapter,
     private readonly emit: (e: NotebookEvent) => void,
+    opts: { pollMs?: number | null } = {},
   ) {
+    this.watcher = new RunWatcher({
+      states: () => adapter.runStates?.() ?? adapter.getCells({}).filter((c) => c.type === "code")
+        .map((c) => ({ cellId: c.id, running: !!c.running, executionCount: c.executionCount ?? null })),
+      cell: (id) => adapter.getCells({ cellIds: [id], includeOutputs: true })[0],
+      // Hashing a source must not convert every output (images) of a big notebook.
+      source: (id) => adapter.getCells({ cellIds: [id] })[0]?.source,
+      emit: (run) => this.emit({ type: "cell_run", run }),
+    });
+    // Prime before the first op so even a fast first run can be reported.
+    this.watcher.tick();
+    this.checkKernel();
+    const pollMs = opts.pollMs === undefined ? RUN_POLL_MS : opts.pollMs;
+    if (pollMs !== null) {
+      this.timer = setInterval(() => {
+        this.watcher.tick();
+        this.checkKernel();
+      }, pollMs);
+      (this.timer as unknown as { unref?(): void }).unref?.();
+    }
     adapter.onSelectionChange(() => {
       const info = adapter.info();
       emit({ type: "selection_changed", activeCellId: info.activeCellId, selectedCellIds: info.selectedCellIds });
     });
+  }
+
+  private checkKernel(): void {
+    try {
+      const kernel = this.adapter.info().kernel;
+      if (this.lastKernel === undefined) {
+        this.lastKernel = kernel;
+        return;
+      }
+      if (kernel !== this.lastKernel) this.emit({ type: "kernel_changed", kernel });
+      this.lastKernel = kernel;
+    } catch {
+      // The notebook may be reloading; keep the previous kernel state.
+    }
+  }
+
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   async discardReviews(): Promise<void> {
@@ -97,7 +146,11 @@ export class OpRunner {
         return a.info();
       case "get_cells": {
         const pending = this.pendingCellIds();
-        const cells = a.getCells(op.summary ? { ...op, includeOutputs: false } : op).map((c) => (pending.has(c.id) ? { ...c, pendingReview: true } : c));
+        const cells = a.getCells(op.summary ? { ...op, includeOutputs: false } : op).map((c) => {
+          const stale = c.type === "code" && this.watcher.isStale(c.id, c.source);
+          const withRunState = stale ? { ...c, stale: true } : c;
+          return pending.has(c.id) ? { ...withRunState, pendingReview: true } : withRunState;
+        });
         // Summaries are cut here, in the page, so a big notebook's sources never cross the wire for an outline.
         return { cells: op.summary ? cells.map(summarizeCell) : cells };
       }
@@ -165,7 +218,17 @@ export class OpRunner {
             results.push({ cellId: id, status: "skipped", outputs: [], message: "not run: time ran out" });
             continue;
           }
-          const r = await a.runCell(id, left);
+          this.watcher.agentRuns.add(id);
+          this.watcher.agentStarted(id);
+          let r: RunResult;
+          try {
+            r = await a.runCell(id, left);
+          } catch (e) {
+            this.watcher.agentRuns.delete(id);
+            throw e;
+          }
+          if (r.status === "skipped") this.watcher.agentRuns.delete(id);
+          else if (r.status !== "timeout") this.watcher.tick();
           results.push(r);
           if (r.status === "timeout") stop = true;
           if (r.status === "error" && op.stopOnError) stop = true;

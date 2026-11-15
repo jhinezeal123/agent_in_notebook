@@ -124,6 +124,60 @@ def _ainb_fs(args):
         except OSError:
             pass
         return done({})
+    if op == "stats":
+        out = {}
+        try:
+            values = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    name, rest = line.split(":", 1)
+                    if name in ("MemTotal", "MemAvailable"):
+                        values[name] = int(rest.strip().split()[0]) * 1024
+            total, available = values.get("MemTotal"), values.get("MemAvailable")
+            try:
+                with open("/sys/fs/cgroup/memory.max") as f:
+                    limit = f.read().strip()
+                if limit != "max":
+                    # The cgroup cap is the usable budget; agreement with Colab/Kaggle's UI needs a live check.
+                    total = min(total, int(limit))
+                    with open("/sys/fs/cgroup/memory.current") as f:
+                        available = max(0, total - int(f.read().strip()))
+            except Exception:
+                pass
+            if total is not None:
+                out["memTotal"] = total
+            if available is not None:
+                out["memAvailable"] = available
+        except Exception:
+            pass
+        try:
+            import shutil
+            disk = shutil.disk_usage(os.getcwd())
+            out["diskTotal"], out["diskFree"] = disk.total, disk.free
+        except Exception:
+            pass
+        out["gpus"] = []
+        try:
+            import subprocess
+            res = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=3)
+            if res.returncode != 0:
+                raise RuntimeError("nvidia-smi failed")
+            for line in res.stdout.splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) < 4:
+                    continue
+                out["gpus"].append({"name": parts[0], "memUsed": int(float(parts[1])) * 1048576,
+                                    "memTotal": int(float(parts[2])) * 1048576, "util": float(parts[3])})
+        except Exception:
+            pass
+        try:
+            with open("/proc/sys/kernel/random/boot_id") as f:
+                boot = f.read().strip()
+            if boot:
+                out["boot"] = boot
+        except Exception:
+            pass
+        return done(out)
     deadline = time.monotonic() + args["seconds"]
     skip = {".git", "node_modules", "__pycache__", ".ipynb_checkpoints"}
     def braces(p):
@@ -222,11 +276,22 @@ export interface Hello {
   python: string;
 }
 
-function call<T>(exec: KernelExec, op: string, args: Record<string, unknown> = {}): Promise<T> {
-  return helperCall<T>(exec, HELPER, "_ainb_fs", { ...args, op }, CALL_WAIT_MS + SEARCH_SECONDS * 1000);
+export interface VmStats {
+  memTotal?: number;
+  memAvailable?: number;
+  diskTotal?: number;
+  diskFree?: number;
+  gpus?: { name: string; memUsed: number; memTotal: number; util: number }[];
+  /** Linux boot id, used to tell a replacement machine from a kernel restart. */
+  boot?: string;
+}
+
+function call<T>(exec: KernelExec, op: string, args: Record<string, unknown> = {}, waitMs = CALL_WAIT_MS + SEARCH_SECONDS * 1000): Promise<T> {
+  return helperCall<T>(exec, HELPER, "_ainb_fs", { ...args, op }, waitMs);
 }
 
 export const hello = (exec: KernelExec) => call<Hello>(exec, "hello");
+export const stats = (exec: KernelExec) => call<VmStats>(exec, "stats", {}, 5_000);
 
 export async function stat(exec: KernelExec, paths: string[]): Promise<(Stat | null)[]> {
   return (await call<{ stats: (Stat | null)[] }>(exec, "stat", { paths })).stats;

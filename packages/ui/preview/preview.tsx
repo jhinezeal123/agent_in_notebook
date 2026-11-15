@@ -17,6 +17,11 @@ const chat: ChatSnapshot = {
   chatId: "chat1", tabId: -7, agentId: "claude", agentName: "Claude Code", notebookKey: "colab:x", status: empty ? "idle" : "running",
   settings: { scope: "write", review: true, targetCellIds: [], notebookOnly: true }, notebook,
   usage: { used: 53_000, size: 200_000 },
+  machine: {
+    at: now - 30_000, memTotal: 12_700_000_000, memAvailable: 3_100_000_000,
+    diskTotal: 108_000_000_000, diskFree: 47_000_000_000,
+    gpus: [{ name: "Tesla T4", memUsed: 1_200_000_000, memTotal: 15_000_000_000, util: 8 }],
+  },
   options: [
     { id: "model", name: "Model", category: "model", kind: "select", value: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }] },
     { id: "effort", name: "Effort", category: "thought_level", kind: "select", value: "high", choices: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
@@ -34,6 +39,40 @@ const chat: ChatSnapshot = {
         { type: "review", status: "pending", review: { reviewId: "r1", cellId: "c7f3a91b20", kind: "update", cellType: "code", before: "scheduler = StepLR(opt, step_size=1, gamma=0.1)\nfor epoch in range(epochs):\n    train(epoch)", after: "scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)\nfor epoch in range(epochs):\n    train(epoch)" } },
       ],
     },
+    {
+      id: "card-open", role: "system", createdAt: now - 30_000,
+      parts: [{
+        type: "card",
+        card: {
+          cardId: "card-open", kind: "run", tone: "error", state: "open",
+          title: "Cell [7] failed · ValueError: could not convert string to float", cellId: "c7f3a91b20",
+          detail: "model.fit(X_train, y_train) · 8s",
+          actions: [{ id: "fix", label: "Fix", primary: true }, { id: "explain", label: "Explain" }, { id: "dismiss", label: "Dismiss" }],
+        },
+      }],
+    },
+    {
+      id: "card-done", role: "system", createdAt: now - 29_000,
+      parts: [{
+        type: "card",
+        card: {
+          cardId: "card-done", kind: "run", tone: "error", state: "done",
+          title: "Cell [7] failed · ValueError: could not convert string to float", cellId: "c7f3a91b20",
+          detail: "model.fit(X_train, y_train)", actions: [], outcome: "Asked the agent to fix it",
+        },
+      }],
+    },
+    {
+      id: "card-stale", role: "system", createdAt: now - 28_000,
+      parts: [{
+        type: "card",
+        card: {
+          cardId: "card-stale", kind: "run", tone: "error", state: "stale",
+          title: "Cell [7] failed · ValueError: could not convert string to float", cellId: "c7f3a91b20",
+          detail: "model.fit(X_train, y_train)", actions: [], outcome: "Superseded by a later run",
+        },
+      }],
+    },
     { id: "m3", role: "user", createdAt: now - 20_000, parts: [{ type: "text", text: "Run it for 5 epochs" }] },
     { id: "m4", role: "agent", createdAt: now - 15_000, parts: [{ type: "tool", toolCallId: "t4", title: "Run cell c7f3a91b20", status: "in_progress", notebook: true }] },
   ],
@@ -48,6 +87,7 @@ const bridge: BridgeState = {
 const answers: Record<string, unknown> = {
   "state.get": bridge, "notebooks.list": [{ tabId: -7, platform: "colab", title: notebook.title, place: "chrome" }],
   "tab.notebook": notebook, "chat.get": chat, "chat.open": chat, "activeTab.get": -7,
+  "chat.cardAction": { accepted: true },
 };
 const host: PanelHost = {
   async request<T>(method: string) { console.log("request", method); return answers[method] as T; },

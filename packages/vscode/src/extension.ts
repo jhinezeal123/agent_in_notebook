@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import { OpRunner, type ChatProject, type ChatSnapshot, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
+import { OpRunner, type BridgeEvents, type ChatProject, type ChatSnapshot, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import { DEFAULT_PREFS, type PanelEvent, type PanelRequest, type PanelResponse, type Prefs } from "../../ui/src/panel-messages.js";
 import type { SelectedChat, StudioView } from "../../studio/src/messages.js";
 import { BridgeLink } from "./bridge.js";
@@ -30,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
     new FolderTree(studio, ARTIFACTS),
     vscode.commands.registerCommand("ainb.pickProject", () => studio.pickProjectToShow()),
     vscode.commands.registerCommand("ainb.saveNotebookToProject", () => panel.projectCommand("chat.saveNotebook")),
+    vscode.commands.registerCommand("ainb.verifyNotebook", () => panel.projectCommand("chat.verifyNotebook")),
     vscode.commands.registerCommand("ainb.open", () => panel.openChat()),
     vscode.commands.registerCommand("ainb.newChat", () => studio.open({ view: "newchat" })),
     vscode.commands.registerCommand("ainb.openSettings", () => studio.open({ view: "settings" })),
@@ -266,10 +267,11 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private closeNotebook(document: vscode.NotebookDocument): void {
     const notebook = this.notebooks.get(document);
     if (!notebook) return;
-    const { tabId, adapter } = notebook;
+    const { tabId, adapter, runner } = notebook;
     this.notebooks.delete(document);
     this.bridge.emit("notebook.detached", { tabId });
     void this.bridge.request("tab.closed", { tabId }).catch(() => {});
+    runner.dispose();
     adapter.dispose();
     this.core.localChanged();
   }
@@ -288,10 +290,72 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private post(event: PanelEvent): void {
     void this.view?.webview.postMessage(event);
     if (event.event === "bridge" && event.params.method === "chat.snapshot") this.followProject(event.params.params as ChatSnapshot);
+    if (event.event === "bridge" && event.params.method === "chat.run") void this.notifyRun(event.params.params as BridgeEvents["chat.run"]);
+    if (event.event === "bridge" && event.params.method === "chat.session") void this.notifySession(event.params.params as BridgeEvents["chat.session"]);
     if (event.event === "notebooks") this.studio.broadcast("notebooks", event.params);
     // The chat follows the notebook in front, unless a research chat is shown.
     else if (event.event === "activeTab" && this.selected?.kind !== "research") {
       this.setSelected(event.params === null ? null : { kind: "notebook", tabId: event.params });
+    }
+  }
+
+  private async notifyRun(p: BridgeEvents["chat.run"]): Promise<void> {
+    if (vscode.workspace.getConfiguration("ainb").get<boolean>("notifyCellRuns", true) === false) return;
+    const ok = p.run.status === "ok";
+    const notebook = p.title || "the notebook";
+    const text = ok
+      ? `Cell ${p.run.index} of ${notebook} finished after ${runDuration(p.run.durationMs ?? 0)}.`
+      : `Cell ${p.run.index} of ${notebook} failed after ${runDuration(p.run.durationMs ?? 0)}: ${p.run.ename ?? "Error"}${p.run.evalue ? `: ${p.run.evalue.slice(0, 120)}` : ""}`;
+    const show = "Show";
+    const action = ok ? "Summarize" : "Fix with agent";
+    try {
+      const picked = await (ok ? vscode.window.showInformationMessage(text, show, action) : vscode.window.showWarningMessage(text, show, action));
+      if (picked === show) {
+        await this.selectChat({ kind: "notebook", tabId: p.tabId });
+        await this.core.handle("notebook.focus", { tabId: p.tabId, cellId: p.run.cellId }).catch(() => {});
+      } else if (picked === action) {
+        await this.bridge.request("chat.cardAction", { chatId: p.chatId, cardId: p.cardId, actionId: ok ? "summarize" : "fix" });
+        await this.selectChat({ kind: "notebook", tabId: p.tabId });
+      }
+    } catch (e) {
+      void vscode.window.showWarningMessage(`Could not open the cell run: ${(e as Error).message}`);
+    }
+  }
+
+  private async notifySession(p: BridgeEvents["chat.session"]): Promise<void> {
+    const prefix = `${p.tabId < 0 ? chromeTab(p.tabId) : p.tabId}:`;
+    for (const key of [...this.setupRan]) if (key.startsWith(prefix)) this.setupRan.delete(key);
+    if (!p.restore) {
+      if (this.studio.kernelSetup().runOnAttach) {
+        await this.bridge.request("chat.cardAction", { chatId: p.chatId, cardId: p.cardId, actionId: "restore" }).catch(() => {});
+      }
+      return;
+    }
+    let setupError: string | undefined;
+    let setupRunning = false;
+    try {
+      const info = await this.core.info(p.tabId);
+      const projectId = info?.key ? await this.notebookProject(info.key) : null;
+      const { script } = this.studio.kernelSetup(projectId);
+      if (script.trim()) {
+        const result = await this.runSetup(p.tabId, projectId);
+        const log = (this.setupLog ??= vscode.window.createOutputChannel("Agent in Notebook: Kernel setup"));
+        log.appendLine(`--- Machine restore (${new Date().toLocaleString()})`);
+        log.appendLine(result.output);
+        if (result.running) {
+          setupRunning = true;
+          setupError = "Kernel setup is still running. Wait for it to finish, then try Restore again.";
+        } else if (result.exitCode !== 0) setupError = `Kernel setup ended with exit code ${result.exitCode}.`;
+      }
+    } catch (e) {
+      setupError = (e as Error).message;
+      setupRunning = /previous setup is still running/i.test(setupError);
+    }
+    try {
+      await this.bridge.request("chat.sessionStep", { chatId: p.chatId, cardId: p.cardId, step: "setup", error: setupError });
+      await this.bridge.request("chat.sessionStep", { chatId: p.chatId, cardId: p.cardId, step: "code", error: setupRunning ? setupError : undefined });
+    } catch (e) {
+      void vscode.window.showWarningMessage(`Machine restore did not finish: ${(e as Error).message}`);
     }
   }
 
@@ -332,7 +396,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   /** Save to project, for the notebook chat in front (the command palette). */
-  async projectCommand(method: "chat.saveNotebook"): Promise<void> {
+  async projectCommand(method: "chat.saveNotebook" | "chat.verifyNotebook"): Promise<void> {
     const tabId = this.selected?.kind === "notebook" ? this.selected.tabId : null;
     const chat = tabId === null ? undefined : this.chatProjects.get(tabId);
     if (!chat) {
@@ -341,7 +405,9 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
     try {
       const r = await this.handle(method, { chatId: chat.chatId });
-      if (r) void vscode.window.showInformationMessage(`Saved the notebook to ${(r as { path: string }).path}.`);
+      if (method === "chat.verifyNotebook") {
+        if (r) void vscode.window.showInformationMessage("Notebook verification started.");
+      } else if (r) void vscode.window.showInformationMessage(`Saved the notebook to ${(r as { path: string }).path}.`);
     } catch (e) {
       void vscode.window.showErrorMessage(`Agent in Notebook: ${(e as Error).message}`);
     }
@@ -518,10 +584,21 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.setupLog?.dispose();
     this.mirrors.dispose();
     this.bridge.dispose();
-    for (const { adapter } of this.notebooks.values()) adapter.dispose();
+    for (const { adapter, runner } of this.notebooks.values()) {
+      runner.dispose();
+      adapter.dispose();
+    }
     this.notebooks.clear();
     for (const subscription of this.subscriptions) subscription.dispose();
   }
+}
+
+function runDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 function panelHtml(webview: vscode.Webview, assets: vscode.Uri): string {

@@ -4,6 +4,33 @@ export type Platform = "colab" | "kaggle" | "jupyter" | "vscode";
 
 export type CellType = "code" | "markdown";
 
+/** A code cell's run state as the editor shows it now: cheap to read (no source, no outputs). */
+export interface CellRunState {
+  cellId: string;
+  running: boolean;
+  executionCount: number | null;
+  /** The editor's own timing of the cell's last finished run, when it keeps one (VS Code). */
+  lastDurationMs?: number;
+}
+
+/** One finished run of a code cell, as the page saw it: the user's runs and the agent's. */
+export interface CellRun {
+  cellId: string;
+  /** The cell's position when the run finished. */
+  index: number;
+  status: "ok" | "error" | "interrupted";
+  executionCount: number | null;
+  /** `agent`: started by a run_cells op of this page's OpRunner; else the user (or a "run all" of the editor). */
+  by: "agent" | "user";
+  /** Wall time, when known: the page saw the run start, or the editor timed it. Includes time queued behind other cells. */
+  durationMs?: number;
+  /** First non-empty line of the source when it finished, at most 120 characters. */
+  head: string;
+  /** The error, for `error` and `interrupted`. `evalue` is cut to 300 characters. */
+  ename?: string;
+  evalue?: string;
+}
+
 /** A raster image from a cell output, base64-encoded. */
 export interface OutputImage {
   mime: "image/png" | "image/jpeg";
@@ -38,6 +65,8 @@ export interface CellInfo {
   pendingReview?: boolean;
   /** Set by a `summary` read: `source` then holds only the first line. */
   lineCount?: number;
+  /** The source changed since the page last saw this cell finish a run. Unknown (absent) for runs before the page loaded. */
+  stale?: boolean;
 }
 
 export type KernelState = "idle" | "busy" | "disconnected" | "unknown";
@@ -175,4 +204,6 @@ export type NotebookEvent =
   | { type: "review_opened"; review: ReviewInfo }
   | { type: "review_closed"; reviewId: string; accepted: boolean }
   | { type: "selection_changed"; activeCellId: string | null; selectedCellIds: string[] }
-  | { type: "change_applied"; change: AppliedChange };
+  | { type: "change_applied"; change: AppliedChange }
+  | { type: "cell_run"; run: CellRun }
+  | { type: "kernel_changed"; kernel: KernelState };

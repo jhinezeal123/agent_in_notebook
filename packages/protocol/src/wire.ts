@@ -4,10 +4,10 @@
 
 import type { ChatImageMime } from "./chat-image.js";
 import type { ChatSettings } from "./modes.js";
-import type { NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
+import type { CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
-export const WIRE_VERSION = 3;
+export const WIRE_VERSION = 4;
 
 // ---------------------------------------------------------------- native messaging
 
@@ -63,6 +63,25 @@ export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
 /** `discarded`: the page reloaded or navigated away before the user decided; nothing was applied. */
 export type ReviewStatus = "pending" | "accepted" | "rejected" | "discarded";
 
+/** Something that happened, with what the user can do about it. The bridge writes every text. */
+export interface ChatCard {
+  cardId: string;
+  kind: "run" | "session" | "verify";
+  tone: "error" | "info" | "ok";
+  title: string;
+  /** One or two lines of plain text. */
+  detail?: string;
+  /** A cell the card is about: the UI offers to show it in the notebook. */
+  cellId?: string;
+  actions: { id: string; label: string; primary?: boolean }[];
+  /** `stale`: nothing can be done with it any more (a later run replaced it, or the chat was restored). */
+  state: "open" | "done" | "stale";
+  /** What became of it, shown in place of the buttons ("Asked the agent to fix it"). */
+  outcome?: string;
+  /** For a job in progress. */
+  progress?: { done: number; total: number };
+}
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
@@ -94,6 +113,7 @@ export type Part =
       answer?: string;
     }
   | { type: "review"; review: ReviewInfo; status: ReviewStatus }
+  | { type: "card"; card: ChatCard }
   | { type: "notice"; level: "info" | "error"; text: string };
 
 export interface ChatMessage {
@@ -122,6 +142,8 @@ export interface ChatSnapshot {
   notebook: NotebookInfo | null;
   /** How full the agent's context is, when the agent reports it. */
   usage?: ChatUsage;
+  /** Latest resources read from the notebook's machine, when available. */
+  machine?: MachineStats;
   /** The OpenResearch project the notebook belongs to (absent for chats opened without a notebook). */
   project?: ChatProject;
 }
@@ -165,6 +187,15 @@ export interface ChatUsage {
   /** The context window, in tokens. */
   size: number;
   cost?: { amount: number; currency: string };
+}
+
+export interface MachineStats {
+  at: number;
+  memTotal?: number;
+  memAvailable?: number;
+  diskTotal?: number;
+  diskFree?: number;
+  gpus?: { name: string; memUsed: number; memTotal: number; util: number }[];
 }
 
 /**
@@ -243,6 +274,8 @@ export interface BridgeMethods {
   "chats.list": { params: { projectId: string }; result: { chats: NotebookChatSummary[] } };
   /** Save the chat's notebook (with outputs) to its project's artifacts/notebooks. */
   "chat.saveNotebook": { params: { chatId: string }; result: { path: string } };
+  /** Run every code cell from a reset Python namespace, then save only on success. */
+  "chat.verifyNotebook": { params: { chatId: string }; result: { started: boolean } };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };
   "chat.send": { params: { chatId: string; text: string }; result: { accepted: boolean } };
   "chat.cancel": { params: { chatId: string }; result: { cancelled: boolean } };
@@ -253,6 +286,9 @@ export interface BridgeMethods {
   "chat.review": { params: { chatId: string; reviewId: string; accept: boolean }; result: { resolved: boolean } };
   /** Revert the notebook changes of one agent turn, newest first, skipping cells edited since. */
   "chat.undo": { params: { chatId: string; messageId: string }; result: UndoResult };
+  /** The user pressed a button of a card. */
+  "chat.cardAction": { params: { chatId: string; cardId: string; actionId: string }; result: { accepted: boolean } };
+  "chat.sessionStep": { params: { chatId: string; cardId: string; step: "setup" | "code" | "done"; error?: string }; result: { cells?: string[] } };
   "tab.closed": { params: { tabId: number }; result: { ok: true } };
   /** The notebooks open in Chrome tabs, for the editor's notebook picker. */
   "browser.notebooks": { params: Record<string, never>; result: { notebooks: BrowserNotebook[] } };
@@ -355,6 +391,10 @@ export interface BridgeEvents {
   "chat.snapshot": ChatSnapshot;
   "chat.patch": MessagePatch;
   "chat.usage": { chatId: string; tabId: number; usage: ChatUsage };
+  /** A long run of a cell ended while no turn was running: the editor may tell the user. */
+  "chat.run": { chatId: string; tabId: number; cardId: string; run: CellRun; title: string };
+  "chat.machine": { chatId: string; tabId: number; machine: MachineStats };
+  "chat.session": { chatId: string; tabId: number; cardId: string; restore?: boolean };
   "chat.status": { chatId: string; tabId: number; status: ChatStatus; error?: string };
   "agents.changed": { agents: AgentInfo[] };
   /** A notebook in a Chrome tab appeared, changed, or (info null) went away. */

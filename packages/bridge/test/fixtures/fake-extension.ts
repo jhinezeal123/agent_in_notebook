@@ -20,6 +20,7 @@ import {
   type ReviewInfo,
   type RunResult,
 } from "@ainb/protocol";
+import type { VmStats } from "../../src/notebook/vmfs.js";
 
 export const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
@@ -358,6 +359,7 @@ export class FakeVm {
   /** Paths the file helper claimed for notebook files. */
   claimed = new Set<string>();
   cwd = "/content";
+  stats: VmStats = { memTotal: 16_000_000_000, memAvailable: 12_000_000_000, diskTotal: 100_000_000_000, diskFree: 50_000_000_000, gpus: [], boot: "boot-a" };
   /** What `script NAME` typed into the shell does (change files, say). */
   scripts = new Map<string, (vm: FakeVm) => string>();
   /** Any other command (the bridge's own scripts): its output and exit status; undefined is "command not found". */
@@ -394,6 +396,8 @@ export class FakeVm {
     this.ops.push(`fs:${op}`);
     const missing = (p: string) => ({ error: `File does not exist: ${p}` });
     switch (op) {
+      case "stats":
+        return { ...this.stats } as Record<string, unknown>;
       case "hello":
         return { cwd: this.cwd, home: "/root", posix: true, path: "/usr/local/bin:/usr/bin", python: "/opt/venv/bin/python3" };
       case "stat":

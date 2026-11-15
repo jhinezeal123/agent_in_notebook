@@ -8,4 +8,5 @@ export * from "./outputs.js";
 export * from "./launch.js";
 export * from "./identity.js";
 export * from "./adapter.js";
+export * from "./run-watcher.js";
 export * from "./chat-image.js";

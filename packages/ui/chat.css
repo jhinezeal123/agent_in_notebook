@@ -97,6 +97,7 @@ button.icon:hover { background: var(--hover); }
 .notebook-pick option { background: var(--input-bg); color: var(--fg); }
 .notebook-meta { display: flex; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: 11px; line-height: 16px; }
 .notebook-meta > span + span::before { content: "·"; margin: 0 5px; }
+.notebook-meta .warn { color: var(--warn); }
 .kernel-state .kdot { display: inline-block; margin-right: 4px; vertical-align: 1px; }
 .kdot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--muted); }
 .kdot.k-idle { background: var(--ok); }
@@ -244,6 +245,16 @@ button.icon:hover { background: var(--hover); }
 .review-head .card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell-ref { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font-family: var(--mono); font-size: 11.5px; font-weight: 400; }
 .cell-ref:hover { text-decoration: underline; }
+.card.event .card-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 8px 10px 0; }
+.card.event .card-heading { min-width: 0; overflow-wrap: anywhere; }
+.card.event .card-status { white-space: pre-wrap; overflow-wrap: anywhere; }
+.card.event.tone-error { border-left: 2px solid var(--err); }
+.card.event.tone-ok { border-left: 2px solid var(--ok); }
+.card.event.done, .card.event.stale { background: transparent; color: var(--muted); }
+.card.event .card-outcome { padding-top: 0; }
+.card.event .card-actions .linkish { padding: 3px 6px; }
+.card-progress { display: flex; align-items: center; gap: 8px; }
+.card-progress progress { flex: 1; min-width: 60px; height: 4px; accent-color: var(--accent); }
 .stats { font-family: var(--mono); font-size: 11.5px; flex: none; }
 .add { color: color-mix(in srgb, var(--ok) 75%, var(--fg)); }
 .del { color: var(--err); }

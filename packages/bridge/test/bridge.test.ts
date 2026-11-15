@@ -275,6 +275,60 @@ describe("chat with a notebook", () => {
   });
 });
 
+describe("kernel state", () => {
+  it("updates the editor's browser notebook when the kernel changes", async () => {
+    const tab = 12;
+    const editor = new FakeExtension(new FakeNotebook([]), 1);
+    const browser = new FakeExtension(new FakeNotebook([{ type: "code", source: "a = 1" }]), tab);
+    try {
+      await editor.connect(port, TOKEN);
+      await browser.connect(port, TOKEN, "chrome-extension://abcdef");
+      const attached = new Promise((resolve) => editor.rpc.on("browser.notebook", resolve));
+      browser.rpc.emit("notebook.attached", { tabId: tab, info: browser.notebook.info() });
+      await attached;
+      const changed = new Promise((resolve) => editor.rpc.on("browser.notebook", (p: { info: { kernel?: string } | null }) => {
+        if (p.info?.kernel === "busy") resolve(p);
+      }));
+      browser.rpc.emit("notebook.event", { tabId: tab, event: { type: "kernel_changed", kernel: "busy" } });
+      expect(await changed).toMatchObject({ tabId: tab, info: { kernel: "busy" } });
+    } finally {
+      editor.close();
+      browser.close();
+    }
+  });
+
+  it("reads kernel variables through the notebook's execute op", async () => {
+    const { nb, ext, chatId } = await setup([{ type: "code", source: "df" }], { scope: "cell" });
+    try {
+      nb.execResult = () => ({ status: "ok", outputs: [{ kind: "stream", name: "stdout", text: '\u001eainb {"vars":[{"name":"df","type":"pandas.DataFrame","shape":"(3, 2)","size":2048}]}\n' }] });
+      const text = await turn(ext, chatId, script([{ tool: "kernel_state", args: { limit: 1 } }]));
+      expect(text).toContain("RESULT kernel_state: df · pandas.DataFrame · (3, 2) · 2.0 KB");
+    } finally {
+      ext.close();
+    }
+  });
+});
+
+describe("cell run cards", () => {
+  it("passes cell_run through the server and accepts a card action over RPC", async () => {
+    const { nb, ext, chatId } = await setup([{ type: "code", source: "1 / 0" }]);
+    try {
+      nb.onEvent({
+        type: "cell_run",
+        run: { cellId: "c1", index: 0, status: "error", executionCount: 1, by: "user", head: "1 / 0", ename: "ZeroDivisionError", evalue: "division by zero" },
+      });
+      await ext.waitFor(() => ext.parts().some((p) => p.type === "card"), 5_000, "cell run card");
+      const part = ext.parts().find((p): p is Extract<Part, { type: "card" }> => p.type === "card")!;
+      expect(part.card).toMatchObject({ kind: "run", state: "open", cellId: "c1" });
+      expect(ext.patches.some((patch) => patch.ops.some((op) => "part" in op && op.part.type === "card"))).toBe(true);
+      expect(await ext.request("chat.cardAction", { chatId, cardId: part.card.cardId, actionId: "fix" })).toEqual({ accepted: true });
+      await ext.waitFor(() => ext.parts().some((p) => p.type === "card" && p.card.state === "done"), 5_000, "closed card");
+    } finally {
+      ext.close();
+    }
+  });
+});
+
 describe("context compaction", () => {
   it("sends the playbook and the full outline again after the agent compacts its context", async () => {
     const { ext, chatId } = await setup([{ type: "code", source: "import pandas as pd" }]);

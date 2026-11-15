@@ -124,6 +124,34 @@ Những gì giữ lại từ thiết kế orx:
 
 VS Code webview chỉ trao đổi message với Extension Host. Host kết nối WebSocket `/vscode` trên loopback và giữ token bên ngoài webview. VS Code giữ một id cho mỗi notebook đang mở và dùng URI của tài liệu làm khóa lưu chat; notebook trong tab Chrome giữ khóa do service worker tính.
 
+## Theo dõi việc chạy cell
+
+`RunWatcher` (`protocol/src/run-watcher.ts`) là cơ chế chung để biết một code cell vừa chạy xong, do user hay do agent. Mỗi `OpRunner` có một watcher: nhịp đầu chỉ ghi trạng thái hiện có, sau đó đọc mỗi giây (`pollMs`, `null` tắt timer cho test). Jupyter dùng `runStates()` đọc trực tiếp `running` và `executionCount`; VS Code đọc `document.getCells()` và `executionSummary`; Colab đi đường dự phòng `getCells({})` vì số thứ tự nằm trong `getModel().toJson()`. `OpRunner.dispose()` xóa timer khi notebook VS Code đóng hoặc panel bị dispose.
+
+Một lần chạy được nhận ra khi `running` chuyển từ true sang false, hoặc `executionCount` đổi giữa hai nhịp mà watcher không thấy trạng thái running (cell chạy nhanh, hoặc cell user tự chạy trong VS Code). Watcher đọc lại cell kèm output rồi phát `NotebookEvent {type:"cell_run", run}`: vị trí, trạng thái ok/error/interrupted, số thứ tự, nguồn chạy, thời lượng nếu biết, dòng source đầu và lỗi cuối cùng. `KeyboardInterrupt` là interrupted. `agentRuns` đánh dấu cell ngay trước `runCell`; `OpRunner` gọi `tick()` ngay khi một run kết thúc (trừ timeout) để `cell_run` đi trước kết quả op trên cùng kênh. Lỗi adapter hoặc cell skipped không để sót nhãn agent.
+
+Sự kiện đi qua content script và service worker nguyên vẹn tới `Chat.onNotebookEvent`. Chấm trạng thái và sự kiện chỉ có ích khi VS Code còn mở chat: chat được tạo theo notebook/tab và bridge tự tắt sau khi VS Code đóng.
+
+Giới hạn đã biết:
+
+- Sau khi kernel khởi động lại, một cell chạy nhanh hơn một nhịp và ra đúng số thứ tự cũ thì bị sót.
+- Cell vừa được tạo và chạy xong trong cùng một nhịp thì bị sót.
+- Chrome làm chậm timer của tab ẩn (có thể tới khoảng một lần/phút sau năm phút), nên sự kiện có thể tới trễ khoảng một phút; việc ẩn tab tự nó không làm mất sự kiện.
+- Adapter VS Code chỉ biết `running` của các cell trong `pendingRuns` do `OpRunner` khởi động; cell user tự chạy được nhận qua `executionOrder` đổi. `executionSummary.timing` là tùy chọn trong API VS Code, chưa được kiểm chứng với kernel Jupyter/Colab thật; thiếu nó thì `lastDurationMs` không có, còn lại vẫn hoạt động.
+- Chi phí `getCells({})` trên một notebook Colab lớn chưa được đo bằng DevTools. Nếu vượt 20 ms mỗi nhịp, đổi riêng Colab sang `{pollMs: 2000}` khi tạo `OpRunner` trong `extension/src/page/main.ts`; hiện giữ mặc định 1000 ms.
+
+## Thẻ hành động
+
+`ChatCard` (`protocol/src/wire.ts`) là mảnh transcript cho một việc vừa xảy ra và các hành động user có thể chọn. Bridge quyết định toàn bộ tiêu đề, chi tiết, tone, cell liên quan, nút, tiến độ và kết quả; UI chỉ vẽ `Part {type:"card"}` và gọi `chat.cardAction`. Card nằm trong một message `system`, nên đi qua `chat.patch` và được lưu như mọi mảnh khác. `WIRE_VERSION` là 4 để page script, bridge và VS Code cùng hiểu sự kiện/card mới.
+
+`Chat.cards` chỉ giữ callback của các card đang mở trong phiên hiện tại. Nút Dismiss đóng tại chỗ; nút khác chạy callback tương ứng. Khi lưu/khôi phục transcript, `store.settle()` chuyển card còn `open` thành `stale`, bỏ nút vì callback không tồn tại sau restart. Card đã đóng hoặc action không thuộc card bị từ chối.
+
+Với `cell_run` có lỗi khi agent rảnh, Chat thêm card lỗi với **Fix**, **Explain** và **Dismiss**. Mọi run sau của cùng cell (thành công, lỗi hay interrupted, kể cả trong lượt agent) làm card đang mở của cell đó thành `stale` với “Superseded by a later run”. Không tạo card cho interrupted hoặc khi một lượt agent đang chạy; tối đa năm card run đang mở.
+
+Hàng đợi lượt chat mang `TurnInput {text, context?, targets?}`. Bấm Fix/Explain đóng card trước, đọc đúng cell kèm output rồi dựng `<cell-run>` bằng `renderCell(cell, true)`; nếu cell đã mất vẫn gửi tóm tắt từ `CellRun`. Khối này đứng ngay trước `<notebook-context>`, có yêu cầu sửa hoặc chỉ giải thích và chỉ dẫn trả lời theo ngôn ngữ user đang dùng. `targets` nhắm cell lỗi cho Edit cell khi user chưa ghim; cell đã ghim vẫn được ưu tiên như trước. Message user hiển thị câu Fix/Explain bằng tiếng Anh, còn agent nhận đủ cell và traceback mà không cần thêm một lượt Read.
+
+Với cell thành công có `durationMs >= 60_000`, Chat dùng cùng `ChatCard` để mở thẻ “finished” và nút **Summarize result**. Lỗi dài vẫn dùng thẻ lỗi. Khi một run dài kết thúc ngoài lượt agent, bridge phát thêm `chat.run` mang `chatId`, `tabId`, `cardId`, `CellRun` và tên notebook. `vscode/src/bridge.ts` chuyển tiếp sự kiện này; Extension Host hiện thông báo với nút Show hoặc Summarize/Fix with agent, rồi gọi lại `chat.cardAction` khi cần. Cài đặt `ainb.notifyCellRuns` (mặc định bật) chỉ tắt thông báo, không tắt card. Không có lượt agent tự động sau khi cell xong: Summarize/Fix luôn do user bấm. Timer tab Chrome ẩn có thể làm sự kiện trễ tới khoảng một phút và mọi thông báo/card đều cần VS Code còn mở.
+
 ## Chuẩn bị agent và quản lý launch command
 
 Sidebar mở session ACP ngay khi notebook và agent đã được chọn. `session/new` cung cấp model/effort qua config options trước khi gửi prompt; thay đổi option được áp dụng xong trước khi bật Send. Mỗi tab vẫn dùng một session chat, kể cả lúc transcript còn trống.
@@ -161,6 +189,12 @@ Thiết kế và lý do: [hop-nhat-openresearch.md](hop-nhat-openresearch.md). T
   - **Token.** Token lấy từ `gh auth token` (CLI mà OpenResearch dùng), hoặc `AINB_GITHUB_TOKEN`, cache 5 phút. Git trên máy bạn dùng nó qua `-c http.https://github.com/.extraheader`, chỉ cho từng lệnh. Trên VM, bridge ghi nó bằng `vmfs.writeFile` vào `~/.ainb-git-credentials`, rồi đặt `credential.helper store --file`. Token không bao giờ nằm trong một lệnh. `redactTokens` che token trong kết quả mọi tool.
   - **Clone.** `runInSession` dùng một phiên terminal và một checkout dưới `~/.ainb-projects/` theo notebook, project, remote và nhánh. Trước khi dùng lại checkout, bridge kiểm tra thư mục Git, nhánh và URL của `origin`. Mất checkout thì clone lại.
   - **Sau mỗi lượt đã gọi agent** (`CodeSync.syncBack`), kể cả khi agent gặp lỗi: VM kiểm tra lại checkout, đưa file trên 50 MB chưa được track vào `.git/info/exclude`, rồi `git add -A`, commit và push bằng tên nhánh tường minh. Bridge theo dõi push chạy lâu trong nền, rồi `fetch` và `merge --ff-only` vào worktree.
+  - **Autosave** (`Chat.scheduleAutosave`/`autosave`): một `cell_run` của user đánh dấu dirty và hẹn sync sau 10 phút khi đã có `CodePlace`, chỉ khi agent không bận. `SyncResult.ok` phân biệt lỗi/đang bận với không có thay đổi (`changed`). Chỉ kết quả `ok && changed` tạo system notice; lỗi im lặng, giữ dirty và thử lại sau một chu kỳ. Mốc đầu được đặt lúc lên lịch nên lần đầu không sync ngay. `lastSyncAt` chỉ phục vụ lịch, còn `lastSavedAt` chỉ cập nhật khi `ok`, nên thẻ máy mới không khẳng định đã lưu sau một lần thất bại. User chạy tiếp trong lúc sync không bị mất cờ dirty, và đóng chat xóa timer.
+  - **Máy bị thay**: `stats.boot` được so với boot trong Chat/`NotebookMeta.machine` (ghi khi đổi hoặc sau 5 phút). Boot khác mở card kind `session` và phát `chat.session`; boot giống hoặc lần đọc đầu không tạo card. Metadata giữ `boot` và `seenAt`.
+  - Khi máy đổi, Chat reset `NotebookMirror`, `ShellSessions`, registry `runInSession` cho code sync và kernel setup, đồng thời hủy job cũ. Điều này tránh cache path/claimed/last và màn hình terminal của máy cũ làm lượt Bash/clone đầu tiên trên máy mới lỗi. VS Code xóa `setupRan` theo tab; nếu `runOnAttach` bật thì tự bấm Restore qua `chat.cardAction`.
+  - **Restore** phát `chat.session {restore:true}` để VS Code chạy kernel setup script của project và ghi log OutputChannel, rồi gọi `chat.sessionStep(setup|code)`. Nếu setup vẫn chạy (kể cả lần Try again bị từ chối vì “previous setup is still running”), chuỗi dừng trước `ensureCode` và card giữ Try again; không clone/rerun khi setup chưa xong. Lỗi setup/code được giữ trong card khi hiển thị danh sách cell, không bị dòng “N cells” ghi đè. Bridge dùng lại `ensureCode`/`CodeSync.ensure` (cùng worktree, nhánh và token), đọc code cell có execution count và trả IDs tăng dần cho nút **Run them again**. Lỗi đọc cell cũng trở về nhánh Try again thay vì kẹt card không nút.
+  - Rerun dùng `busyJob` và `runCellsInOrder`: mỗi `run_cells` một id, chờ 50 giây rồi poll `get_cells(includeOutputs)` mỗi 2 giây tới khi xong, dừng ở error/skipped/cell mất, cancel gọi interrupt. Tin gửi giữa job xếp hàng và chỉ chạy sau finally. Cell lỗi vẫn tạo thẻ Fix, còn thẻ finished/notification cho cell dài bị chặn trong job.
+  - Giới hạn được nói rõ trong card/README: biến không được khôi phục, file ngoài code và file trên 50 MB không được lưu, phần việc giữa hai lần autosave (tối đa khoảng 10 phút) có thể mất. Việc cho user khai báo thêm thư mục checkpoint/output ngoài code để chép vào shared artifacts là hướng mở rộng sau, chưa làm.
   - `ChatProject.worktree` báo đường dẫn worktree cho VS Code. Mục **Chat Worktree** (`folder-tree.ts`, `studio.chatWorktreeOf`) hiện nó; Changes tính bằng git trên máy (`changes.ts: localChanges`, so với `ainb-base`). Chat Research vẫn dùng worktree và `/api/chat/sessions/{id}/worktree` của OpenResearch.
 - **Tool** (`bridge/src/project/tools.ts`) là MCP server thứ hai: relay `ainb mcp` với `AINB_MCP_SERVER=project` gọi `/mcp/project/list|call`. Chúng dùng chung `ToolDef`, `check` và policy với tool notebook. Action `save` trong `protocol/modes.ts`: Edit cell thì cấm; Write/Autonomous thì cho; Review bật thì hỏi trước.
   - `artifact_list`, `artifact_read`, `artifact_write` làm việc thẳng trên `artifactsDir` (không qua OpenResearch), qua `realpath`. Chúng từ chối symlink và đường đi ra ngoài, và ghi nguyên tử. `artifact_write` nhận `content` hoặc `from_vm` (đọc bằng `vmfs.readFile`, tối đa 50 MB); `artifact_read` có `to_vm` (ghi bằng `vmfs.writeFile`, action `execute`). Ghi đè file mà chat không tự ghi thì luôn hỏi trước.
@@ -173,6 +207,14 @@ Thiết kế và lý do: [hop-nhat-openresearch.md](hop-nhat-openresearch.md). T
   - `studio-host.ts` phục vụ `projects.list`, `notebookChats.list`, `notebookChat.open`, `agents.logins` (`/api/harnesses`) và `agents.fromResearch` (`/api/harnesses/acp`).
 - **Test** không bao giờ chạm OpenResearch thật: `test/fixtures/fake-orx-api.ts` giả API và SSE, còn các test cũ dùng `NO_ORX`.
 - Phần OpenResearch (submodule) không bị sửa.
+
+## Verify and save
+
+`chat.verifyNotebook` (`Chat.verifyAndSave`) kiểm tra project, kernel Python idle và danh sách code cell trước khi mở card kind `verify`, đồng thời chụp `id + full source` của từng cell. Nút Verify chạy `execute("%reset -f")` rồi `runCellsInOrder` theo vị trí cell trong notebook, với tiến độ và nút Stop. `busyJob` dùng chung với Restore nên tin nhắn giữa chừng được xếp hàng; cancel gọi interrupt. RunWatcher vẫn phát `cell_run` như agent, nên cell lỗi tạo thẻ Fix, còn thẻ finished/notification cho cell dài bị chặn trong job.
+
+Chỉ khi mọi cell qua và `AbortSignal` chưa bị hủy, bridge mới đọc lại `id + full source` để đối chiếu trước khi gọi `saveNotebook` với `user.notebookKey`. Notebook thêm/xóa/đổi thứ tự/sửa source trong lúc verify thì không lưu (“The notebook changed during verification”). Stop trước lần đọc cuối hoặc ngay trong lần đọc đó cũng không lưu; khi đã bắt đầu ghi artifact, nút Stop được gỡ và card ghi “Saving…”, tránh báo Stop nhưng vẫn tạo file. Kết quả thành công ghi “Verified: N cells ran from a clean state. Saved to …”. Reset lỗi, cell lỗi hoặc save lỗi đều đóng card với “Nothing was saved”.
+
+“Clean state” chỉ là `%reset -f`, **không phải kernel restart**: module đã import còn trong cache, thư viện và file còn nguyên. Cách này dùng op `execute` hiện có và chỉ hỗ trợ Python/IPython; cần kiểm tra trên Colab/Kaggle/Jupyter thật vì không có một API restart kernel chung.
 
 ## Chat theo notebook
 
@@ -197,6 +239,18 @@ Mọi thứ tool trả về nằm lại trong context của agent cho tới hế
 - **Outline mỗi lượt** đọc `get_cells` với `summary: true`: trang chỉ gửi dòng đầu và số dòng của mỗi cell. Nếu outline giống lượt trước (cùng session), `<notebook-context>` chỉ ghi "unchanged".
 - **Nén context**: playbook chỉ đi theo lượt đầu của session, nên khi agent tự nén context nó có thể mất luật. Bridge khai báo capability `session.compaction` khi `initialize`; agent hỗ trợ (Claude Code) gửi `compaction_update`, và khi status là `completed` thì lượt kế tiếp mang lại playbook cùng outline đầy đủ, kèm một notice trong transcript. Với agent không báo, `usage_update` tụt dưới 60% lần báo trước (từ ít nhất 20k token) cũng được coi là đã nén. Session mới xóa số liệu cũ để không bị nhầm.
 - **Usage**: `usage_update` của ACP được lưu trong chat (`ChatSnapshot.usage`) và phát qua `chat.usage`; sidebar hiện mức đầy context.
+- **Run state**: `RunWatcher` giữ `textHash` (FNV-1a 32 bit + độ dài) của source lúc cell **bắt đầu chạy** và hash last-seen cho run nhanh không quan sát được `running`. `OpRunner.get_cells` so source đầy đủ với hash lần chạy đó và thêm `stale` trước khi `summarizeCell` cắt source; `renderCell` ghi “STALE (edited since it last ran)”. Vì vậy sửa source trong lúc cell chạy, hoặc chạy nhanh A rồi sửa B trước cùng tick, vẫn báo output thuộc source cũ. `runState` tóm tắt cell đang chạy, cell stale, cặp execution count đảo thứ tự đầu tiên và cell chưa chạy phía trên cell có count lớn nhất. Chỉ gửi các dòng này khi chúng đổi hoặc khi playbook được gửi lại; execution count không nằm trong chuỗi outline nên chỉ chạy cell không làm outline gửi lại.
+- **Hoạt động của user**: tối đa 20 `CellRun` gần nhất do user được gom trong `<notebook-activity>` ở lượt kế tiếp rồi xóa, kể cả run xảy ra trong lượt agent. Khi kernel từ disconnected/unknown về idle, một ghi chú cùng khối báo rằng biến từ các run trước có thể đã mất.
+
+## Trạng thái máy và kernel
+
+`vmfs` có op `stats` chỉ dùng thư viện chuẩn Python: `/proc/meminfo` (ưu tiên giới hạn cgroup nếu có), `shutil.disk_usage`, `nvidia-smi` với timeout 3 giây và Linux boot id. Mọi phần đọc đều có fallback riêng; thiếu GPU hay một nguồn không làm mất các trường khác. Việc số cgroup khớp giao diện Colab/Kaggle và việc kernel Jupyter/Colab trong VS Code điền `executionSummary.timing` vẫn cần kiểm chứng trên máy thật.
+
+`Chat.refreshMachine` gọi `machine_exec`, tối đa một lần mỗi 20 giây và chỉ một request đang chạy. Nó chạy khi mở chat, sau `cell_run`, khi kernel nối lại và trước mỗi prompt (Promise.race 1,5 giây nên không chậm lượt hơn mức đó). Kernel bận, mất kết nối, không phải Python hoặc lỗi khác đều bị nuốt và giữ số cũ. Thành công thì cập nhật `ChatSnapshot.machine` và phát `chat.machine`; `machineLine` đưa một dòng Machine vào prompt mỗi lượt, kèm LOW MEMORY dưới 10% RAM khả dụng, DISK NEARLY FULL dưới 5% disk trống và GPU MEMORY NEARLY FULL trên 90% VRAM. Header UI hiện tối đa RAM/GPU/Disk với cùng ngưỡng, tooltip số tuyệt đối và giờ đọc.
+
+Cùng nhịp watcher, `OpRunner` đọc `adapter.info().kernel` (prime ngay constructor để không nuốt transition trước tick đầu); sau đó phát `kernel_changed` khi giá trị đổi. Background cập nhật `tabs.info`; bridge cập nhật `browserNotebooks` và phát `browser.notebook` để chấm kernel và autoSetup chạy đúng lúc runtime nối lại, đồng thời chuyển sự kiện cho Chat. Chat giữ `lastKernel` riêng vì `notebook.attached` có thể ghi đè info trước event; VS Code coi `restarting/autorestarting` là `disconnected`, nên chuỗi restart → idle tạo được ghi chú biến có thể mất. Khi reconnect, `refreshMachine(true)` bỏ throttle 20 giây và, nếu lần đọc cũ còn dở, xếp một lần đọc mới ngay sau đó. `setupRan` vẫn chống chạy setup lặp như trước.
+
+Tool `kernel_state` (`TOOLS`, policy `read` nên được phép ở mọi mode) chỉ dùng `kernelExec` → op `execute`, không dùng `machineExec`: helper chạy trong namespace riêng nhưng đọc `get_ipython().user_ns` của đúng kernel notebook. Nó bỏ tên nội bộ, module, hàm và class; lấy type, shape hoặc len, kích thước (`nbytes`, pandas, torch rồi `sys.getsizeof`) và device khi có, mọi truy cập thuộc tính đều bọc try và không gọi `repr()` object. Kết quả lớn nhất đứng trước, giới hạn/lọc regex do agent chọn. Chỉ Python, kernel bận trả lỗi rõ ràng.
 
 ## Chạy code ngoài cell
 

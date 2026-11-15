@@ -18,6 +18,13 @@ describe("ChatStore", () => {
     expect(store.load("colab:/drive/a")).toBeNull();
   });
 
+  it("keeps the notebook machine in meta alongside the existing fields", () => {
+    const store = new ChatStore(mkdtempSync(join(tmpdir(), "ainb-store-")));
+    store.saveMeta("k", { projectName: "Project", machine: { boot: "boot-a", seenAt: 123 } });
+    store.saveMeta("k", { title: "train.ipynb" });
+    expect(store.loadMeta("k")).toMatchObject({ projectName: "Project", title: "train.ipynb", machine: { boot: "boot-a", seenAt: 123 } });
+  });
+
   it("settles what was still waiting when the transcript was saved", () => {
     const store = new ChatStore(mkdtempSync(join(tmpdir(), "ainb-store-")));
     const review = { reviewId: "r1", cellId: "c1", kind: "update" as const, cellType: "code" as const, before: "a", after: "b" };
@@ -30,11 +37,19 @@ describe("ChatStore", () => {
           { type: "review", review, status: "pending" },
           { type: "tool", toolCallId: "t1", title: "x", status: "in_progress" },
           { type: "review", review: { ...review, reviewId: "r2" }, status: "accepted" },
+          {
+            type: "card",
+            card: {
+              cardId: "card1", kind: "run", tone: "error", title: "Cell [0] failed", state: "open",
+              actions: [{ id: "fix", label: "Fix", primary: true }, { id: "dismiss", label: "Dismiss" }],
+            },
+          },
         ]),
       ],
     });
     const parts = store.load("k")!.messages[0]!.parts;
-    expect(parts.map((p) => (p.type === "prompt" ? p.answer : "status" in p ? p.status : null))).toEqual(["cancelled", "discarded", "failed", "accepted"]);
+    expect(parts.map((p) => (p.type === "prompt" ? p.answer : "status" in p ? p.status : null))).toEqual(["cancelled", "discarded", "failed", "accepted", null]);
+    expect(parts.at(-1)).toMatchObject({ type: "card", card: { cardId: "card1", state: "stale", actions: [] } });
   });
 
   it("saves in the background, and a newer save always wins", async () => {
