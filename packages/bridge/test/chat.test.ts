@@ -648,6 +648,21 @@ describe("Session restore", () => {
   });
 });
 
+describe("Bridge notes", () => {
+  it("puts a note made during a turn inside the turn's reply, not pinned after it", async () => {
+    const { chat } = setup();
+    const pending = deferred<{ stopReason: "end_turn" }>();
+    agent.prompt.mockReturnValue(pending.promise);
+    chat.send("working");
+    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
+    (chat as unknown as { system(text: string): void }).system("code is ready");
+    const last = chat.messages.at(-1)!;
+    expect(last.role).toBe("agent");
+    expect(last.parts).toContainEqual({ type: "notice", level: "info", text: "code is ready" });
+    pending.resolve({ stopReason: "end_turn" });
+  });
+});
+
 describe("Autosave", () => {
   const place: CodePlace = { projectId: "p", dir: "/content/repo", branch: "notebook/test", remote: "https://example.test/repo", session: "project-test", worktree: "/tmp/worktree" };
 

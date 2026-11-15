@@ -1706,8 +1706,15 @@ ${st.place.branch}`);
     return m;
   }
 
+  /**
+   * A note from the bridge. During a turn it goes inside the turn's reply, in
+   * order: a separate message would sit after the reply (created when the turn
+   * began) and stay pinned below everything the agent adds to it.
+   */
   private system(text: string): void {
-    this.touch(this.newMessage("system", [{ type: "notice", level: "info", text }]));
+    const part: Part = { type: "notice", level: "info", text };
+    if (this.current) this.addPart(this.current, part);
+    else this.touch(this.newMessage("system", [part]));
   }
 
   private lastAgentMessage(): ChatMessage {
