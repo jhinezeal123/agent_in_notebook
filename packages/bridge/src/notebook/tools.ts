@@ -457,8 +457,9 @@ export const TOOLS = [
     name: "NotebookEdit",
     description:
       "Change the cells of an .ipynb file on the notebook's machine; on the notebook file, this changes the notebook in the user's editor. " +
-      'edit_mode "replace" (default) sets a cell\'s source (and type, if given); "insert" adds a cell after cell_id (at the top without one); ' +
-      '"delete" removes a cell; "move" moves a cell to index (0-based).',
+      'edit_mode "replace" (default) replaces the cell\'s WHOLE source with new_source (and its type, if given): pass the complete cell, ' +
+      "never just the changed lines, or the rest of the cell is lost. To change a few lines of a cell, use Edit on the notebook file instead. " +
+      '"insert" adds a cell after cell_id (at the top without one); "delete" removes a cell; "move" moves a cell to index (0-based).',
     schema: z.object({
       notebook_path: pathArg,
       cell_id: z.string().optional().describe("The cell to change; for insert, the cell the new one follows."),
