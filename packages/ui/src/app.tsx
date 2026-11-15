@@ -429,7 +429,7 @@ function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror, c
               Kernel {notebook.kernel}
             </span>
             {code && <span><CodeState code={code} onPush={onPushCode} /></span>}
-            {resources.map((resource) => <span key={resource.key} class={resource.warn ? "warn" : undefined} title={resource.title}>{resource.label}</span>)}
+            {resources.map((resource) => <ResourceChip key={resource.key} resource={resource} at={machine!.at} />)}
           </div>
         </div>
         {chrome && (
@@ -474,41 +474,62 @@ function CodeState({ code, onPush }: { code: ChatCode; onPush: () => void }) {
   );
 }
 
-function machineResources(machine?: MachineStats): { key: string; label: string; title: string; warn: boolean }[] {
+type ResourceRow = { name: string; used: number; total: number; note?: string; warn: boolean };
+type Resource = { key: string; label: string; warn: boolean; rows: ResourceRow[] };
+
+function machineResources(machine?: MachineStats): Resource[] {
   if (!machine) return [];
-  const gb = (n: number) => `${(n / 1_000_000_000).toFixed(1)} GB`;
-  const percent = (used: number, total: number) => Math.max(0, Math.min(100, Math.round((used / total) * 100)));
-  const asOf = `As of ${new Date(machine.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-  const out: { key: string; label: string; title: string; warn: boolean }[] = [];
+  const out: Resource[] = [];
   if (machine.memTotal !== undefined && machine.memAvailable !== undefined && machine.memTotal > 0) {
-    const used = machine.memTotal - machine.memAvailable;
-    out.push({
-      key: "ram",
-      label: `RAM ${percent(used, machine.memTotal)}%`,
-      title: `RAM ${gb(used)} of ${gb(machine.memTotal)} used\n${asOf}`,
-      warn: machine.memAvailable < machine.memTotal * 0.1,
-    });
+    const warn = machine.memAvailable < machine.memTotal * 0.1;
+    out.push({ key: "ram", label: "RAM", warn, rows: [{ name: "RAM", used: machine.memTotal - machine.memAvailable, total: machine.memTotal, warn }] });
   }
-  // Just "GPU": the numbers for every GPU (Kaggle's T4 x2 has two) are in the tooltip.
+  // Every GPU of the machine (Kaggle's T4 x2 has two), each with its own row.
   const gpus = (machine.gpus ?? []).filter((g) => g.memTotal > 0);
   if (gpus.length) {
-    out.push({
-      key: "gpu",
-      label: "GPU",
-      title: `${gpus.map((g, i) => `GPU ${i} ${g.name}: ${gb(g.memUsed)} of ${gb(g.memTotal)} memory, ${Math.round(g.util)}% busy`).join("\n")}\n${asOf}`,
-      warn: gpus.some((g) => g.memUsed > g.memTotal * 0.9),
-    });
+    const rows = gpus.map((g, i) => ({
+      name: gpus.length > 1 ? `GPU ${i} · ${g.name}` : g.name,
+      used: g.memUsed,
+      total: g.memTotal,
+      note: `${Math.round(g.util)}% busy`,
+      warn: g.memUsed > g.memTotal * 0.9,
+    }));
+    out.push({ key: "gpu", label: "GPU", warn: rows.some((r) => r.warn), rows });
   }
   if (machine.diskTotal !== undefined && machine.diskFree !== undefined && machine.diskTotal > 0) {
-    const used = machine.diskTotal - machine.diskFree;
-    out.push({
-      key: "disk",
-      label: `Disk ${percent(used, machine.diskTotal)}%`,
-      title: `Disk ${gb(used)} of ${gb(machine.diskTotal)} used\n${asOf}`,
-      warn: machine.diskFree < machine.diskTotal * 0.05,
-    });
+    const warn = machine.diskFree < machine.diskTotal * 0.05;
+    out.push({ key: "disk", label: "Disk", warn, rows: [{ name: "Disk", used: machine.diskTotal - machine.diskFree, total: machine.diskTotal, warn }] });
   }
   return out;
+}
+
+/** A machine resource in the header: just its name; hovering or focusing it shows the numbers. */
+function ResourceChip({ resource, at }: { resource: Resource; at: number }) {
+  const gb = (n: number) => `${(n / 1_000_000_000).toFixed(1)} GB`;
+  const percent = (r: ResourceRow) => Math.max(0, Math.min(100, Math.round((r.used / r.total) * 100)));
+  const asOf = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const summary = resource.rows.map((r) => `${r.name}: ${gb(r.used)} of ${gb(r.total)}${r.note ? `, ${r.note}` : ""}`).join("; ");
+  return (
+    <span class={`resource${resource.warn ? " warn" : ""}`} tabIndex={0} aria-label={`${resource.label}: ${summary}`}>
+      {resource.label}
+      <span class="resource-pop" role="tooltip">
+        {resource.rows.map((r) => (
+          <span key={r.name} class={`resource-row${r.warn ? " warn" : ""}`}>
+            <span class="resource-head">
+              <span class="resource-name">{r.name}</span>
+              <span class="resource-pct">{percent(r)}%</span>
+            </span>
+            <span class="resource-bar"><span style={{ width: `${percent(r)}%` }} /></span>
+            <span class="resource-nums">
+              <span>{gb(r.used)} of {gb(r.total)}</span>
+              {r.note && <span>{r.note}</span>}
+            </span>
+          </span>
+        ))}
+        <span class="resource-asof">As of {asOf}</span>
+      </span>
+    </span>
+  );
 }
 
 function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject, saving, onSaveNotebook, verifying, onVerifyNotebook }: {

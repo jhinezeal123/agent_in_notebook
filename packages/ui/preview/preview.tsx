@@ -20,7 +20,7 @@ const chat: ChatSnapshot = {
   machine: {
     at: now - 30_000, memTotal: 12_700_000_000, memAvailable: 3_100_000_000,
     diskTotal: 108_000_000_000, diskFree: 47_000_000_000,
-    gpus: [{ name: "Tesla T4", memUsed: 1_200_000_000, memTotal: 15_000_000_000, util: 8 }],
+    gpus: [{ name: "Tesla T4", memUsed: 8_100_000_000, memTotal: 15_800_000_000, util: 62 }, { name: "Tesla T4", memUsed: 3_000_000, memTotal: 15_800_000_000, util: 0 }],
   },
   options: [
     { id: "model", name: "Model", category: "model", kind: "select", value: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }] },
