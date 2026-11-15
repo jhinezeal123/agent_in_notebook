@@ -694,13 +694,19 @@ ${st.place.branch}`);
   /** The project as OpenResearch just described it; a change reaches the chat UI. */
   setProject(res: ProjectResolution, moved = false): void {
     const before = this.project;
+    const codeBefore = this.codeState;
     if (moved || (before?.id && res.project.id && before.id !== res.project.id)) {
       this.projectMoved = true;
       this.projectRevision++;
+      // What the header said about the old project's code (there, or never put there) no longer holds.
+      if (this.code && this.codeState?.state !== "pushing") {
+        this.codeState = { state: "missing", why: `The code of ${res.project.name} is not on the notebook's machine yet.` };
+        this.lastCodeShown = "";
+      }
     }
     this.project = res.project;
     if (res.notice) this.system(res.notice);
-    if (JSON.stringify(before) !== JSON.stringify(res.project)) this.host.emit("chat.snapshot", this.snapshot());
+    if (JSON.stringify(before) !== JSON.stringify(res.project) || codeBefore !== this.codeState) this.host.emit("chat.snapshot", this.snapshot());
   }
 
   /**

@@ -995,3 +995,17 @@ describe("Project code in the notebook header", () => {
     expect(chat.snapshot().code?.state).toBe("missing");
   });
 });
+
+describe("Project code after a move to another project", () => {
+  it("turns the code state back to missing (pushable) when the notebook moves to another project", () => {
+    const { chat, emit } = setup({}, "nb-key");
+    withProject(chat);
+    (chat as unknown as { code: unknown }).code = { current: null, ensure: vi.fn() };
+    chat.setProject({ project: { id: "scratch", name: "Scratch", state: "ready" } } as never);
+    (chat as unknown as { codeState: unknown }).codeState = { state: "none", why: "The project Scratch has no GitHub repository." };
+    emit.mockClear();
+    chat.setProject({ project: { id: "gepa", name: "gepa", state: "ready" } } as never, true);
+    expect(chat.snapshot().code).toEqual({ state: "missing", why: "The code of gepa is not on the notebook's machine yet." });
+    expect(emit).toHaveBeenCalledWith("chat.snapshot", expect.objectContaining({ code: expect.objectContaining({ state: "missing" }) }));
+  });
+});
