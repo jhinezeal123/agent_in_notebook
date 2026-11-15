@@ -334,6 +334,7 @@ export class Bridge {
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
         this.byToken.set(chat.mcpToken, chat);
+        void chat.refreshMachine();
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
         if (key) void this.refreshProject(chat);
         return chat.snapshot();
@@ -357,6 +358,10 @@ export class Bridge {
       }),
     );
     rpc.handle("chat.saveNotebook", guard<"chat.saveNotebook">(async (p) => ({ path: await this.chatById(p.chatId).saveNotebookNow() })));
+    rpc.handle("chat.verifyNotebook", guard<"chat.verifyNotebook">(async (p) => {
+      await this.chatById(p.chatId).verifyAndSave();
+      return { started: true };
+    }));
     rpc.handle("chat.get", guard<"chat.get">((p) => this.chats.get(p.tabId)?.snapshot() ?? null));
     rpc.handle(
       "chat.send",
@@ -397,6 +402,8 @@ export class Bridge {
     rpc.handle("chat.answer", guard<"chat.answer">((p) => ({ answered: this.chatById(p.chatId).answer(p.promptId, p.optionId) })));
     rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(p.chatId).resolveReview(p.reviewId, p.accept) })));
     rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(p.chatId).undo(String(p.messageId))));
+    rpc.handle("chat.cardAction", guard<"chat.cardAction">((p) => ({ accepted: this.chatById(p.chatId).cardAction(String(p.cardId), String(p.actionId)) })));
+    rpc.handle("chat.sessionStep", guard<"chat.sessionStep">((p) => this.chatById(p.chatId).sessionStep(String(p.cardId), p.step, p.error === undefined ? undefined : String(p.error))));
     rpc.handle("notebook.setup", guard<"notebook.setup">((p) => {
       const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
       const waitMs = Math.min(110, Math.max(5, Number(p.waitSeconds) || 90)) * 1000;
@@ -438,6 +445,10 @@ export class Bridge {
     });
     rpc.on("notebook.event", (p: ExtensionEvents["notebook.event"]) => {
       if (!authed()) return;
+      if (browser && p.event.type === "kernel_changed") {
+        const info = this.browserNotebooks.get(p.tabId);
+        if (info) this.setBrowserNotebook(p.tabId, { ...info, kernel: p.event.kernel });
+      }
       for (const chat of this.chatsOn(kind, p.tabId)) chat.onNotebookEvent(p.event);
     });
     rpc.on("notebook.attached", (p: ExtensionEvents["notebook.attached"]) => {
@@ -543,6 +554,11 @@ export class Bridge {
       : undefined;
     return {
       project,
+      meta: key ? {
+        load: () => this.store.loadMeta(key),
+        save: (patch) => { this.store.saveMeta(key, patch); },
+      } : undefined,
+      machineReset: () => forgetSetup(`${target.kind}:${target.tabId}`),
       projectMcpServer: (chatToken): McpServer => ({
         name: "project",
         command: this.opts.mcpCommand.command,

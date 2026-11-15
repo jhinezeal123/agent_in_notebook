@@ -51,6 +51,8 @@ export interface NotebookMeta {
   cache?: ProjectCache;
   /** Where the project lives: unset for this computer (remote workspaces later). */
   workspace?: string;
+  /** The notebook machine's boot id and when it was last seen. */
+  machine?: { boot: string; seenAt: number };
   updatedAt: number;
 }
 
@@ -222,6 +224,7 @@ function settle(m: ChatMessage): ChatMessage {
       if (p.type === "prompt" && p.answer === undefined) return { ...p, answer: "cancelled" };
       if (p.type === "review" && p.status === "pending") return { ...p, status: "discarded" as const };
       if (p.type === "tool" && (p.status === "pending" || p.status === "in_progress")) return { ...p, status: "failed" as const };
+      if (p.type === "card" && p.card.state === "open") return { ...p, card: { ...p.card, state: "stale" as const, actions: [] } };
       return p;
     }),
   };

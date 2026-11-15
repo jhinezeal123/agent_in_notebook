@@ -13,6 +13,8 @@ import {
   type AgentOption,
   type AppliedChange,
   type CellInfo,
+  type CellRun,
+  type ChatCard,
   type ChatMessage,
   type ChatProject,
   type ChatSettings,
@@ -20,6 +22,7 @@ import {
   type ChatStatus,
   type ChatUsage,
   type MessagePatch,
+  type MachineStats,
   type NotebookEvent,
   type NotebookInfo,
   type NotebookOpName,
@@ -33,16 +36,18 @@ import {
 } from "@ainb/protocol";
 import { AcpAgent, AgentStartError } from "./agents/acp-agent.js";
 import type { AgentSpec } from "./agents/registry.js";
-import { litReview, playbook, projectContext, projectUnavailable, recap, turnContext } from "./instructions.js";
+import { cellRunBlock, litReview, machineLine, playbook, projectContext, projectUnavailable, recap, runDuration, runState, turnContext } from "./instructions.js";
 import { RecentRuns } from "./notebook/exec.js";
 import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
-import { callTool, Denied, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
+import { stats } from "./notebook/vmfs.js";
+import type { KernelExec } from "./notebook/kernel.js";
+import { callTool, Denied, renderCell, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
 import { PROJECT_TOOLS, saveNotebook, type ProjectToolContext } from "./project/tools.js";
 import { redactTokens, remoteOf } from "./project/github.js";
-import { CodeSync, type CodePlace } from "./project/vmrepo.js";
+import { CodeSync, type CodePlace, type CodeState } from "./project/vmrepo.js";
 import { cacheOf as projectCache, type ProjectBrief, type ProjectLinks, type ProjectResolution } from "./research/links.js";
-import type { ProjectCache } from "./store.js";
+import type { NotebookMeta, ProjectCache } from "./store.js";
 import { ensureWorktree } from "./project/worktree.js";
 import { describeFailure, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
@@ -57,6 +62,10 @@ export interface ChatHost {
   projectMcpServer?(chatToken: string): McpServer;
   /** The notebook's OpenResearch project; absent for chats without a notebook key. */
   project?: ChatProjectHost;
+  /** What is kept of the notebook between chats (its machine). */
+  meta?: { load(): NotebookMeta | null; save(patch: Partial<Pick<NotebookMeta, "machine">>): void };
+  /** Forget terminal screens tied to the old notebook machine. */
+  machineReset?(): void;
   workspaceRoot: string;
   /** Save the transcript: debounced as it changes (in the background), and on close (`sync`). */
   persist?(chat: Chat, sync: boolean): void;
@@ -97,6 +106,19 @@ const OP_TIMEOUT_MS = 30_000;
 const PERSIST_MS = 2_000;
 /** Decided reviews kept so a late await_review still gets the answer. */
 const REVIEWS_KEPT = 200;
+const RUN_CARDS_OPEN = 5;
+const LONG_RUN_MS = 60_000;
+const MACHINE_MIN_MS = 20_000;
+const MACHINE_SAVE_MS = 5 * 60_000;
+const AUTOSAVE_MS = 10 * 60_000;
+
+interface TurnInput {
+  text: string;
+  /** Extra block for the agent, before <notebook-context>. */
+  context?: string;
+  /** Cells the `cell` scope may edit this turn, when the user pinned none. */
+  targets?: string[];
+}
 
 interface ReviewState {
   outcome: ReviewOutcome;
@@ -111,6 +133,7 @@ export class Chat {
   error: string | undefined;
   messages: ChatMessage[] = [];
   notebook: NotebookInfo | null = null;
+  machine: MachineStats | undefined;
   readonly notebookKey: string | undefined;
 
   private imageBytes = 0;
@@ -128,10 +151,12 @@ export class Chat {
   private pendingRecap = "";
   private current: ChatMessage | null = null;
   private turn: { controller: AbortController; prompting: boolean; project: ProjectCache | null; code: CodePlace | null } | null = null;
-  private queue: string[] = [];
+  private queue: TurnInput[] = [];
   private turnTargets: string[] = [];
   private reviews = new Map<string, ReviewState>();
   private prompts = new Map<string, (optionId: string) => void>();
+  private cards = new Map<string, { card: ChatCard; message: ChatMessage; onAction(actionId: string): void }>();
+  private sessionCells = new Map<string, string[]>();
   private dirty = new Set<ChatMessage>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -145,6 +170,25 @@ export class Chat {
   private usage: ChatUsage | undefined;
   /** The outline sent with the last prompt, to skip resending it unchanged. */
   private lastOutline = "";
+  /** Run diagnostics sent with the last prompt, to include only changes. */
+  private lastRunState = "";
+  /** Cells the user ran since the agent's last turn, oldest first. */
+  private activity: CellRun[] = [];
+  /** Last kernel event, kept apart from attached info that may overwrite it. */
+  private lastKernel: NotebookInfo["kernel"] | undefined;
+  /** Kernel reconnects the agent has not been told about yet. */
+  private kernelNotes: string[] = [];
+  private machineAt = 0;
+  private machineRead: Promise<void> | null = null;
+  private boot: string | undefined;
+  private machineSavedAt = 0;
+  private lastSyncAt = 0;
+  /** Last attempt that confirmed the code is saved, not merely scheduled or attempted. */
+  private lastSavedAt = 0;
+  private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private dirtySinceSync = false;
+  private lastUserRunAt = 0;
+  private busyJob: { controller: AbortController } | null = null;
   /** Tail of each lock's queue (see ToolContext.exclusive). */
   private locks = new Map<string, Promise<unknown>>();
   /** Outputs of recent Bash / run_code calls, for read_output. */
@@ -189,7 +233,11 @@ export class Chat {
     if (carried.length) {
       this.messages = carried;
       for (const message of carried) {
-        for (const part of message.parts) if (part.type === "image") this.imageBytes += part.data.length;
+        for (const part of message.parts) {
+          if (part.type === "image") this.imageBytes += part.data.length;
+          // Action handlers belong to the old Chat; a carried card cannot still be pressed.
+          if (part.type === "card" && part.card.state === "open") part.card = { ...part.card, state: "stale", actions: [] };
+        }
       }
       this.pendingRecap = recap(carried);
       this.system(opts.note ?? `Switched to ${spec.name}. It gets a summary of the conversation so far.`);
@@ -212,6 +260,7 @@ export class Chat {
       messages: this.messages,
       notebook: this.notebook,
       usage: this.usage,
+      machine: this.machine,
       ...(this.project ? { project: this.project } : {}),
     };
   }
@@ -290,7 +339,10 @@ export class Chat {
   close(opts: { forget?: boolean } = {}): void {
     if (opts.forget) this.forgotten = true;
     this.closed = true;
+    if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
+    this.autosaveTimer = null;
     this.turn?.controller.abort();
+    if (this.busyJob) this.cancelCellJob();
     this.queue = [];
     this.failPrompts();
     for (const r of this.reviews.values()) r.waiters.forEach((w) => w("pending"));
@@ -302,17 +354,19 @@ export class Chat {
 
   // ------------------------------------------------------------ turns
 
-  send(text: string): void {
+  send(text: string, extra: Omit<TurnInput, "text"> = {}): void {
+    if (this.closed) return;
     const msg = this.newMessage("user", [{ type: "text", text }]);
     this.touch(msg);
-    if (this.status === "running" || this.current) {
-      this.queue.push(text);
+    const input: TurnInput = { text, ...extra };
+    if (this.status === "running" || this.current || this.busyJob) {
+      this.queue.push(input);
       return;
     }
-    void this.runTurn(text);
+    void this.runTurn(input);
   }
 
-  private async runTurn(text: string): Promise<void> {
+  private async runTurn(input: TurnInput): Promise<void> {
     const reply = this.newMessage("agent", []);
     this.current = reply;
     const turn: NonNullable<Chat["turn"]> = { controller: new AbortController(), prompting: false, project: null, code: null };
@@ -321,7 +375,7 @@ export class Chat {
     try {
       await this.ensureStarted();
       turn.controller.signal.throwIfAborted();
-      const prompt = await this.buildPrompt(text);
+      const prompt = await this.buildPrompt(input);
       turn.controller.signal.throwIfAborted();
       turn.prompting = true;
       const res = await this.agent!.prompt(prompt);
@@ -347,7 +401,7 @@ export class Chat {
         this.addPart(reply, { type: "notice", level: "error", text: capText(this.error ?? msg, 2000) });
       }
     } finally {
-      if (turn.prompting && turn.code) void this.syncCode(turn.code, firstLine(text, 72));
+      if (turn.prompting && turn.code) void this.syncCode(turn.code, firstLine(input.text, 72));
       this.closeOpenTools(reply);
       this.current = null;
       this.turn = null;
@@ -362,7 +416,25 @@ export class Chat {
     }
   }
 
-  private async buildPrompt(text: string): Promise<string> {
+  private async withBusyJob<T>(fn: (controller: AbortController) => Promise<T>): Promise<T> {
+    if (this.current || this.busyJob) throw new Error("Wait for the agent's turn or the current notebook job to finish first.");
+    const controller = new AbortController();
+    this.busyJob = { controller };
+    try {
+      return await fn(controller);
+    } finally {
+      this.busyJob = null;
+      const next = this.queue.shift();
+      if (next !== undefined && !this.closed) void this.runTurn(next);
+    }
+  }
+
+  private async buildPrompt(input: TurnInput): Promise<string> {
+    let machineTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.refreshMachine(),
+      new Promise<void>((resolve) => { machineTimer = setTimeout(resolve, 1500); }),
+    ]).finally(() => { if (machineTimer) clearTimeout(machineTimer); });
     const rules = this.sessionFresh || this.rulesDue;
     const project = await this.projectBlock(rules || !!this.pendingRecap);
     let cells: CellInfo[] | null = null;
@@ -374,13 +446,16 @@ export class Chat {
       this.notebook = null;
     }
     if (this.notebook) file = await notebookPath(this.toolContext(), this.notebook).catch(() => null);
+    const state = cells ? runState(cells).join("\n") : "";
+    const runLines = state && (rules || state !== this.lastRunState) ? state.split("\n") : null;
+    this.lastRunState = state;
     this.turnTargets = this.settings.targetCellIds.length
       ? this.settings.targetCellIds
-      : this.notebook?.selectedCellIds.length
+      : input.targets ?? (this.notebook?.selectedCellIds.length
         ? this.notebook.selectedCellIds
         : this.notebook?.activeCellId
           ? [this.notebook.activeCellId]
-          : [];
+          : []);
     const blocks: string[] = [];
     if (rules) blocks.push(playbook(this.notebook, file, !!this.host.project));
     this.rulesDue = false;
@@ -396,10 +471,25 @@ export class Chat {
     if (project) blocks.push(project);
     const code = await this.codeBlock(rules || !!this.pendingRecap);
     if (code) blocks.push(code);
-    const lit = this.host.project ? litReview(text) : null;
+    const lit = this.host.project ? litReview(input.text) : null;
     if (lit) blocks.push(lit);
-    blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file));
-    blocks.push(text);
+    if (this.activity.length || this.kernelNotes.length) {
+      const runs = this.activity.map((run) => {
+        const status = `${run.status}${run.durationMs === undefined ? "" : ` (${runDuration(run.durationMs)})`}`;
+        const error = run.ename ? ` ${run.ename}${run.evalue ? `: ${firstLine(run.evalue, 100)}` : ""}` : "";
+        return `[${run.index}] ${run.cellId} ${status}${error}`;
+      });
+      const activity = [
+        this.activity.length ? `Since your last turn the user ran these cells themselves, oldest first:\n${runs.join(" · ")}` : "",
+        ...this.kernelNotes,
+      ].filter(Boolean).join("\n");
+      blocks.push(`<notebook-activity>\n${activity}\n</notebook-activity>`);
+      this.activity = [];
+      this.kernelNotes = [];
+    }
+    if (input.context) blocks.push(input.context);
+    blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file, runLines, this.machine ? machineLine(this.machine, Date.now()) : null));
+    blocks.push(input.text);
     return blocks.join("\n\n");
   }
 
@@ -465,14 +555,8 @@ export class Chat {
     const turn = this.turn;
     const orx = turn?.project;
     if (!this.code || !turn || !orx || !this.notebookKey) return null;
-    const key = this.notebookKey;
-    const title = this.notebook?.title?.replace(/\.ipynb$/i, "") || "notebook";
     if (!this.code.current && remoteOf(orx)) this.show("Putting the project's code on the notebook's machine…", "preparing");
-    const st = await this.code.ensure(orx, async () => {
-      const wt = await ensureWorktree(orx.repoPath, orx.id, key, title);
-      this.showWorktree(orx.id, wt.path);
-      return wt;
-    });
+    const st = await this.ensureCode(orx);
     let note: string;
     if (st.state === "ready") {
       const p = st.place;
@@ -494,6 +578,17 @@ export class Chat {
     return note;
   }
 
+  private ensureCode(orx: ProjectCache): Promise<CodeState> {
+    if (!this.code || !this.notebookKey) throw new Denied("This chat has no project code on the notebook's machine.");
+    const key = this.notebookKey;
+    const title = this.notebook?.title?.replace(/\.ipynb$/i, "") || "notebook";
+    return this.code.ensure(orx, async () => {
+      const wt = await ensureWorktree(orx.repoPath, orx.id, key, title);
+      this.showWorktree(orx.id, wt.path);
+      return wt;
+    });
+  }
+
   /** A notice about the code, once for each state. */
   private show(text: string, key: string): void {
     if (key === this.lastCodeShown) return;
@@ -504,12 +599,56 @@ export class Chat {
   /** After a turn: what changed on the machine goes to the branch and the user's computer. */
   private async syncCode(place: CodePlace, subject: string): Promise<void> {
     if (!this.code) return;
+    const started = Date.now();
     const r = await this.code.syncBack(place, `Notebook chat: ${subject}`, () => {
       if (!this.closed) this.system(`Pushing the code from the notebook's machine is taking longer than usual (terminal session "${place.session}").`);
-    }).catch((e: Error) => ({ changed: false, text: `Could not save the code from the notebook's machine: ${e.message}` }));
+    }).catch((e: Error) => ({ ok: false, changed: false, text: `Could not save the code from the notebook's machine: ${e.message}` }));
+    this.lastSyncAt = Date.now();
+    if (r.ok) this.lastSavedAt = this.lastSyncAt;
+    this.dirtySinceSync = !r.ok || this.lastUserRunAt > started;
     if (r.changed) this.host.project?.links.markDirty(place.projectId);
     if (this.closed) return;
     if (r.text) this.system(r.text);
+  }
+
+  private scheduleAutosave(): void {
+    if (this.closed || !this.code?.current || this.autosaveTimer) return;
+    const place = this.code.current;
+    if (!this.lastSyncAt) this.lastSyncAt = Date.now();
+    const wait = Math.max(0, this.lastSyncAt + AUTOSAVE_MS - Date.now());
+    this.autosaveTimer = setTimeout(() => {
+      this.autosaveTimer = null;
+      if (this.closed) return;
+      if (this.current) {
+        // A turn cancelled before prompting cannot sync; try again after one interval.
+        this.lastSyncAt = Date.now();
+        this.scheduleAutosave();
+        return;
+      }
+      if (!this.dirtySinceSync) return;
+      void this.autosave(place);
+    }, wait);
+    this.autosaveTimer.unref?.();
+  }
+
+  private async autosave(place: CodePlace): Promise<void> {
+    if (!this.code) return;
+    const started = Date.now();
+    let ok = false;
+    try {
+      const r = await this.code.syncBack(place, "Autosave", () => {});
+      ok = r.ok;
+      this.lastSyncAt = Date.now();
+      if (r.ok) this.lastSavedAt = this.lastSyncAt;
+      this.dirtySinceSync = !r.ok || this.lastUserRunAt > started;
+      if (r.changed) this.host.project?.links.markDirty(place.projectId);
+      if (r.ok && r.changed && !this.closed) this.system(r.text);
+    } catch {
+      this.lastSyncAt = Date.now();
+      this.dirtySinceSync = true;
+    }
+    if (!ok) this.dirtySinceSync = true;
+    this.scheduleAutosave();
   }
 
   /** The project as OpenResearch just described it; a change reaches the chat UI. */
@@ -592,9 +731,98 @@ export class Chat {
     return r.path;
   }
 
+  /** Run every code cell from a reset Python namespace, and save only when all pass. */
+  async verifyAndSave(): Promise<void> {
+    if (this.current || this.busyJob) throw new Error("Wait for the agent's turn or the current notebook job to finish first.");
+    if (!this.notebookKey) throw new Denied("This chat has no project: its notebook has no stable address.");
+    await this.requireProject();
+    const info = await this.call({ op: "info" });
+    if (info.language.toLowerCase() !== "python") throw new Error("Verifying needs a Python kernel.");
+    if (info.kernel !== "idle") throw new Error("The kernel is busy or not connected.");
+    const { cells } = await this.call({ op: "get_cells" });
+    const snapshot = cells.filter((c) => c.type === "code").map((c) => ({ id: c.id, source: c.source }));
+    const ids = snapshot.map((c) => c.id);
+    if (!ids.length) throw new Error("There are no code cells to verify.");
+    let cardId = "";
+    const card = this.addCard({
+      kind: "verify",
+      tone: "info",
+      title: "Run the whole notebook from a clean state?",
+      detail: `Variables in memory are cleared first; ${ids.length} code cells run in order. Installed packages and files stay. This uses %reset -f, not a kernel restart: imported modules stay cached. Python (IPython) only.`,
+      actions: [{ id: "verify", label: "Verify", primary: true }, { id: "dismiss", label: "Cancel" }],
+    }, (action) => {
+      if (action === "verify") void this.verifyCells(cardId, snapshot);
+      else if (action === "cancel") this.cancelCellJob();
+    });
+    cardId = card.cardId;
+  }
+
+  private async verifyCells(cardId: string, snapshot: { id: string; source: string }[]): Promise<void> {
+    const entry = this.cards.get(cardId);
+    if (!entry) return;
+    const ids = snapshot.map((c) => c.id);
+    if (this.current || this.busyJob) {
+      entry.card.detail = "Wait for the agent's turn or the current notebook job to finish, then try Verify again.";
+      this.touch(entry.message);
+      return;
+    }
+    entry.card.progress = { done: 0, total: ids.length };
+    entry.card.actions = [{ id: "cancel", label: "Stop" }];
+    entry.card.detail = "Running from a clean state (%reset -f, not a kernel restart).";
+    this.touch(entry.message);
+    try {
+      await this.withBusyJob(async (controller) => {
+        const reset = await this.call({ op: "execute", code: "%reset -f", waitMs: 15_000 }, 30_000);
+        if (reset.status !== "ok") {
+          this.closeCard(cardId, "done", `Could not clear variables with %reset -f${reset.message ? `: ${reset.message}.` : "."} Nothing was saved.`);
+          return;
+        }
+        const result = await this.runCellsInOrder(ids, (done) => {
+          entry.card.progress = { done, total: ids.length };
+          this.touch(entry.message);
+        }, controller.signal);
+        if (result.cancelled) {
+          this.closeCard(cardId, "done", "Stopped by the user. Nothing was saved.");
+          return;
+        }
+        if (result.failedAt) {
+          this.closeCard(cardId, "done", `Stopped at cell [${result.failedAt.index}]: it failed. Nothing was saved.`);
+          return;
+        }
+        if (controller.signal.aborted) {
+          this.closeCard(cardId, "done", "Stopped by the user. Nothing was saved.");
+          return;
+        }
+        if (this.closed) return;
+        const { cells: current } = await this.call({ op: "get_cells" });
+        const currentSnapshot = current.filter((c) => c.type === "code").map((c) => ({ id: c.id, source: c.source }));
+        if (controller.signal.aborted) {
+          this.closeCard(cardId, "done", "Stopped by the user. Nothing was saved.");
+          return;
+        }
+        if (this.closed) return;
+        if (JSON.stringify(currentSnapshot) !== JSON.stringify(snapshot)) {
+          this.closeCard(cardId, "done", "The notebook changed during verification. Nothing was saved.");
+          return;
+        }
+        entry.card.actions = [];
+        entry.card.detail = "Saving the verified notebook…";
+        this.touch(entry.message);
+        const saved = await saveNotebook(this.projectToolContext(null), { user: { notebookKey: this.notebookKey! } });
+        this.closeCard(cardId, "done", `Verified: ${ids.length} cells ran from a clean state. Saved to ${saved.path}.`, "ok");
+      });
+    } catch (e) {
+      if (!this.closed && this.cards.has(cardId)) this.closeCard(cardId, "done", `Verification failed: ${(e as Error).message}. Nothing was saved.`);
+    }
+  }
+
   async cancel(): Promise<boolean> {
     this.queue = [];
     this.failPrompts();
+    if (this.busyJob) {
+      this.cancelCellJob();
+      return true;
+    }
     if (!this.current) return false;
     this.turn?.controller.abort();
     if (this.turn?.prompting) await this.agent?.cancel().catch(() => {});
@@ -782,11 +1010,247 @@ export class Chat {
     return true;
   }
 
+  private addCard(partial: Omit<ChatCard, "cardId" | "state">, onAction: (actionId: string) => void): ChatCard {
+    const card: ChatCard = { ...partial, cardId: randomUUID(), state: "open" };
+    const message = this.newMessage("system", [{ type: "card", card }]);
+    this.touch(message);
+    this.cards.set(card.cardId, { card, message, onAction });
+    return card;
+  }
+
+  private closeCard(cardId: string, state: "done" | "stale", outcome?: string, tone?: ChatCard["tone"]): void {
+    const entry = this.cards.get(cardId);
+    if (!entry) return;
+    entry.card.state = state;
+    entry.card.outcome = outcome;
+    entry.card.actions = [];
+    if (tone) entry.card.tone = tone;
+    this.touch(entry.message);
+    this.cards.delete(cardId);
+    this.sessionCells.delete(cardId);
+  }
+
+  cardAction(cardId: string, actionId: string): boolean {
+    if (this.closed) return false;
+    const entry = this.cards.get(cardId);
+    if (!entry || entry.card.state !== "open" || !entry.card.actions.some((a) => a.id === actionId)) return false;
+    if (actionId === "dismiss") {
+      this.closeCard(cardId, "done", "Dismissed");
+      return true;
+    }
+    entry.onAction(actionId);
+    return true;
+  }
+
   private failPrompts(): void {
     for (const p of [...this.prompts.values()]) p("cancelled");
   }
 
   // ------------------------------------------------------------ notebook
+
+  private onMachineReplaced(): void {
+    // Machine-local paths and terminal screens cannot be reused on the new VM.
+    this.mirror = new NotebookMirror();
+    this.shells = new ShellSessions();
+    // Setup terminals are kept per tab, which only the host knows.
+    this.host.machineReset?.();
+    if (this.busyJob) this.cancelCellJob();
+    for (const [id, { card }] of [...this.cards]) {
+      if (card.kind === "session" && card.state === "open") this.closeCard(id, "stale", "Superseded by a later machine");
+    }
+    const at = this.lastSavedAt;
+    const saved = this.code ? ` Code saved up to ${at ? new Date(at).toLocaleString() : "your last message"} is kept; work since the last save (up to about 10 minutes) may be lost.` : "";
+    let cardId = "";
+    const card = this.addCard({
+      kind: "session",
+      tone: "info",
+      title: "The notebook's machine was replaced",
+      detail: `Installed packages, files outside the project's code, files over 50 MB and variables in memory are gone.${saved}`,
+      actions: [{ id: "restore", label: "Restore", primary: true }, { id: "dismiss", label: "Dismiss" }],
+    }, (action) => this.sessionAction(cardId, action));
+    cardId = card.cardId;
+    this.host.emit("chat.session", { chatId: this.id, tabId: this.tabId, cardId });
+  }
+
+  private sessionAction(cardId: string, action: string): void {
+    if (action === "restore") this.startRestore(cardId);
+    else if (action === "rerun") void this.rerunCells(cardId);
+    else if (action === "cancel") this.cancelCellJob();
+  }
+
+  private startRestore(cardId: string): void {
+    const entry = this.cards.get(cardId);
+    if (!entry) return;
+    if (this.current || this.busyJob) {
+      entry.card.detail = "Wait for the agent's turn or the current notebook job to finish, then try Restore again.";
+      this.touch(entry.message);
+      return;
+    }
+    entry.card.progress = { done: 0, total: 2 };
+    entry.card.actions = [];
+    entry.card.outcome = undefined;
+    this.touch(entry.message);
+    this.host.emit("chat.session", { chatId: this.id, tabId: this.tabId, cardId, restore: true });
+  }
+
+  async sessionStep(cardId: string, step: "setup" | "code" | "done", error?: string): Promise<{ cells?: string[] }> {
+    const entry = this.cards.get(cardId);
+    if (!entry) return {};
+    if (step === "setup") {
+      entry.card.progress = { done: 1, total: 2 };
+      if (error) entry.card.detail += `\nKernel setup failed: ${error}`;
+      this.touch(entry.message);
+      return {};
+    }
+    if (step === "done") {
+      this.closeCard(cardId, "done", "Restored", "ok");
+      return {};
+    }
+    let restoreError = error;
+    const fail = () => {
+      entry.card.detail += `\nCode restore failed: ${restoreError}`;
+      entry.card.progress = undefined;
+      entry.card.actions = [{ id: "restore", label: "Try again", primary: true }, { id: "dismiss", label: "Dismiss" }];
+      this.touch(entry.message);
+      return {};
+    };
+    if (restoreError) return fail();
+    if (this.host.project && this.code) {
+      try {
+        const project = await this.requireProject();
+        const state = await this.ensureCode(project);
+        if (state.state !== "ready") restoreError = state.why;
+      } catch (e) {
+        restoreError = (e as Error).message;
+      }
+    }
+    if (this.closed || this.cards.get(cardId) !== entry) return {};
+    if (restoreError) return fail();
+    let cells: CellInfo[];
+    try {
+      ({ cells } = await this.call({ op: "get_cells" }));
+    } catch (e) {
+      restoreError = (e as Error).message;
+      return fail();
+    }
+    if (this.closed || this.cards.get(cardId) !== entry) return {};
+    entry.card.progress = { done: 2, total: 2 };
+    const ids = cells.filter((c) => c.type === "code" && c.executionCount != null)
+      .sort((a, b) => a.executionCount! - b.executionCount!).map((c) => c.id);
+    this.sessionCells.set(cardId, ids);
+    entry.card.detail += `\n${ids.length} cells had been run on the old machine.`;
+    entry.card.actions = ids.length ? [{ id: "rerun", label: "Run them again", primary: true }, { id: "dismiss", label: "Skip" }] : [];
+    this.touch(entry.message);
+    if (!ids.length) this.closeCard(cardId, "done", "Restored", "ok");
+    return { cells: ids };
+  }
+
+  private async rerunCells(cardId: string): Promise<void> {
+    const entry = this.cards.get(cardId);
+    if (!entry) return;
+    if (this.current || this.busyJob) {
+      entry.card.outcome = "Wait for the agent's turn to finish, then try again.";
+      entry.card.detail = "Wait for the agent's turn to finish, then try again.";
+      this.touch(entry.message);
+      return;
+    }
+    const ids = this.sessionCells.get(cardId) ?? [];
+    if (!ids.length) {
+      this.closeCard(cardId, "done", "Restored", "ok");
+      return;
+    }
+    entry.card.progress = { done: 0, total: ids.length };
+    entry.card.actions = [{ id: "cancel", label: "Stop" }];
+    entry.card.outcome = undefined;
+    this.touch(entry.message);
+    try {
+      const result = await this.withBusyJob((controller) => this.runCellsInOrder(ids, (done) => {
+        entry.card.progress = { done, total: ids.length };
+        this.touch(entry.message);
+      }, controller.signal));
+      if (this.closed) return;
+      if (result.cancelled) this.closeCard(cardId, "done", "Stopped by the user.");
+      else if (result.failedAt) this.closeCard(cardId, "done", `Stopped at cell [${result.failedAt.index}]: it failed.`);
+      else this.closeCard(cardId, "done", `Ran ${result.ran} cells again.`, "ok");
+    } catch (e) {
+      if (!this.closed && this.cards.has(cardId)) this.closeCard(cardId, "done", `Restore stopped: ${(e as Error).message}`);
+    }
+  }
+
+  private cancelCellJob(): void {
+    const job = this.busyJob;
+    if (!job) return;
+    job.controller.abort();
+    void this.call({ op: "interrupt" }).catch(() => {});
+  }
+
+  private async runCellsInOrder(ids: string[], onProgress: (done: number) => void, signal: AbortSignal): Promise<{ ran: number; failedAt?: { id: string; index: number }; cancelled: boolean }> {
+    let ran = 0;
+    for (const id of ids) {
+      if (signal.aborted) return { ran, cancelled: true };
+      const { results } = await this.call({ op: "run_cells", cellIds: [id], timeoutMs: 50_000, stopOnError: true }, 60_000);
+      if (signal.aborted) return { ran, cancelled: true };
+      let result = results[0];
+      if (result?.status === "timeout") {
+        let cell: CellInfo | undefined;
+        while (!signal.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+          cell = (await this.call({ op: "get_cells", cellIds: [id], includeOutputs: true })).cells[0];
+          if (!cell?.running) break;
+        }
+        if (signal.aborted) return { ran, cancelled: true };
+        if (!cell) result = { ...result, status: "error" };
+        else if (cell.outputs?.some((output) => output.kind === "error")) result = { ...result, status: "error" };
+        else result = { ...result, status: "ok" };
+      }
+      if (!result || result.status !== "ok") {
+        const cell = (await this.call({ op: "get_cells", cellIds: [id] }).catch(() => ({ cells: [] }))).cells[0];
+        return { ran, failedAt: { id, index: cell?.index ?? -1 }, cancelled: false };
+      }
+      ran++;
+      onProgress(ran);
+    }
+    return { ran, cancelled: false };
+  }
+
+  async refreshMachine(force = false): Promise<void> {
+    if (this.closed) return;
+    if (this.machineRead) return force ? this.machineRead.finally(() => this.refreshMachine(true)) : this.machineRead;
+    const now = Date.now();
+    if (!force && now - this.machineAt < MACHINE_MIN_MS) return;
+    this.machineAt = now;
+    this.machineRead = (async () => {
+      try {
+        const exec: KernelExec = (code, wait) => this.call({ op: "machine_exec", code, waitMs: wait }, wait + 15_000);
+        const result = await stats(exec);
+        if (this.closed) return;
+        if (result.boot) {
+          const previous = this.host.meta?.load()?.machine;
+          const known = this.boot ?? previous?.boot;
+          if (known && known !== result.boot) this.onMachineReplaced();
+          const changed = this.boot !== result.boot;
+          this.boot = result.boot;
+          const now = Date.now();
+          if (changed || now - this.machineSavedAt >= MACHINE_SAVE_MS) {
+            this.host.meta?.save({ machine: { boot: result.boot, seenAt: now } });
+            this.machineSavedAt = now;
+          }
+        }
+        this.machine = {
+          at: Date.now(),
+          memTotal: result.memTotal,
+          memAvailable: result.memAvailable,
+          diskTotal: result.diskTotal,
+          diskFree: result.diskFree,
+          gpus: result.gpus,
+        };
+        this.host.emit("chat.machine", { chatId: this.id, tabId: this.tabId, machine: this.machine });
+      } catch {
+        // A busy, disconnected or non-Python kernel leaves the last good numbers in place.
+      }
+    })().finally(() => { this.machineRead = null; });
+    return this.machineRead;
+  }
 
   private call<N extends NotebookOpName>(op: NotebookOpOf<N>, timeoutMs = OP_TIMEOUT_MS): Promise<NotebookOpResults[N]> {
     return this.host.notebookOp(this.tabId, op, timeoutMs) as Promise<NotebookOpResults[N]>;
@@ -937,7 +1401,107 @@ export class Chat {
           this.notebook = { ...this.notebook, activeCellId: event.activeCellId, selectedCellIds: event.selectedCellIds };
         }
         return;
+      case "cell_run":
+        this.onCellRun(event.run);
+        return;
+      case "kernel_changed": {
+        const before = this.lastKernel;
+        this.lastKernel = event.kernel;
+        if (this.notebook) this.notebook = { ...this.notebook, kernel: event.kernel };
+        if ((before === "disconnected" || before === "unknown") && event.kernel === "idle") {
+          this.kernelNotes.push(`The kernel restarted or reconnected at ${new Date().toTimeString().slice(0, 8)}: variables from earlier runs may be gone.`);
+          void this.refreshMachine(true);
+        }
+        return;
+      }
     }
+  }
+
+  private onCellRun(run: CellRun): void {
+    if (this.closed) return;
+    if (run.by === "user") {
+      this.activity.push(run);
+      if (this.activity.length > 20) this.activity.shift();
+      this.lastUserRunAt = Date.now();
+      this.dirtySinceSync = true;
+      this.scheduleAutosave();
+    }
+    // Any later run of the cell replaces what an open card says about it.
+    this.supersedeRunCards(run.cellId);
+    // No machine read here: it runs on the kernel for a second or more, so the
+    // agent's next tool call or the user's next cell would find the kernel busy.
+    // Prompts and kernel reconnects read it instead.
+    // During a turn the agent sees its own runs through its tools.
+    if (this.current) return;
+    const long = (run.durationMs ?? 0) >= LONG_RUN_MS;
+    let card: ChatCard;
+    if (run.status === "error") card = this.addRunCard(run);
+    else if (run.status === "ok" && long && !this.busyJob) card = this.addFinishedCard(run);
+    else return;
+    if (long) this.host.emit("chat.run", { chatId: this.id, tabId: this.tabId, cardId: card.cardId, run, title: this.notebook?.title ?? "" });
+  }
+
+  private supersedeRunCards(cellId: string): void {
+    for (const [id, { card }] of [...this.cards]) {
+      if (card.kind === "run" && card.cellId === cellId && card.state === "open") this.closeCard(id, "stale", "Superseded by a later run");
+    }
+  }
+
+  private addRunCard(run: CellRun): ChatCard {
+    const title = `Cell [${run.index}] failed · ${run.ename ?? "Error"}${run.evalue ? `: ${firstLine(run.evalue, 100)}` : ""}`;
+    const detail = [run.head, run.durationMs === undefined ? "" : runDuration(run.durationMs)].filter(Boolean).join(" · ");
+    let cardId = "";
+    const card = this.addCard({
+      kind: "run",
+      tone: "error",
+      title,
+      detail,
+      cellId: run.cellId,
+      actions: [
+        { id: "fix", label: "Fix", primary: true },
+        { id: "explain", label: "Explain" },
+        { id: "dismiss", label: "Dismiss" },
+      ],
+    }, (id) => void this.runCardAction(cardId, run, id as "fix" | "explain"));
+    cardId = card.cardId;
+    this.limitRunCards();
+    return card;
+  }
+
+  private addFinishedCard(run: CellRun): ChatCard {
+    let cardId = "";
+    const card = this.addCard({
+      kind: "run",
+      tone: "ok",
+      title: `Cell [${run.index}] finished · ${runDuration(run.durationMs ?? 0)}`,
+      detail: run.head,
+      cellId: run.cellId,
+      actions: [{ id: "summarize", label: "Summarize result", primary: true }, { id: "dismiss", label: "Dismiss" }],
+    }, () => void this.runCardAction(cardId, run, "summarize"));
+    cardId = card.cardId;
+    this.limitRunCards();
+    return card;
+  }
+
+  private limitRunCards(): void {
+    const open = [...this.cards.values()].filter(({ card }) => card.kind === "run" && card.state === "open");
+    if (open.length > RUN_CARDS_OPEN) this.closeCard(open[0]!.card.cardId, "stale", "Superseded");
+  }
+
+  private async runCardAction(cardId: string, run: CellRun, action: "fix" | "explain" | "summarize"): Promise<void> {
+    const outcome = action === "fix" ? "Asked the agent to fix it" : action === "explain" ? "Asked the agent to explain it" : "Asked the agent to summarize it";
+    this.closeCard(cardId, "done", outcome);
+    let rendered: string | null = null;
+    try {
+      const { cells } = await this.call({ op: "get_cells", cellIds: [run.cellId], includeOutputs: true });
+      if (cells[0]) rendered = renderCell(cells[0], true);
+    } catch {
+      // The saved run still gives the agent enough context if the cell is gone.
+    }
+    if (this.closed) return;
+    const context = cellRunBlock(action, run, rendered);
+    const text = action === "fix" ? `Fix the error in cell [${run.index}]` : action === "explain" ? `Explain the error in cell [${run.index}]` : `Summarize the result of cell [${run.index}]`;
+    this.send(text, { context, targets: [run.cellId] });
   }
 
   /**
@@ -1216,7 +1780,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP servers are registered as "notebook" and "project"; agents spell the tool name differently. */
 export function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|await_review|artifact_\w+|paper_search|paper_read|save_notebook)\b/i.test(t)) return true;
+  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|kernel_state|await_review|artifact_\w+|paper_search|paper_read|save_notebook)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }

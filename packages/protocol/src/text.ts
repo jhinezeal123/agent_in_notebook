@@ -126,3 +126,13 @@ export function firstLine(text: string, max = 80): string {
   const line = text.split("\n").find((l) => l.trim() !== "") ?? "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
+
+/** A short identity for a source: stable across processes, without storing the source itself. */
+export function textHash(s: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    hash ^= s.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${(hash >>> 0).toString(16).padStart(8, "0")}:${s.length}`;
+}

@@ -36,6 +36,12 @@
           "scope": "application",
           "default": "",
           "description": "Absolute path to the Google Chrome executable for Kaggle notebooks. Leave empty to detect Google Chrome automatically."
+        },
+        "ainb.notifyCellRuns": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "Show a notification when a notebook cell that ran for a minute or more finishes or fails."
         }
       }
     },
@@ -202,6 +208,12 @@
         "title": "Save Notebook to Project",
         "category": "Agent in Notebook",
         "icon": "$(save)"
+      },
+      {
+        "command": "ainb.verifyNotebook",
+        "title": "Verify and Save Notebook to Project",
+        "category": "Agent in Notebook",
+        "icon": "$(check)"
       },
       {
         "command": "ainb.code.newFile",

@@ -2,7 +2,7 @@
 // an iframe, with exposeAppInBrowser on, so window.jupyterapp is reachable).
 // Local Jupyter works the same when started with expose_app_in_browser.
 
-import { normalizeIpynbOutputs, type CellInfo, type CellType, type ExecResult, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
+import { normalizeIpynbOutputs, type CellInfo, type CellRunState, type CellType, type ExecResult, type NotebookInfo, type ReviewInfo, type RunResult } from "@ainb/protocol";
 import { KERNEL_BUSY, NoServerPython, OpError, OutputCollector, within, type Execution, type NotebookAdapter } from "@ainb/protocol";
 import { ServerPython, type TerminalLink } from "./server-python.js";
 import { createReviewCard } from "./review-widget.js";
@@ -107,6 +107,11 @@ export class JupyterAdapter implements NotebookAdapter {
     if (opts.cellIds) picked = opts.cellIds.map((id) => all.find(([w]) => w.model.id === id)).filter((x): x is (typeof all)[number] => !!x);
     else if (opts.start !== undefined || opts.end !== undefined) picked = all.slice(opts.start ?? 0, (opts.end ?? all.length - 1) + 1);
     return picked.map(([w, i]) => this.toInfo(w, i, !!opts.includeOutputs));
+  }
+
+  runStates(): CellRunState[] {
+    return this.widgets().filter((w) => w.model.type === "code")
+      .map((w) => ({ cellId: w.model.id, running: this.running(w), executionCount: w.model.executionCount ?? null }));
   }
 
   setSource(cellId: string, source: string): boolean {

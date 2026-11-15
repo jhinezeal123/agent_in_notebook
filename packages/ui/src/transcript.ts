@@ -48,6 +48,7 @@ const ACTION: Record<string, string> = {
   run_shell: "Ran command",
   read_cells: "Read",
   notebook_info: "Read",
+  kernel_state: "Read",
   update_cell: "Edited",
   edit_cell: "Edited",
   insert_cell: "Added",

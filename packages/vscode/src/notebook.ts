@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import * as vscode from "vscode";
 import {
   KERNEL_BUSY, OpError, OutputCollector, notebookKey, within,
-  type CellInfo, type CellType, type Execution, type NotebookAdapter, type NotebookInfo, type ReviewInfo, type RunResult,
+  type CellInfo, type CellRunState, type CellType, type Execution, type NotebookAdapter, type NotebookInfo, type ReviewInfo, type RunResult,
 } from "@ainb/protocol";
 import { notebookOutputs, toIpynbOutput } from "./outputs.js";
 
@@ -93,7 +93,8 @@ export class VSCodeNotebook implements NotebookAdapter {
     if (this.pendingRuns.size || this.activeExecutions.size) return "busy";
     switch (this.kernel?.status) {
       case "idle": return "idle";
-      case "busy": case "starting": case "restarting": case "autorestarting": return "busy";
+      case "busy": case "starting": return "busy";
+      case "restarting": case "autorestarting": return "disconnected";
       case "dead": case "terminating": return "disconnected";
       default: return "unknown";
     }
@@ -128,6 +129,27 @@ export class VSCodeNotebook implements NotebookAdapter {
       source: cell.document.getText(), executionCount: cell.executionSummary?.executionOrder ?? null,
       running: this.pendingRuns.has(this.id(cell)), ...(includeOutputs ? { outputs: notebookOutputs(cell.outputs) } : {}),
     }));
+  }
+
+  /**
+   * Only the agent's runs are known to be running here: the stable API does not
+   * say when the user's own run starts. VS Code clears a cell's timing when a run
+   * starts and sets the new execution order early in the run, so the order is
+   * reported only once the run has ended (timing present). Otherwise the watcher
+   * would take the new order for a finished run before the cell even fails.
+   */
+  runStates(): CellRunState[] {
+    return this.document.getCells().filter((cell) => cell.kind === vscode.NotebookCellKind.Code).map((cell) => {
+      const id = this.id(cell);
+      const summary = cell.executionSummary;
+      const timing = summary?.timing;
+      return {
+        cellId: id,
+        running: this.pendingRuns.has(id),
+        executionCount: timing ? (summary?.executionOrder ?? null) : null,
+        lastDurationMs: timing ? timing.endTime - timing.startTime : undefined,
+      };
+    });
   }
 
   async setSource(cellId: string, source: string): Promise<boolean> {

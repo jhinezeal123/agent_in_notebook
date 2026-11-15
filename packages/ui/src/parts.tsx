@@ -1,6 +1,6 @@
 import { memo } from "preact/compat";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { chatImageDataUrl, diffLines, diffStats, withContext, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
+import { chatImageDataUrl, diffLines, diffStats, withContext, type ChatCard, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 import { externalChatUrl } from "./chat-links.js";
 import { chatImageSource } from "./images.js";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
@@ -12,6 +12,7 @@ import { Icon } from "./icons.js";
 export interface PartActions {
   answer(promptId: string, optionId: string): void;
   review(reviewId: string, accept: boolean): void;
+  cardAction(cardId: string, actionId: string): void;
   focusCell(cellId: string): void;
   /** Insert code from the transcript as a new cell below the selected one. */
   insertCell(source: string, cellType: "code" | "markdown"): void;
@@ -219,6 +220,8 @@ function PartView({ part, actions, liveThought }: { part: Part; actions: PartAct
       return <Prompt part={part} />;
     case "review":
       return <Review review={part.review} status={part.status} actions={actions} />;
+    case "card":
+      return <Card card={part.card} actions={actions} />;
     case "notice":
       return <div class={`notice ${part.level}`}>{part.text}</div>;
   }
@@ -298,6 +301,43 @@ function Prompt({ part }: { part: PromptPart }) {
     <div class={`card prompt ${answered ? "done" : "asked"}`}>
       <div class="card-title">{part.title}</div>
       <div class="card-status">{answered ? chosenLabel(part) : "Waiting for your answer below"}</div>
+    </div>
+  );
+}
+
+function Card({ card, actions }: { card: ChatCard; actions: PartActions }) {
+  return (
+    <div class={`card event tone-${card.tone} ${card.state}`}>
+      <div class="card-title">
+        <span class="card-heading">{card.title}</span>
+        {card.cellId && (
+          <button class="cell-ref" title="Show this cell in the notebook" onClick={() => actions.focusCell(card.cellId!)}>
+            [{card.cellId.slice(0, 10)}]
+          </button>
+        )}
+      </div>
+      {card.detail && <div class="card-status">{card.detail}</div>}
+      {card.progress && (
+        <div class="card-status card-progress">
+          <progress max={card.progress.total} value={card.progress.done} />
+          <span>{card.progress.done}/{card.progress.total}</span>
+        </div>
+      )}
+      {card.state === "open" ? (
+        <div class="card-actions">
+          {card.actions.map((action) => (
+            <button
+              key={action.id}
+              class={action.id === "dismiss" ? "linkish" : action.primary ? "primary" : "secondary"}
+              onClick={() => actions.cardAction(card.cardId, action.id)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        card.outcome && <div class="card-status card-outcome">{card.outcome}</div>
+      )}
     </div>
   );
 }

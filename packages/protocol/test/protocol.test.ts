@@ -3,7 +3,7 @@ import { decide, DEFAULT_SETTINGS, type ChatSettings } from "../src/modes.js";
 import { diffLines, diffStats, withContext } from "../src/diff.js";
 import { IMAGE_MAX_BASE64, normalizeIpynbOutput, normalizeIpynbOutputs, outputsToText } from "../src/outputs.js";
 import { RpcPeer } from "../src/rpc.js";
-import { capText } from "../src/text.js";
+import { capText, textHash } from "../src/text.js";
 import type { Envelope } from "../src/wire.js";
 
 describe("diffLines", () => {
@@ -82,6 +82,15 @@ describe("decide", () => {
     expect(decide(s({ scope: "auto", review: true }), "interrupt", null, [])).toEqual({ allow: true, review: false, askBeforeRun: false });
     expect(decide(s({ scope: "auto", review: true }), "execute", null, [])).toEqual({ allow: true, review: false, askBeforeRun: true });
     expect(decide(s({ scope: "auto", review: false }), "execute", null, [])).toEqual({ allow: true, review: false, askBeforeRun: false });
+  });
+});
+
+describe("textHash", () => {
+  it("is stable and distinguishes source contents and lengths", () => {
+    expect(textHash("abc")).toBe("1a47e90b:3");
+    expect(textHash("abc")).toBe(textHash("abc"));
+    expect(textHash("abd")).not.toBe(textHash("abc"));
+    expect(textHash("")).toBe("811c9dc5:0");
   });
 });
 

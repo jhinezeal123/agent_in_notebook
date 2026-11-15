@@ -306,6 +306,8 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender) => {
     const t = tabs.get(tabId);
     if (t && msg.event.type === "selection_changed") {
       t.info = { ...t.info, activeCellId: msg.event.activeCellId, selectedCellIds: msg.event.selectedCellIds };
+    } else if (t && msg.event.type === "kernel_changed") {
+      t.info = { ...t.info, kernel: msg.event.kernel };
     }
     rpc?.emit("notebook.event", { tabId, event: msg.event });
   }

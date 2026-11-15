@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { Message, PendingPrompt, type PartActions } from "./parts.js";
@@ -58,6 +58,8 @@ export function App() {
           });
         } else if (method === "chat.usage") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, usage: params.usage } : c));
+        } else if (method === "chat.machine") {
+          setChat((c) => (c && c.chatId === params.chatId ? { ...c, machine: params.machine } : c));
         } else if (method === "chat.status") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, status: params.status, error: params.error } : c));
         }
@@ -173,11 +175,18 @@ export function App() {
     setSaving(true);
     void run(client.request("chat.saveNotebook", { chatId: live.chatId })).finally(() => setSaving(false));
   };
+  const [verifying, setVerifying] = useState(false);
+  const verifyNotebook = () => {
+    if (!live || verifying) return;
+    setVerifying(true);
+    void run(client.request("chat.verifyNotebook", { chatId: live.chatId })).finally(() => setVerifying(false));
+  };
 
   const actions: PartActions = useMemo(
     () => ({
       answer: (promptId, optionId) => live && void run(client.request("chat.answer", { chatId: live.chatId, promptId, optionId })),
       review: (reviewId, accept) => live && void run(client.request("chat.review", { chatId: live.chatId, reviewId, accept })),
+      cardAction: (cardId, actionId) => live && void run(client.request("chat.cardAction", { chatId: live.chatId, cardId, actionId })),
       focusCell: (cellId) => tabId !== null && void run(client.request("notebook.focus", { tabId, cellId })),
       insertCell: (source, cellType) => tabId !== null && void run(client.request("notebook.insert", { tabId, source, cellType })),
       // The transcript shows the outcome (a notice on the message); errors show in the banner.
@@ -218,6 +227,7 @@ export function App() {
       {notebook && (
         <NotebookHeader
           notebook={notebook}
+          machine={live?.machine}
           tabId={tabId}
           choices={choices}
           onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
@@ -274,6 +284,8 @@ export function App() {
                 onMoveProject={moveProject}
                 saving={saving}
                 onSaveNotebook={saveNotebook}
+                verifying={verifying}
+                onVerifyNotebook={verifyNotebook}
               />
             }
             tools={
@@ -378,8 +390,9 @@ function Picker({ label, value, options, onChange, disabled, title, class: cls }
   );
 }
 
-function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
+function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror }: {
   notebook: NotebookInfo;
+  machine?: MachineStats;
   tabId: number | null;
   choices: NotebookChoice[];
   onPick: (tabId: number) => void;
@@ -387,6 +400,7 @@ function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
 }) {
   const chrome = tabId !== null && tabId < 0;
   const hasCurrentChoice = choices.some((choice) => choice.tabId === tabId);
+  const resources = machineResources(machine);
   return (
     <header class="notebook-header">
       <div class="notebook-header-body chat-width">
@@ -410,6 +424,7 @@ function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
               <span class={`kdot k-${notebook.kernel}`} aria-hidden="true" />
               Kernel {notebook.kernel}
             </span>
+            {resources.map((resource) => <span key={resource.key} class={resource.warn ? "warn" : undefined} title={resource.title}>{resource.label}</span>)}
           </div>
         </div>
         {chrome && (
@@ -422,7 +437,43 @@ function NotebookHeader({ notebook, tabId, choices, onPick, onMirror }: {
   );
 }
 
-function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject, saving, onSaveNotebook }: {
+function machineResources(machine?: MachineStats): { key: string; label: string; title: string; warn: boolean }[] {
+  if (!machine) return [];
+  const gb = (n: number) => `${(n / 1_000_000_000).toFixed(1)} GB`;
+  const percent = (used: number, total: number) => Math.max(0, Math.min(100, Math.round((used / total) * 100)));
+  const asOf = `As of ${new Date(machine.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  const out: { key: string; label: string; title: string; warn: boolean }[] = [];
+  if (machine.memTotal !== undefined && machine.memAvailable !== undefined && machine.memTotal > 0) {
+    const used = machine.memTotal - machine.memAvailable;
+    out.push({
+      key: "ram",
+      label: `RAM ${percent(used, machine.memTotal)}%`,
+      title: `RAM ${gb(used)} of ${gb(machine.memTotal)} used\n${asOf}`,
+      warn: machine.memAvailable < machine.memTotal * 0.1,
+    });
+  }
+  const gpu = machine.gpus?.[0];
+  if (gpu && gpu.memTotal > 0) {
+    out.push({
+      key: "gpu",
+      label: `GPU ${percent(gpu.memUsed, gpu.memTotal)}%`,
+      title: `${machine.gpus!.map((g) => `${g.name}: ${gb(g.memUsed)} of ${gb(g.memTotal)}, ${Math.round(g.util)}% busy`).join("\n")}\n${asOf}`,
+      warn: gpu.memUsed > gpu.memTotal * 0.9,
+    });
+  }
+  if (machine.diskTotal !== undefined && machine.diskFree !== undefined && machine.diskTotal > 0) {
+    const used = machine.diskTotal - machine.diskFree;
+    out.push({
+      key: "disk",
+      label: `Disk ${percent(used, machine.diskTotal)}%`,
+      title: `Disk ${gb(used)} of ${gb(machine.diskTotal)} used\n${asOf}`,
+      warn: machine.diskFree < machine.diskTotal * 0.05,
+    });
+  }
+  return out;
+}
+
+function ComposerContext({ notebook, settings, onSettings, project, onShowProject, onMoveProject, saving, onSaveNotebook, verifying, onVerifyNotebook }: {
   notebook: NotebookInfo;
   settings: ChatSettings;
   onSettings: (s: ChatSettings) => void;
@@ -431,6 +482,8 @@ function ComposerContext({ notebook, settings, onSettings, project, onShowProjec
   onMoveProject: () => void;
   saving: boolean;
   onSaveNotebook: () => void;
+  verifying: boolean;
+  onVerifyNotebook: () => void;
 }) {
   const targets = settings.targetCellIds.length ? settings.targetCellIds : notebook.selectedCellIds.length ? notebook.selectedCellIds : notebook.activeCellId ? [notebook.activeCellId] : [];
   const pinned = settings.targetCellIds.length > 0;
@@ -444,6 +497,7 @@ function ComposerContext({ notebook, settings, onSettings, project, onShowProjec
           {project.state !== "ready" && project.state !== "pending" && <Icon name="warning" class="warn" />}
           <span class="ctx-sep" aria-hidden="true" />
           <button class="ctx-btn" title="Move to project…" aria-label="Move to project" onClick={onMoveProject}><Icon name="swap" /></button>
+          <button class="ctx-btn" disabled={saving || verifying || project.state !== "ready"} title={verifying ? "Starting verification…" : "Run all cells from a clean state, then save only if they pass"} aria-label="Verify and save" onClick={onVerifyNotebook}><Icon name="check" /></button>
           <button class="ctx-btn" disabled={saving || project.state !== "ready"} title={saving ? "Saving…" : `Save this notebook, with its outputs, to the artifacts of ${project.name}`} aria-label="Save to project" onClick={onSaveNotebook}><Icon name="save" /></button>
         </span>
       )}

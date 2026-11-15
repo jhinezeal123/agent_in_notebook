@@ -33,8 +33,8 @@ import {
 } from "@ainb/protocol";
 import { RecentRuns } from "./exec.js";
 import { asCellInfo, editCells, EditError, fromCellInfo, NotebookFormatError, parseIpynb, replaceInCells, writeIpynb, type CellEdit, type NbCell } from "./ipynb.js";
-import { KernelBusy, Unreachable, VmError, type KernelExec } from "./kernel.js";
-import { applyCells, describeApplied, editorName, machineExec, notebookPath, places, reachable, reviewLine, syncIn, syncOut, type NotebookMirror } from "./nbfile.js";
+import { KernelBusy, Unreachable, VmError, helperCall, type KernelExec } from "./kernel.js";
+import { applyCells, describeApplied, editorName, kernelExec, machineExec, notebookPath, places, reachable, reviewLine, syncIn, syncOut, type NotebookMirror } from "./nbfile.js";
 import { SCROLLBACK, SESSION_NAME, type Report, type ShellSession, type ShellSessions, type ShellStart } from "./shell.js";
 import { FileTooBig, glob, grep, readFile, readLines, resolvePath, writeFile, type Stat } from "./vmfs.js";
 
@@ -161,9 +161,10 @@ function renderOutputs(c: { outputs?: CellOutput[] }, max: number, att?: Attachm
   return wasShortened(out) ? `${out}\n${SHORTENED_HINT}` : out;
 }
 
-function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): string {
+export function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): string {
   const exec = c.type === "code" ? ` exec=${c.executionCount ?? "-"}${c.running ? " RUNNING" : ""}` : "";
   const pending = c.pendingReview ? " (change awaiting user review)" : "";
+  const stale = c.stale ? " STALE (edited since it last ran)" : "";
   // Images pasted into markdown are long base64 runs; the agent sees a mark it can keep in its edits.
   const { text, payloads } = hideDataUris(c.source);
   const long = text.length > SOURCE_MAX;
@@ -172,7 +173,7 @@ function renderCell(c: CellInfo, withOutputs: boolean, att?: Attachments): strin
     long ? `source is ${text.length} characters, shown shortened; Edit needs text from the shown parts` : "",
     payloads.length ? `${payloads.length} embedded data URI${payloads.length === 1 ? "" : "s"} shown as [[ainb:data-N]] marks; keep the marks to keep them` : "",
   ].filter(Boolean);
-  let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${pending}${notes.length ? ` (${notes.join("; ")})` : ""}\n${source}`;
+  let s = `### cell [${c.index}] id=${c.id} ${c.type}${exec}${stale}${pending}${notes.length ? ` (${notes.join("; ")})` : ""}\n${source}`;
   if (withOutputs && c.type === "code") {
     s += `\n--- output ---\n${renderOutputs(c, OUTPUT_MAX, att) || "(no output)"}`;
   }
@@ -245,6 +246,81 @@ const waitArg = z
   .optional()
   .describe("Return after this long even if it is still running (it keeps running). Default: as long as this tool call may take.");
 
+export const VARS_SOURCE = String.raw`
+def _ainb_vars(args):
+    import re, sys, types
+    ns = __import__("IPython").get_ipython().user_ns
+    pattern = args.get("pattern")
+    rx = re.compile(pattern) if pattern else None
+    limit = int(args.get("limit") or 50)
+    skipped = {"In", "Out", "exit", "quit", "get_ipython"}
+    out = []
+    for name, value in list(ns.items()):
+        if name.startswith("_") or name in skipped or (rx and not rx.search(name)):
+            continue
+        if isinstance(value, (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)):
+            continue
+        item = {"name": name, "type": type(value).__module__ + "." + type(value).__qualname__}
+        try:
+            shape = getattr(value, "shape")
+            if isinstance(shape, tuple) and all(isinstance(x, (int, float)) for x in shape):
+                item["shape"] = str(shape)
+        except Exception:
+            pass
+        if "shape" not in item:
+            try:
+                item["len"] = len(value)
+            except Exception:
+                pass
+        size = -1
+        try:
+            nbytes = getattr(value, "nbytes")
+            if isinstance(nbytes, int):
+                size = nbytes
+        except Exception:
+            pass
+        if size < 0:
+            try:
+                size = int(value.memory_usage(deep=False).sum())
+            except Exception:
+                pass
+        if size < 0:
+            try:
+                size = int(value.element_size() * value.nelement())
+            except Exception:
+                pass
+        if size < 0:
+            try:
+                size = sys.getsizeof(value)
+            except Exception:
+                pass
+        item["size"] = size
+        try:
+            item["device"] = str(value.device)
+        except Exception:
+            pass
+        out.append(item)
+    out.sort(key=lambda item: item["size"], reverse=True)
+    return _ainb_done({"vars": out[:limit]})
+`;
+
+interface KernelVar {
+  name: string;
+  type: string;
+  shape?: string;
+  len?: number;
+  size: number;
+  device?: string;
+}
+
+function formatVarSize(bytes: number): string {
+  if (bytes < 0) return "unknown size";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 export const TOOLS = [
   tool({
     name: "notebook_info",
@@ -254,6 +330,31 @@ export const TOOLS = [
     async run(ctx) {
       const info = await ctx.call({ op: "info" });
       return { text: describeInfo(info, ctx.settings(), ctx.targets(), await notebookPath(ctx, info).catch(() => null)) };
+    },
+  }),
+  tool({
+    name: "kernel_state",
+    description:
+      "What the notebook's kernel holds in memory now: its variables with type, shape or length and size, largest first. " +
+      "Python kernels only. Not while a cell is running. Use it instead of guessing what earlier cells defined.",
+    schema: z.object({
+      limit: z.number().int().min(1).max(200).optional(),
+      pattern: z.string().optional().describe("Only names matching this regular expression."),
+    }),
+    async run(ctx, a) {
+      check(ctx, "read", null);
+      const info = await ctx.call({ op: "info" });
+      if (info.language.toLowerCase() !== "python") throw new Denied("kernel_state is only for Python kernels.");
+      try {
+        const result = await helperCall<{ vars: KernelVar[] }>(kernelExec(ctx), VARS_SOURCE, "_ainb_vars", { limit: a.limit ?? 50, pattern: a.pattern });
+        if (!result.vars.length) return { text: "No variables matched." };
+        return {
+          text: result.vars.map((v) => `${v.name} · ${v.type} · ${v.shape ?? (v.len !== undefined ? `len ${v.len}` : "-")} · ${formatVarSize(v.size)}${v.device ? ` · ${v.device}` : ""}`).join("\n"),
+        };
+      } catch (e) {
+        if (e instanceof KernelBusy) return { text: e.message, isError: true };
+        throw e;
+      }
     },
   }),
   tool({
