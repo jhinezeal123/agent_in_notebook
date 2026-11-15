@@ -84,22 +84,6 @@ function emitRun(chat: Chat, over: Partial<CellRun> = {}) {
   return run;
 }
 
-async function sessionCard(chat: Chat, notebookOp: Mock<ChatHost["notebookOp"]>) {
-  const original = notebookOp.getMockImplementation()!;
-  const host = (chat as unknown as { host: ChatHost }).host;
-  host.meta = {
-    load: () => ({ version: 1, key: "k", updatedAt: 0, machine: { boot: "boot-a", seenAt: 1 } }),
-    save: vi.fn(),
-  };
-  notebookOp.mockImplementation(async (tab, raw) => (raw as { op: string }).op === "machine_exec"
-    ? { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb ${JSON.stringify({ boot: "boot-b", memTotal: 100, memAvailable: 50 })}\n` }] }
-    : original(tab, raw, 30_000));
-  await chat.refreshMachine();
-  const card = cards(chat).find((candidate) => candidate.kind === "session" && candidate.state === "open");
-  expect(card).toBeDefined();
-  return { card: card!, original };
-}
-
 function withProject(chat: Chat) {
   const host = (chat as unknown as { host: ChatHost }).host;
   const cache = { id: "p", name: "Project", repoPath: "/tmp/repo", githubUrl: null, artifactsDir: "/tmp/artifacts" };
@@ -504,147 +488,35 @@ describe("Machine stats", () => {
 });
 
 describe("Machine replacement", () => {
-  it("ignores the same boot and resets machine-local state only when the boot changes", async () => {
+  it("ignores the same boot and resets machine-local state only when the boot changes, telling the agent and the editor", async () => {
     const { chat, notebookOp } = setup();
     const original = notebookOp.getMockImplementation()!;
     const current = { boot: "boot-a" };
     notebookOp.mockImplementation(async (tab, raw) => (raw as { op: string }).op === "machine_exec"
-      ? { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb ${JSON.stringify(current)}\n` }] }
+      ? { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `ainb ${JSON.stringify(current)}\n` }] }
       : original(tab, raw, 30_000));
     const host = (chat as unknown as { host: ChatHost }).host;
     host.machineReset = vi.fn();
+    const emit = vi.spyOn(host, "emit");
+    const notes = () => (chat as unknown as { kernelNotes: string[] }).kernelNotes;
+    const replaced = () => emit.mock.calls.filter(([event]) => event === "chat.machineReplaced");
     await chat.refreshMachine();
-    expect(cards(chat).filter((card) => card.kind === "session")).toEqual([]);
     const mirror = (chat as unknown as { mirror: unknown }).mirror;
     const shells = (chat as unknown as { shells: unknown }).shells;
 
     (chat as unknown as { machineAt: number }).machineAt = 0;
     await chat.refreshMachine();
-    expect(cards(chat).filter((card) => card.kind === "session")).toEqual([]);
+    expect(replaced()).toEqual([]);
     current.boot = "boot-b";
     (chat as unknown as { machineAt: number }).machineAt = 0;
     await chat.refreshMachine();
-    expect(cards(chat).filter((card) => card.kind === "session")).toHaveLength(1);
+    expect(replaced()).toHaveLength(1);
+    expect(notes().join(" ")).toContain("machine was replaced");
+    // No card in the chat: the header shows the code state.
+    expect(cards(chat)).toEqual([]);
     expect((chat as unknown as { mirror: unknown }).mirror).not.toBe(mirror);
     expect((chat as unknown as { shells: unknown }).shells).not.toBe(shells);
     expect(host.machineReset).toHaveBeenCalledTimes(1);
-  });
-  it("uses only a successful sync time in the replacement detail", () => {
-    const { chat } = setup();
-    const place: CodePlace = { projectId: "p", dir: "/content/repo", branch: "notebook/test", remote: "https://example.test/repo", session: "project-test", worktree: "/tmp/worktree" };
-    (chat as unknown as { code: { current: CodePlace } }).code = { current: place };
-    (chat as unknown as { lastSyncAt: number }).lastSyncAt = Date.now();
-    (chat as unknown as { onMachineReplaced(): void }).onMachineReplaced();
-    expect(cards(chat)[0]!.detail).toContain("Code saved up to your last message is kept");
-
-    (chat as unknown as { lastSavedAt: number }).lastSavedAt = 123;
-    (chat as unknown as { onMachineReplaced(): void }).onMachineReplaced();
-    expect(cards(chat)[1]!.detail).toContain(`Code saved up to ${new Date(123).toLocaleString()} is kept`);
-  });
-});
-
-describe("Session restore", () => {
-  const codeCell = (id: string, index: number, executionCount: number | null): CellInfo => ({ id, index, type: "code", source: id, executionCount, outputs: [] });
-
-  it("restores code and returns cells in execution order", async () => {
-    const { chat, notebookOp } = setup();
-    const { card, original } = await sessionCard(chat, notebookOp);
-    const cells = [codeCell("third", 2, 3), codeCell("never", 0, null), codeCell("first", 1, 1), codeCell("second", 3, 2)];
-    notebookOp.mockImplementation(async (tab, raw) => (raw as { op: string }).op === "get_cells" ? { cells } : original(tab, raw, 30_000));
-    expect(await chat.sessionStep(card.cardId, "setup")).toEqual({});
-    expect(card.progress).toEqual({ done: 1, total: 2 });
-    expect(await chat.sessionStep(card.cardId, "code")).toEqual({ cells: ["first", "second", "third"] });
-    expect(card.detail).toContain("3 cells had been run on the old machine.");
-    expect(card.actions.map((action) => action.id)).toEqual(["rerun", "dismiss"]);
-  });
-
-  it("keeps Restore retryable and does not read cells while setup is unfinished", async () => {
-    const { chat, notebookOp } = setup();
-    const { card } = await sessionCard(chat, notebookOp);
-    const error = "Kernel setup is still running. Wait for it to finish, then try Restore again.";
-    await chat.sessionStep(card.cardId, "setup", error);
-    expect(await chat.sessionStep(card.cardId, "code", error)).toEqual({});
-    expect(card.state).toBe("open");
-    expect(card.progress).toBeUndefined();
-    expect(card.actions.map((action) => action.id)).toEqual(["restore", "dismiss"]);
-    expect(card.detail).toContain("Kernel setup is still running");
-    expect(notebookOp.mock.calls.filter(([, op]) => (op as { op: string }).op === "get_cells")).toEqual([]);
-  });
-
-  it("stops a rerun at the first failed cell", async () => {
-    const { chat, notebookOp } = setup();
-    const { card, original } = await sessionCard(chat, notebookOp);
-    const cells = [codeCell("first", 0, 1), codeCell("second", 1, 2), codeCell("third", 2, 3)];
-    notebookOp.mockImplementation(async (tab, raw) => {
-      const op = raw as { op: string; cellIds?: string[] };
-      if (op.op === "get_cells") return { cells: op.cellIds ? cells.filter((cell) => op.cellIds!.includes(cell.id)) : cells };
-      if (op.op === "run_cells") {
-        const id = op.cellIds![0]!;
-        return { results: [{ cellId: id, status: id === "second" ? "error" : "ok", outputs: [] }] };
-      }
-      return original(tab, raw, 30_000);
-    });
-    await chat.sessionStep(card.cardId, "code");
-    expect(chat.cardAction(card.cardId, "rerun")).toBe(true);
-    await vi.waitFor(() => expect(card.state).toBe("done"));
-    expect(notebookOp.mock.calls.filter(([, op]) => (op as { op: string }).op === "run_cells").map(([, op]) => (op as { cellIds: string[] }).cellIds[0])).toEqual(["first", "second"]);
-    expect(card.outcome).toBe("Stopped at cell [1]: it failed.");
-  });
-
-  it("stops after a timeout when the final output is an error", async () => {
-    const { chat, notebookOp } = setup();
-    const { card, original } = await sessionCard(chat, notebookOp);
-    const failed = { ...codeCell("first", 0, 1), outputs: [{ kind: "error" as const, ename: "ValueError", evalue: "boom" }] };
-    notebookOp.mockImplementation(async (tab, raw) => {
-      const op = raw as { op: string };
-      if (op.op === "get_cells") return { cells: [failed] };
-      if (op.op === "run_cells") return { results: [{ cellId: "first", status: "timeout", outputs: [] }] };
-      return original(tab, raw, 30_000);
-    });
-    await chat.sessionStep(card.cardId, "code");
-    chat.cardAction(card.cardId, "rerun");
-    await vi.waitFor(() => expect(card.state).toBe("done"), { timeout: 5_000 });
-    expect(card.outcome).toBe("Stopped at cell [0]: it failed.");
-  });
-
-  it("closes a rerun with the operation error instead of leaving it running", async () => {
-    const { chat, notebookOp } = setup();
-    const { card, original } = await sessionCard(chat, notebookOp);
-    notebookOp.mockImplementation(async (tab, raw) => {
-      const op = raw as { op: string };
-      if (op.op === "get_cells") return { cells: [codeCell("first", 0, 1)] };
-      if (op.op === "run_cells") throw new Error("notebook disconnected");
-      return original(tab, raw, 30_000);
-    });
-    await chat.sessionStep(card.cardId, "code");
-    chat.cardAction(card.cardId, "rerun");
-    await vi.waitFor(() => expect(card.state).toBe("done"));
-    expect(card.outcome).toBe("Restore stopped: notebook disconnected");
-  });
-
-  it("cancels with interrupt and drains a message only after the job ends", async () => {
-    const { chat, notebookOp } = setup();
-    const { card, original } = await sessionCard(chat, notebookOp);
-    const running = deferred<{ results: { cellId: string; status: string; outputs: never[] }[] }>();
-    notebookOp.mockImplementation(async (tab, raw) => {
-      const op = raw as { op: string };
-      if (op.op === "get_cells") return { cells: [codeCell("first", 0, 1), codeCell("second", 1, 2)] };
-      if (op.op === "run_cells") return running.promise;
-      if (op.op === "interrupt") return { interrupted: true };
-      return original(tab, raw, 30_000);
-    });
-    await chat.sessionStep(card.cardId, "code");
-    chat.cardAction(card.cardId, "rerun");
-    await vi.waitFor(() => expect(notebookOp.mock.calls.some(([, op]) => (op as { op: string }).op === "run_cells")).toBe(true));
-    chat.send("after job");
-    expect(chat.cardAction(card.cardId, "cancel")).toBe(true);
-    expect(notebookOp.mock.calls.some(([, op]) => (op as { op: string }).op === "interrupt")).toBe(true);
-    running.resolve({ results: [{ cellId: "first", status: "ok", outputs: [] }] });
-    await vi.waitFor(() => expect(card.state).toBe("done"));
-    expect(card.outcome).toBe("Stopped by the user.");
-    await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledTimes(1));
-    expect(agent.prompt.mock.calls[0]![0]).toContain("after job");
-    expect(notebookOp.mock.calls.filter(([, op]) => (op as { op: string }).op === "run_cells")).toHaveLength(1);
   });
 });
 

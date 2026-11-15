@@ -291,7 +291,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     void this.view?.webview.postMessage(event);
     if (event.event === "bridge" && event.params.method === "chat.snapshot") this.followProject(event.params.params as ChatSnapshot);
     if (event.event === "bridge" && event.params.method === "chat.run") void this.notifyRun(event.params.params as BridgeEvents["chat.run"]);
-    if (event.event === "bridge" && event.params.method === "chat.session") void this.notifySession(event.params.params as BridgeEvents["chat.session"]);
+    if (event.event === "bridge" && event.params.method === "chat.machineReplaced") void this.machineReplaced(event.params.params as BridgeEvents["chat.machineReplaced"]);
     if (event.event === "notebooks") this.studio.broadcast("notebooks", event.params);
     // The chat follows the notebook in front, unless a research chat is shown.
     else if (event.event === "activeTab" && this.selected?.kind !== "research") {
@@ -322,41 +322,12 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
   }
 
-  private async notifySession(p: BridgeEvents["chat.session"]): Promise<void> {
-    const prefix = `${p.tabId < 0 ? chromeTab(p.tabId) : p.tabId}:`;
+  /** A notebook's machine was replaced: its kernel setup runs again, when the user asked for that on every new machine. */
+  private async machineReplaced(p: BridgeEvents["chat.machineReplaced"]): Promise<void> {
+    if (!isChrome(p.tabId)) return;
+    const prefix = `${chromeTab(p.tabId)}:`;
     for (const key of [...this.setupRan]) if (key.startsWith(prefix)) this.setupRan.delete(key);
-    if (!p.restore) {
-      if (this.studio.kernelSetup().runOnAttach) {
-        await this.bridge.request("chat.cardAction", { chatId: p.chatId, cardId: p.cardId, actionId: "restore" }).catch(() => {});
-      }
-      return;
-    }
-    let setupError: string | undefined;
-    let setupRunning = false;
-    try {
-      const info = await this.core.info(p.tabId);
-      const projectId = info?.key ? await this.notebookProject(info.key) : null;
-      const { script } = this.studio.kernelSetup(projectId);
-      if (script.trim()) {
-        const result = await this.runSetup(p.tabId, projectId);
-        const log = (this.setupLog ??= vscode.window.createOutputChannel("Agent in Notebook: Kernel setup"));
-        log.appendLine(`--- Machine restore (${new Date().toLocaleString()})`);
-        log.appendLine(result.output);
-        if (result.running) {
-          setupRunning = true;
-          setupError = "Kernel setup is still running. Wait for it to finish, then try Restore again.";
-        } else if (result.exitCode !== 0) setupError = `Kernel setup ended with exit code ${result.exitCode}.`;
-      }
-    } catch (e) {
-      setupError = (e as Error).message;
-      setupRunning = /previous setup is still running/i.test(setupError);
-    }
-    try {
-      await this.bridge.request("chat.sessionStep", { chatId: p.chatId, cardId: p.cardId, step: "setup", error: setupError });
-      await this.bridge.request("chat.sessionStep", { chatId: p.chatId, cardId: p.cardId, step: "code", error: setupRunning ? setupError : undefined });
-    } catch (e) {
-      void vscode.window.showWarningMessage(`Machine restore did not finish: ${(e as Error).message}`);
-    }
+    this.autoSetup(chromeTab(p.tabId), await this.core.info(p.tabId).catch(() => null));
   }
 
   private setSelected(chat: SelectedChat | null): void {

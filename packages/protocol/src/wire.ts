@@ -307,7 +307,6 @@ export interface BridgeMethods {
   "chat.undo": { params: { chatId: string; messageId: string }; result: UndoResult };
   /** The user pressed a button of a card. */
   "chat.cardAction": { params: { chatId: string; cardId: string; actionId: string }; result: { accepted: boolean } };
-  "chat.sessionStep": { params: { chatId: string; cardId: string; step: "setup" | "code" | "done"; error?: string }; result: { cells?: string[] } };
   "tab.closed": { params: { tabId: number }; result: { ok: true } };
   /** The notebooks open in Chrome tabs, for the editor's notebook picker. */
   "browser.notebooks": { params: Record<string, never>; result: { notebooks: BrowserNotebook[] } };
@@ -413,7 +412,8 @@ export interface BridgeEvents {
   /** A long run of a cell ended while no turn was running: the editor may tell the user. */
   "chat.run": { chatId: string; tabId: number; cardId: string; run: CellRun; title: string };
   "chat.machine": { chatId: string; tabId: number; machine: MachineStats };
-  "chat.session": { chatId: string; tabId: number; cardId: string; restore?: boolean };
+  /** The notebook's machine was replaced (a new boot): the editor may set it up again. */
+  "chat.machineReplaced": { chatId: string; tabId: number };
   "chat.status": { chatId: string; tabId: number; status: ChatStatus; error?: string };
   "agents.changed": { agents: AgentInfo[] };
   /** A notebook in a Chrome tab appeared, changed, or (info null) went away. */

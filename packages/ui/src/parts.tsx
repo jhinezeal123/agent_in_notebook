@@ -319,8 +319,7 @@ function Card({ card, actions }: { card: ChatCard; actions: PartActions }) {
           </button>
         )}
       </div>
-      {/* A closed notice about the machine keeps only its title and what became of it. */}
-      {card.detail && !(card.kind === "session" && card.state !== "open") && <div class="card-status">{card.detail}</div>}
+      {card.detail && <div class="card-status">{card.detail}</div>}
       {card.progress && (
         <div class="card-status card-progress">
           <progress max={card.progress.total} value={card.progress.done} />

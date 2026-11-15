@@ -159,7 +159,6 @@ export class Chat {
   private reviews = new Map<string, ReviewState>();
   private prompts = new Map<string, (optionId: string) => void>();
   private cards = new Map<string, { card: ChatCard; message: ChatMessage; onAction(actionId: string): void }>();
-  private sessionCells = new Map<string, string[]>();
   private dirty = new Set<ChatMessage>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -624,16 +623,8 @@ export class Chat {
       this.setCodeState({ state: "missing", why: describeFailure(e) });
       throw e;
     }
-    if (st.state === "ready") {
-      this.show(`The project's code is on the notebook's machine at ${st.place.dir} (branch ${st.place.branch}).`, `${st.place.dir}
+    if (st.state === "ready") this.show(`The project's code is on the notebook's machine at ${st.place.dir} (branch ${st.place.branch}).`, `${st.place.dir}
 ${st.place.branch}`);
-      // The code is back on a replaced machine: its notice is answered, unless a Restore is running it.
-      for (const [id, { card }] of [...this.cards]) {
-        if (card.kind === "session" && card.state === "open" && !card.progress) {
-          this.closeCard(id, "done", "Code put back on the machine from the header. Packages and other files were not restored.", "ok");
-        }
-      }
-    }
     else this.show(st.state === "error" ? `Project code: ${st.why}` : st.why, st.why);
     return this.codeState!;
   }
@@ -1068,8 +1059,16 @@ ${st.place.branch}`);
 
   private addCard(partial: Omit<ChatCard, "cardId" | "state">, onAction: (actionId: string) => void): ChatCard {
     const card: ChatCard = { ...partial, cardId: randomUUID(), state: "open" };
-    const message = this.newMessage("system", [{ type: "card", card }]);
-    this.touch(message);
+    // During a turn it goes inside the reply, in order, like system notes: a
+    // message of its own would stay pinned below everything the agent adds.
+    let message: ChatMessage;
+    if (this.current) {
+      message = this.current;
+      this.addPart(message, { type: "card", card });
+    } else {
+      message = this.newMessage("system", [{ type: "card", card }]);
+      this.touch(message);
+    }
     this.cards.set(card.cardId, { card, message, onAction });
     return card;
   }
@@ -1083,7 +1082,6 @@ ${st.place.branch}`);
     if (tone) entry.card.tone = tone;
     this.touch(entry.message);
     this.cards.delete(cardId);
-    this.sessionCells.delete(cardId);
   }
 
   cardAction(cardId: string, actionId: string): boolean {
@@ -1116,126 +1114,10 @@ ${st.place.branch}`);
       this.setCodeState({ state: "missing", why: "The notebook's machine was replaced: the code is put there again on the next message, or now from the header." });
     }
     if (this.busyJob) this.cancelCellJob();
-    for (const [id, { card }] of [...this.cards]) {
-      if (card.kind === "session" && card.state === "open") this.closeCard(id, "stale", "Superseded by a later machine");
-    }
-    const at = this.lastSavedAt;
-    const saved = this.code ? ` Code saved up to ${at ? new Date(at).toLocaleString() : "your last message"} is kept; work since the last save (up to about 10 minutes) may be lost.` : "";
-    let cardId = "";
-    const card = this.addCard({
-      kind: "session",
-      tone: "info",
-      title: "The notebook's machine was replaced",
-      detail: `Installed packages, files outside the project's code, files over 50 MB and variables in memory are gone.${saved}`,
-      actions: [{ id: "restore", label: "Restore", primary: true }, { id: "dismiss", label: "Dismiss" }],
-    }, (action) => this.sessionAction(cardId, action));
-    cardId = card.cardId;
-    this.host.emit("chat.session", { chatId: this.id, tabId: this.tabId, cardId });
-  }
-
-  private sessionAction(cardId: string, action: string): void {
-    if (action === "restore") this.startRestore(cardId);
-    else if (action === "rerun") void this.rerunCells(cardId);
-    else if (action === "cancel") this.cancelCellJob();
-  }
-
-  private startRestore(cardId: string): void {
-    const entry = this.cards.get(cardId);
-    if (!entry) return;
-    if (this.current || this.busyJob) {
-      entry.card.detail = "Wait for the agent's turn or the current notebook job to finish, then try Restore again.";
-      this.touch(entry.message);
-      return;
-    }
-    entry.card.progress = { done: 0, total: 2 };
-    entry.card.actions = [];
-    entry.card.outcome = undefined;
-    this.touch(entry.message);
-    this.host.emit("chat.session", { chatId: this.id, tabId: this.tabId, cardId, restore: true });
-  }
-
-  async sessionStep(cardId: string, step: "setup" | "code" | "done", error?: string): Promise<{ cells?: string[] }> {
-    const entry = this.cards.get(cardId);
-    if (!entry) return {};
-    if (step === "setup") {
-      entry.card.progress = { done: 1, total: 2 };
-      if (error) entry.card.detail += `\nKernel setup failed: ${error}`;
-      this.touch(entry.message);
-      return {};
-    }
-    if (step === "done") {
-      this.closeCard(cardId, "done", "Restored", "ok");
-      return {};
-    }
-    let restoreError = error;
-    const fail = () => {
-      entry.card.detail += `\nCode restore failed: ${restoreError}`;
-      entry.card.progress = undefined;
-      entry.card.actions = [{ id: "restore", label: "Try again", primary: true }, { id: "dismiss", label: "Dismiss" }];
-      this.touch(entry.message);
-      return {};
-    };
-    if (restoreError) return fail();
-    if (this.host.project && this.code) {
-      try {
-        const project = await this.requireProject();
-        const state = await this.ensureCode(project);
-        if (state.state !== "ready") restoreError = state.why;
-      } catch (e) {
-        restoreError = (e as Error).message;
-      }
-    }
-    if (this.closed || this.cards.get(cardId) !== entry) return {};
-    if (restoreError) return fail();
-    let cells: CellInfo[];
-    try {
-      ({ cells } = await this.call({ op: "get_cells" }));
-    } catch (e) {
-      restoreError = (e as Error).message;
-      return fail();
-    }
-    if (this.closed || this.cards.get(cardId) !== entry) return {};
-    entry.card.progress = { done: 2, total: 2 };
-    const ids = cells.filter((c) => c.type === "code" && c.executionCount != null)
-      .sort((a, b) => a.executionCount! - b.executionCount!).map((c) => c.id);
-    this.sessionCells.set(cardId, ids);
-    entry.card.detail += `\n${ids.length} cells had been run on the old machine.`;
-    entry.card.actions = ids.length ? [{ id: "rerun", label: "Run them again", primary: true }, { id: "dismiss", label: "Skip" }] : [];
-    this.touch(entry.message);
-    if (!ids.length) this.closeCard(cardId, "done", "Restored", "ok");
-    return { cells: ids };
-  }
-
-  private async rerunCells(cardId: string): Promise<void> {
-    const entry = this.cards.get(cardId);
-    if (!entry) return;
-    if (this.current || this.busyJob) {
-      entry.card.outcome = "Wait for the agent's turn to finish, then try again.";
-      entry.card.detail = "Wait for the agent's turn to finish, then try again.";
-      this.touch(entry.message);
-      return;
-    }
-    const ids = this.sessionCells.get(cardId) ?? [];
-    if (!ids.length) {
-      this.closeCard(cardId, "done", "Restored", "ok");
-      return;
-    }
-    entry.card.progress = { done: 0, total: ids.length };
-    entry.card.actions = [{ id: "cancel", label: "Stop" }];
-    entry.card.outcome = undefined;
-    this.touch(entry.message);
-    try {
-      const result = await this.withBusyJob((controller) => this.runCellsInOrder(ids, (done) => {
-        entry.card.progress = { done, total: ids.length };
-        this.touch(entry.message);
-      }, controller.signal));
-      if (this.closed) return;
-      if (result.cancelled) this.closeCard(cardId, "done", "Stopped by the user.");
-      else if (result.failedAt) this.closeCard(cardId, "done", `Stopped at cell [${result.failedAt.index}]: it failed.`);
-      else this.closeCard(cardId, "done", `Ran ${result.ran} cells again.`, "ok");
-    } catch (e) {
-      if (!this.closed && this.cards.has(cardId)) this.closeCard(cardId, "done", `Restore stopped: ${(e as Error).message}`);
-    }
+    // The agent is told on its next turn; the user sees it in the header (code state, machine).
+    this.kernelNotes.push(`The notebook's machine was replaced at ${new Date().toTimeString().slice(0, 8)}: installed packages, files outside the project's code, files over 50 MB and variables in memory are gone.`);
+    // The editor runs the kernel setup again when the user asked for that on every new machine.
+    this.host.emit("chat.machineReplaced", { chatId: this.id, tabId: this.tabId });
   }
 
   private cancelCellJob(): void {

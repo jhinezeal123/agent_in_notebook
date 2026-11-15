@@ -404,7 +404,6 @@ export class Bridge {
     rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(p.chatId).resolveReview(p.reviewId, p.accept) })));
     rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(p.chatId).undo(String(p.messageId))));
     rpc.handle("chat.cardAction", guard<"chat.cardAction">((p) => ({ accepted: this.chatById(p.chatId).cardAction(String(p.cardId), String(p.actionId)) })));
-    rpc.handle("chat.sessionStep", guard<"chat.sessionStep">((p) => this.chatById(p.chatId).sessionStep(String(p.cardId), p.step, p.error === undefined ? undefined : String(p.error))));
     rpc.handle("notebook.setup", guard<"notebook.setup">((p) => {
       const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
       const waitMs = Math.min(110, Math.max(5, Number(p.waitSeconds) || 90)) * 1000;
