@@ -99,6 +99,15 @@ button.icon:hover { background: var(--hover); }
 .notebook-meta > span + span::before { content: "·"; margin: 0 5px; }
 .notebook-meta .warn { color: var(--warn); }
 .kernel-state .kdot { display: inline-block; margin-right: 4px; vertical-align: 1px; }
+.code-state { display: inline-flex; align-items: center; gap: 3px; font: inherit; color: inherit; }
+.code-state .i { width: 12px; height: 12px; stroke-width: 2; }
+.code-state .spinner { width: 9px; height: 9px; }
+.code-state.ok .i { color: var(--ok); }
+.code-state.missing .i { color: var(--err); }
+.code-state.off { opacity: .7; }
+button.code-state { border: 0; background: transparent; padding: 0 3px; margin: 0 -3px; border-radius: var(--r-sm); cursor: pointer; }
+button.code-state:hover { background: var(--hover); color: var(--fg); }
+button.code-state:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .kdot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--muted); }
 .kdot.k-idle { background: var(--ok); }
 .kdot.k-busy { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }

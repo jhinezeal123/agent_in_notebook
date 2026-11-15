@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatCode, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { Message, PendingPrompt, type PartActions } from "./parts.js";
@@ -232,6 +232,8 @@ export function App() {
           choices={choices}
           onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
           onMirror={() => tabId !== null && void run(client.request("notebook.mirror", { tabId }))}
+          code={live?.code}
+          onPushCode={() => live && void run(client.request("chat.pushCode", { chatId: live.chatId }))}
         />
       )}
       {!notebook ? (
@@ -390,13 +392,15 @@ function Picker({ label, value, options, onChange, disabled, title, class: cls }
   );
 }
 
-function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror }: {
+function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror, code, onPushCode }: {
   notebook: NotebookInfo;
   machine?: MachineStats;
   tabId: number | null;
   choices: NotebookChoice[];
   onPick: (tabId: number) => void;
   onMirror: () => void;
+  code?: ChatCode;
+  onPushCode: () => void;
 }) {
   const chrome = tabId !== null && tabId < 0;
   const hasCurrentChoice = choices.some((choice) => choice.tabId === tabId);
@@ -424,6 +428,7 @@ function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror }:
               <span class={`kdot k-${notebook.kernel}`} aria-hidden="true" />
               Kernel {notebook.kernel}
             </span>
+            {code && <span><CodeState code={code} onPush={onPushCode} /></span>}
             {resources.map((resource) => <span key={resource.key} class={resource.warn ? "warn" : undefined} title={resource.title}>{resource.label}</span>)}
           </div>
         </div>
@@ -434,6 +439,38 @@ function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror }:
         )}
       </div>
     </header>
+  );
+}
+
+/** The project's code on the notebook's machine: a green check when it is there; a red X, which puts it there, when not. */
+function CodeState({ code, onPush }: { code: ChatCode; onPush: () => void }) {
+  if (code.state === "ready") {
+    return (
+      <span class="code-state ok" title={`The project's code is on the notebook's machine at ${code.dir} (branch ${code.branch}).`}>
+        <Icon name="check" /> Code
+      </span>
+    );
+  }
+  if (code.state === "pushing") {
+    return (
+      <span class="code-state busy" title="Putting the project's code on the notebook's machine…">
+        <span class="spinner" aria-hidden="true" /> Code
+      </span>
+    );
+  }
+  if (code.state === "none") {
+    return (
+      <span class="code-state off" title={code.why ?? "The project's code is not put on this notebook's machine."}>
+        <Icon name="close" /> Code
+      </span>
+    );
+  }
+  const why = code.why ? `${code.why}
+` : "";
+  return (
+    <button type="button" class="code-state missing" title={`${why}Click to put the project's code on the notebook's machine now.`} aria-label="Put the project's code on the notebook's machine" onClick={onPush}>
+      <Icon name="close" /> Code
+    </button>
   );
 }
 

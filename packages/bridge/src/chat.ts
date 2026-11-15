@@ -15,6 +15,7 @@ import {
   type CellInfo,
   type CellRun,
   type ChatCard,
+  type ChatCode,
   type ChatMessage,
   type ChatProject,
   type ChatSettings,
@@ -210,6 +211,8 @@ export class Chat {
   private readonly createdArtifacts = new Set<string>();
   /** The project's code on the notebook's machine (a clone of the chat's branch). */
   private readonly code: CodeSync | null;
+  /** What the notebook header shows about the project's code on the machine. */
+  private codeState: ChatCode | undefined;
   /** What the agent was last told about the code, and what the user was. */
   private lastCodeNote = "";
   private lastCodeShown = "";
@@ -226,6 +229,7 @@ export class Chat {
     this.notebookKey = opts.notebookKey;
     this.project = opts.project;
     this.code = host.project && opts.notebookKey ? new CodeSync((op, ms) => this.call(op as never, ms) as Promise<unknown>, opts.notebookKey) : null;
+    this.codeState = this.code ? { state: "missing", why: "Not put on the notebook's machine since the chat opened." } : undefined;
     for (const [id, changes] of Object.entries(opts.journal ?? {})) if (Array.isArray(changes) && changes.length) this.journal.set(id, changes);
     const carried = opts.carried ?? [];
     // Offer undo only where the journal to do it is still at hand.
@@ -262,6 +266,7 @@ export class Chat {
       usage: this.usage,
       machine: this.machine,
       ...(this.project ? { project: this.project } : {}),
+      ...(this.codeState ? { code: this.codeState } : {}),
     };
   }
 
@@ -578,15 +583,49 @@ export class Chat {
     return note;
   }
 
-  private ensureCode(orx: ProjectCache): Promise<CodeState> {
+  private async ensureCode(orx: ProjectCache): Promise<CodeState> {
     if (!this.code || !this.notebookKey) throw new Denied("This chat has no project code on the notebook's machine.");
     const key = this.notebookKey;
     const title = this.notebook?.title?.replace(/\.ipynb$/i, "") || "notebook";
-    return this.code.ensure(orx, async () => {
-      const wt = await ensureWorktree(orx.repoPath, orx.id, key, title);
-      this.showWorktree(orx.id, wt.path);
-      return wt;
-    });
+    // Checking a clone already there is quick: the header shows "pushing" only when it is not.
+    if (!this.code.current) this.setCodeState({ state: "pushing" });
+    try {
+      const st = await this.code.ensure(orx, async () => {
+        const wt = await ensureWorktree(orx.repoPath, orx.id, key, title);
+        this.showWorktree(orx.id, wt.path);
+        return wt;
+      });
+      this.setCodeState(st.state === "ready"
+        ? { state: "ready", dir: st.place.dir, branch: st.place.branch }
+        : { state: st.state === "none" ? "none" : "missing", why: st.why });
+      return st;
+    } catch (e) {
+      this.setCodeState({ state: "missing", why: describeFailure(e) });
+      throw e;
+    }
+  }
+
+  private setCodeState(next: ChatCode): void {
+    if (!this.code || JSON.stringify(next) === JSON.stringify(this.codeState)) return;
+    this.codeState = next;
+    if (!this.closed) this.host.emit("chat.snapshot", this.snapshot());
+  }
+
+  /** The user's "put the code on the machine" (the notebook header): now, not waiting for the next message. */
+  async pushCode(): Promise<ChatCode> {
+    if (!this.code) throw new Denied("This chat has no project code on the notebook's machine.");
+    if (this.codeState?.state === "pushing") return this.codeState;
+    let st: CodeState;
+    try {
+      st = await this.ensureCode(await this.requireProject());
+    } catch (e) {
+      this.setCodeState({ state: "missing", why: describeFailure(e) });
+      throw e;
+    }
+    if (st.state === "ready") this.show(`The project's code is on the notebook's machine at ${st.place.dir} (branch ${st.place.branch}).`, `${st.place.dir}
+${st.place.branch}`);
+    else this.show(st.state === "error" ? `Project code: ${st.why}` : st.why, st.why);
+    return this.codeState!;
   }
 
   /** A notice about the code, once for each state. */
@@ -607,6 +646,7 @@ export class Chat {
     if (r.ok) this.lastSavedAt = this.lastSyncAt;
     this.dirtySinceSync = !r.ok || this.lastUserRunAt > started;
     if (r.changed) this.host.project?.links.markDirty(place.projectId);
+    if (!this.code.current && this.codeState?.state === "ready") this.setCodeState({ state: "missing", why: r.text || "The project's code is no longer on the notebook's machine." });
     if (this.closed) return;
     if (r.text) this.system(r.text);
   }
@@ -1054,6 +1094,10 @@ export class Chat {
     this.shells = new ShellSessions();
     // Setup terminals are kept per tab, which only the host knows.
     this.host.machineReset?.();
+    if (this.code) {
+      this.lastCodeShown = "";
+      this.setCodeState({ state: "missing", why: "The notebook's machine was replaced: the code is put there again on the next message, or now from the header." });
+    }
     if (this.busyJob) this.cancelCellJob();
     for (const [id, { card }] of [...this.cards]) {
       if (card.kind === "session" && card.state === "open") this.closeCard(id, "stale", "Superseded by a later machine");

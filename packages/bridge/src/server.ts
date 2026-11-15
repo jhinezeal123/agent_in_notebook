@@ -362,6 +362,7 @@ export class Bridge {
       await this.chatById(p.chatId).verifyAndSave();
       return { started: true };
     }));
+    rpc.handle("chat.pushCode", guard<"chat.pushCode">((p) => this.chatById(p.chatId).pushCode()));
     rpc.handle("chat.get", guard<"chat.get">((p) => this.chats.get(p.tabId)?.snapshot() ?? null));
     rpc.handle(
       "chat.send",

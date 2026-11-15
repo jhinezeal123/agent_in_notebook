@@ -146,6 +146,21 @@ export interface ChatSnapshot {
   machine?: MachineStats;
   /** The OpenResearch project the notebook belongs to (absent for chats opened without a notebook). */
   project?: ChatProject;
+  /** The project's code on the notebook's machine (absent for chats without project code). */
+  code?: ChatCode;
+}
+
+/**
+ * The project's code on the notebook's machine. `ready`: cloned there, on the
+ * chat's branch; `missing`: not there (or not checked yet on this machine),
+ * `chat.pushCode` puts it there; `pushing`: being put there; `none`: it is
+ * never put there (the project has no GitHub repository, say), `why` says why.
+ */
+export interface ChatCode {
+  state: "ready" | "missing" | "pushing" | "none";
+  dir?: string;
+  branch?: string;
+  why?: string;
 }
 
 /**
@@ -276,6 +291,8 @@ export interface BridgeMethods {
   "chat.saveNotebook": { params: { chatId: string }; result: { path: string } };
   /** Run every code cell from a reset Python namespace, then save only on success. */
   "chat.verifyNotebook": { params: { chatId: string }; result: { started: boolean } };
+  /** Put the project's code on the notebook's machine now (cheap when it is already there). */
+  "chat.pushCode": { params: { chatId: string }; result: ChatCode };
   "chat.get": { params: { tabId: number }; result: ChatSnapshot | null };
   "chat.send": { params: { chatId: string; text: string }; result: { accepted: boolean } };
   "chat.cancel": { params: { chatId: string }; result: { cancelled: boolean } };

@@ -946,3 +946,52 @@ describe("Context compaction", () => {
     expect(await turn("five", [])).not.toContain("<agent-in-notebook>");
   });
 });
+
+describe("Project code in the notebook header", () => {
+  const place: CodePlace = { projectId: "p", dir: "/root/.ainb-projects/k-repo", branch: "notebook/test", remote: "https://github.com/u/repo", session: "project-k", worktree: "/tmp/worktree" };
+  type FakeSync = { current: CodePlace | null; ensure: Mock };
+  function withCode(chat: Chat, ensure: () => Promise<unknown>): FakeSync {
+    withProject(chat);
+    const sync: FakeSync = { current: null, ensure: vi.fn(async () => {
+      const st = await ensure() as { state: string; place?: CodePlace };
+      if (st.state === "ready") sync.current = st.place!;
+      return st;
+    }) };
+    (chat as unknown as { code: FakeSync }).code = sync;
+    (chat as unknown as { codeState: unknown }).codeState = { state: "missing" };
+    return sync;
+  }
+
+  it("shows the code as missing, pushing, then ready when the user puts it on the machine", async () => {
+    const { chat, emit } = setup({}, "nb-key");
+    const done = deferred<unknown>();
+    withCode(chat, () => done.promise);
+    expect(chat.snapshot().code?.state).toBe("missing");
+    const pushed = chat.pushCode();
+    await vi.waitFor(() => expect(chat.snapshot().code?.state).toBe("pushing"));
+    done.resolve({ state: "ready", place });
+    expect(await pushed).toEqual({ state: "ready", dir: place.dir, branch: place.branch });
+    const states = emit.mock.calls.filter(([event]) => event === "chat.snapshot").map(([, snap]) => (snap as { code?: { state: string } }).code?.state);
+    // Other snapshots (the project resolving) may come in between; the code state goes missing -> pushing -> ready.
+    expect(states.filter((state, i) => state !== states[i - 1])).toEqual(["missing", "pushing", "ready"]);
+    expect(chat.messages.flatMap((m) => m.parts).some((p) => p.type === "notice" && p.text.includes(place.dir))).toBe(true);
+  });
+
+  it("stays missing, with the reason, when the code could not be put there", async () => {
+    const { chat } = setup({}, "nb-key");
+    withCode(chat, async () => ({ state: "error", why: "Could not clone: no network." }));
+    expect(await chat.pushCode()).toEqual({ state: "missing", why: "Could not clone: no network." });
+  });
+
+  it("does not show a spinner when the clone is already there, and turns missing when the machine is replaced", async () => {
+    const { chat, emit } = setup({}, "nb-key");
+    const sync = withCode(chat, async () => ({ state: "ready", place }));
+    await chat.pushCode();
+    emit.mockClear();
+    await chat.pushCode();
+    expect(sync.ensure).toHaveBeenCalledTimes(2);
+    expect(emit.mock.calls.filter(([event]) => event === "chat.snapshot")).toEqual([]);
+    (chat as unknown as { onMachineReplaced(): void }).onMachineReplaced();
+    expect(chat.snapshot().code?.state).toBe("missing");
+  });
+});

@@ -268,6 +268,7 @@ export class CodeSync {
       if (r.exitCode !== 0 || !/ainb-pushed/.test(out)) {
         if (/no such file or directory/i.test(out) && out.includes(place.dir)) {
           // The machine was replaced: ensure() clones the branch again next turn.
+          if (this.place === place) this.place = null;
           return { ok: false, changed: false, text: "The project's code is no longer on the notebook's machine (it was restarted). It is cloned again on the next message; what was not pushed before is lost." };
         }
         return { ok: false, changed: false, text: `Could not push the code from the notebook's machine:\n${capText(out, 1200)}` };
