@@ -1,7 +1,6 @@
 // Settings: the agents (OpenResearch's, which research chats use, and the
-// notebook chat's), compute (machines for background runs, and the notebooks
-// open in Chrome), environment variables, and the kernel environment set up on
-// a notebook's machine.
+// notebook chat's), compute (machines for background runs), environment
+// variables, and the kernel environment set up on a notebook's machine.
 
 import { HarnessLogo } from "@orx/components/HarnessLogo";
 import { useEffect, useState, type ReactNode } from "react";
@@ -9,7 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import type { AcpPreset, Harness } from "@orx/api";
 import type { AgentInfo } from "@ainb/protocol";
-import type { KaggleAccount, KaggleNotebookLaunch, KernelSetup, ProjectChoice, SettingsSection } from "./messages.js";
+import type { KernelSetup, ProjectChoice, SettingsSection } from "./messages.js";
 import { ComputeTab } from "./compute.js";
 import { ResearchGate } from "./root.js";
 import { useNotebooks } from "./sidebar.js";
@@ -202,81 +201,13 @@ function NotebookAgents() {
 // ------------------------------------------------------------------ compute
 
 function Compute({ onOpenEnvironment }: { onOpenEnvironment: () => void }) {
-  const notebooks = useNotebooks();
   return (
     <>
       <h2>Compute</h2>
-      <p className="muted">Where work runs. Notebook chats work on the notebook's own machine; research chats send runs to the machines below.</p>
-      <section className="sec">
-        <h3>Interactive · notebooks open in Chrome</h3>
-        <div className="cards">
-          {(["colab", "kaggle"] as const).map((p) => {
-            const open = notebooks.filter((n) => n.platform === p && n.place === "chrome");
-            return (
-              <div key={p} className="ccard static">
-                <span className={`lg lg-${p}`}>{p === "colab" ? "Co" : "K"}</span>
-                <b>{p === "colab" ? "Colab" : "Kaggle notebook"}</b>
-                <span className="muted small">{p === "colab" ? "Free GPU in a Colab tab. The terminal waits while a cell runs." : "A Kaggle tab. Notebook and terminal run side by side."}</span>
-                {open.length > 0 ? <span className="cf">{open.length} tab{open.length > 1 ? "s" : ""} open</span>
-                  : p === "colab" && <span className="cf">Open a tab in Chrome</span>}
-                {p === "kaggle" && <KaggleNotebookLauncher />}
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      <p className="muted">Where research runs go. Notebook chats work on the notebook's own machine; open a new Kaggle notebook from New Chat → Notebook chat.</p>
       <h3>Background runs · OpenResearch</h3>
       <ResearchGate compact><ComputeTab onOpenEnvironment={onOpenEnvironment} /></ResearchGate>
     </>
-  );
-}
-
-function KaggleNotebookLauncher() {
-  const accounts = useQuery({
-    queryKey: ["kaggle-notebook-accounts"],
-    queryFn: () => hostRequest<KaggleAccount[]>("kaggle.accounts"),
-    retry: false,
-  });
-  const [opening, setOpening] = useState<KaggleAccount | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ id: string; launch: Exclude<KaggleNotebookLaunch, { state: "opened" }> } | null>(null);
-
-  const open = async (id: string, recover = true) => {
-    const account = accounts.data?.find((entry) => entry.id === id);
-    if (!account || opening) return;
-    setOpening(account);
-    setError(null);
-    setResult(null);
-    try {
-      const launch = await hostRequest<KaggleNotebookLaunch>("kaggle.openNotebook", { id, recover });
-      if (launch.state !== "opened") setResult({ id, launch });
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setOpening(null);
-    }
-  };
-
-  return (
-    <div className="kaggle-launcher">
-      <label className="field">
-        <span className="lab">Kaggle account</span>
-        <select className="inp" value={opening?.id ?? ""} disabled={!accounts.data?.length || !!opening} onChange={(e) => void open(e.currentTarget.value)}>
-          <option value="">{accounts.isPending ? "Loading accounts…" : accounts.data?.length ? "Choose an account to open Chrome" : "No accounts available"}</option>
-          {accounts.data?.map(({ id, alias }) => <option key={id} value={id}>{alias}</option>)}
-        </select>
-      </label>
-      {accounts.isError ? <div className="row"><Banner tone="error">{errorText(accounts.error)}</Banner><Button small disabled={accounts.isFetching} onClick={() => void accounts.refetch()}>Retry</Button></div>
-        : accounts.data?.length === 0 ? <span className="muted small">Add an account to your Kaggle account pool.</span>
-        : accounts.data && <span className="muted small">Agent in Notebook recovers the Kaggle session before opening Chrome.</span>}
-      {opening && <span className="muted small" role="status">Preparing the Kaggle notebook for {opening.alias}…</span>}
-      {result && <Banner tone={result.launch.state === "sign-in" ? "info" : "warn"}>
-        <p role="status">{result.launch.message}</p>
-        {result.launch.state === "unavailable" && <Button small onClick={() => void open(result.id, false)}>Open Chrome</Button>}
-        {result.launch.state === "retry" && <Button small onClick={() => void open(result.id)}>Try again</Button>}
-      </Banner>}
-      {error && <Banner tone="error">{error}</Banner>}
-    </div>
   );
 }
 

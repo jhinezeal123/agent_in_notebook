@@ -9,7 +9,7 @@ import { useWorkspace } from "@orx/workspace";
 import { TARGET_LABELS } from "@orx/computeTargets";
 import type { Harness, PaperHit, Project } from "@orx/api";
 import type { AgentInfo } from "@ainb/protocol";
-import type { AgentLogin, ProjectChoice } from "./messages.js";
+import type { AgentLogin, KaggleAccount, KaggleNotebookLaunch, ProjectChoice } from "./messages.js";
 import { ResearchGate, useResearchStatus } from "./root.js";
 import { useNotebooks } from "./sidebar.js";
 import { hostRequest } from "./tunnel.js";
@@ -226,7 +226,10 @@ function NotebookStart() {
               <label key={n.tabId}><input type="radio" name="nbk" checked={tabId === n.tabId} onChange={() => setTabId(n.tabId)} /> {n.title} <small>{PLACE[n.platform]}</small></label>
             ))}
           </div>
-        ) : <Banner tone="info">No notebook is open. Open one on Colab or Kaggle in Chrome (with the Agent in Notebook extension), or an .ipynb file in VS Code.</Banner>}
+        ) : <Banner tone="info">No notebook is open. Open a new Kaggle notebook below, a Colab notebook in Chrome (with the Agent in Notebook extension), or an .ipynb file in VS Code.</Banner>}
+        <KaggleLauncher notebooks={notebooks} onAppeared={setTabId} />
+      </section>
+      <section className="sec">
         <div className="two">
           <label className="field"><span className="lab">Project</span>
             <select className="inp" value={projectId ?? ""} onChange={(e) => setProjectId(e.currentTarget.value)}>
@@ -249,5 +252,87 @@ function NotebookStart() {
       <footer className="foot"><Button onClick={() => void hostRequest("close")}>Cancel</Button>
         <Button primary disabled={tabId === null || !agentId} onClick={start}>Start chat</Button></footer>
     </>
+  );
+}
+
+type Notebooks = ReturnType<typeof useNotebooks>;
+
+/** Kaggle's "k" mark (its favicon), the first letter of the official wordmark (Simple Icons). */
+function KaggleMark() {
+  return (
+    <svg viewBox="-1.8 7.3 7 7.05" width="20" height="20" aria-label="Kaggle" role="img">
+      <path fill="#20BEFF" d="M.1025 7.3475c-.0681 0-.1022.0341-.1022.102v6.752c0 .0681.034.1022.1022.1022h.7049c.068 0 .1022-.034.1022-.1023v-1.481l.4187-.3985 1.5016 1.91c.041.0477.0884.0716.143.0716h.9091c.0476 0 .0748-.0135.0817-.0407.0135-.041.0066-.075-.0206-.1023l-1.9816-2.4618 1.9002-1.8384c.0204-.0205.0237-.051.01-.092-.0137-.0339-.0408-.051-.0816-.051h-.9398c-.0477 0-.0953.024-.143.0716L.9096 11.607V7.4496c0-.0679-.0342-.102-.1022-.102z" />
+    </svg>
+  );
+}
+
+/** Opens a fresh Kaggle notebook in Chrome for one of the Kaggle accounts; once its tab connects it is picked above. */
+function KaggleLauncher({ notebooks, onAppeared }: { notebooks: Notebooks; onAppeared: (tabId: number) => void }) {
+  const accounts = useQuery({
+    queryKey: ["kaggle-notebook-accounts"],
+    queryFn: () => hostRequest<KaggleAccount[]>("kaggle.accounts"),
+    retry: false,
+  });
+  const [accountId, setAccountId] = useState("");
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Exclude<KaggleNotebookLaunch, { state: "opened" }> | null>(null);
+  // The tabs open before the launch: the first Kaggle tab not among them is the new one.
+  const [before, setBefore] = useState<Set<number> | null>(null);
+
+  useEffect(() => { if (!accountId && accounts.data?.[0]) setAccountId(accounts.data[0].id); }, [accounts.data]);
+  useEffect(() => {
+    if (!before) return;
+    const fresh = notebooks.find((n) => n.platform === "kaggle" && !before.has(n.tabId));
+    if (fresh) { onAppeared(fresh.tabId); setBefore(null); }
+  }, [notebooks, before]);
+
+  const open = async (recover = true) => {
+    if (!accountId || opening) return;
+    setOpening(true);
+    setError(null);
+    setResult(null);
+    setBefore(null);
+    try {
+      const launch = await hostRequest<KaggleNotebookLaunch>("kaggle.openNotebook", { id: accountId, recover });
+      if (launch.state === "opened") setBefore(new Set(notebooks.map((n) => n.tabId)));
+      else setResult(launch);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  const alias = accounts.data?.find((a) => a.id === accountId)?.alias;
+  const none = accounts.data?.length === 0;
+  return (
+    <div className="launch">
+      <div className="launch-main">
+        <span className="lg lg-kaggle"><KaggleMark /></span>
+        <div className="launch-text">
+          <b>New Kaggle notebook</b>
+          <span className="muted small">{none ? "Add an account to your Kaggle account pool to open one here." : "Opens a fresh Kaggle tab in Chrome, signed in to the account you pick."}</span>
+        </div>
+        {!none && !accounts.isError && (
+          <div className="launch-act">
+            <select className="inp" aria-label="Kaggle account" value={accountId} disabled={!accounts.data?.length || opening} onChange={(e) => setAccountId(e.currentTarget.value)}>
+              {accounts.isPending && <option value="">Loading accounts…</option>}
+              {accounts.data?.map(({ id, alias }) => <option key={id} value={id}>{alias}</option>)}
+            </select>
+            <Button disabled={!accountId || opening} onClick={() => void open()}>{opening ? <><span className="spinner small" /> Opening…</> : <><Icon name="plus" /> Open</>}</Button>
+          </div>
+        )}
+      </div>
+      {opening && <span className="muted small" role="status">Recovering the Kaggle session for {alias}, then opening Chrome…</span>}
+      {before && !opening && <span className="muted small" role="status"><span className="spinner small" /> Opened in Chrome. Waiting for the notebook to connect; it is picked above when it does.</span>}
+      {result && <Banner tone={result.state === "sign-in" ? "info" : "warn"}>
+        <div><p role="status">{result.message}</p>
+          {result.state === "unavailable" && <Button small onClick={() => void open(false)}>Open Chrome anyway</Button>}
+          {result.state === "retry" && <Button small onClick={() => void open()}>Try again</Button>}</div>
+      </Banner>}
+      {accounts.isError && <div className="row"><Banner tone="error">{errorText(accounts.error)}</Banner><Button small disabled={accounts.isFetching} onClick={() => void accounts.refetch()}>Retry</Button></div>}
+      {error && <Banner tone="error">{error}</Banner>}
+    </div>
   );
 }
