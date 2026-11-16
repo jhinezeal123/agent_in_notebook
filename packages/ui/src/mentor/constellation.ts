@@ -49,8 +49,22 @@ export interface MapLayout {
 
 const RADIUS: Record<MentorStarState, number> = { locked: 2.4, open: 5, learning: 6, mastered: 7.5 };
 
-export function place(x: number, y: number): { cx: number; cy: number } {
-  return { cx: PAD_X + (x / 100) * (MAP_W - 2 * PAD_X), cy: PAD_Y + (y / 100) * (MAP_H - 2 * PAD_Y) };
+export function place(x: number, y: number, height = MAP_H): { cx: number; cy: number } {
+  return { cx: PAD_X + (x / 100) * (MAP_W - 2 * PAD_X), cy: PAD_Y + (y / 100) * (height - 2 * PAD_Y) };
+}
+
+/** A constellation with a small map of its own (a paper's, a topic pack's): not on the star map. */
+function apart(home: Pick<MentorHome, "constellations">, id: string): boolean {
+  const kind = home.constellations.find((c) => c.id === id)?.kind;
+  return kind === "paper" || kind === "topic" || id.startsWith("paper:");
+}
+
+/** How tall a topic's small map is: room for its fullest column of stars, names included. */
+export function topicHeight(stars: Pick<MentorStarView, "x">[]): number {
+  const columns = new Map<number, number>();
+  for (const s of stars) columns.set(s.x, (columns.get(s.x) ?? 0) + 1);
+  const rows = Math.max(1, ...columns.values());
+  return Math.max(150, 2 * PAD_Y + 63 * (rows - 1));
 }
 
 /** A small seeded generator, so the sky looks the same every time. */
@@ -62,8 +76,14 @@ function seeded(seed: number): () => number {
   };
 }
 
-export function layout(home: Pick<MentorHome, "stars" | "constellations" | "today">): MapLayout {
-  const stars: MapStar[] = home.stars.map((s) => ({ ...s, ...place(s.x, s.y), r: RADIUS[s.state], today: home.today?.star === s.id }));
+/**
+ * The map's stars, links and labels. By default the star map (papers' and
+ * topics' own constellations left out); `only` picks constellations (a
+ * paper's or a topic's small map, `height` tall).
+ */
+export function layout(home: Pick<MentorHome, "stars" | "constellations" | "today">, only?: (constellationId: string) => boolean, height = MAP_H): MapLayout {
+  const shown = only ?? ((id: string) => !apart(home, id));
+  const stars: MapStar[] = home.stars.filter((s) => shown(s.constellation)).map((s) => ({ ...s, ...place(s.x, s.y, height), r: RADIUS[s.state], today: home.today?.star === s.id }));
   const byId = new Map(stars.map((s) => [s.id, s]));
   const links: MapLink[] = [];
   for (const s of stars) {
@@ -78,7 +98,7 @@ export function layout(home: Pick<MentorHome, "stars" | "constellations" | "toda
       });
     }
   }
-  const labels: MapLabel[] = home.constellations.map((c) => {
+  const labels: MapLabel[] = home.constellations.filter((c) => shown(c.id) && !only).map((c) => {
     const own = stars.filter((s) => s.constellation === c.id);
     const xs = own.map((s) => s.cx);
     const top = Math.min(...own.map((s) => s.cy));
@@ -92,7 +112,7 @@ export function layout(home: Pick<MentorHome, "stars" | "constellations" | "toda
     };
   });
   const rand = seeded(7);
-  const dust = Array.from({ length: 160 }, () => ({ x: rand() * MAP_W, y: rand() * MAP_H, r: 0.4 + rand() * 1.1, o: 0.15 + rand() * 0.45 }));
+  const dust = Array.from({ length: Math.round((160 * height) / MAP_H) }, () => ({ x: rand() * MAP_W, y: rand() * height, r: 0.4 + rand() * 1.1, o: 0.15 + rand() * 0.45 }));
   return { stars, links, labels, dust };
 }
 

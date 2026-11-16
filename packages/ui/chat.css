@@ -457,3 +457,13 @@ input.switch:focus-visible { outline-offset: 2px; }
 .mentor-deltas .down { color: var(--err); text-align: right; }
 .rank-gray { color: #8b929c; } .rank-green { color: #3fb950; } .rank-cyan { color: #39c5cf; } .rank-blue { color: #58a6ff; }
 .rank-violet { color: #bc8cff; } .rank-gold { color: #e3b341; } .rank-red { color: #ff6b6b; }
+
+/* Mentor: papers */
+.mentor-paper-line { font-size: 12px; opacity: 0.85; margin: 2px 0 6px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.mentor-metrics { display: flex; gap: 14px; margin: 4px 0 6px; font-size: 12px; }
+.mentor-plan { margin: 6px 0; font-size: 12px; }
+.mentor-plan-body { margin-top: 4px; display: grid; gap: 4px; }
+.mentor-plan-table { border-collapse: collapse; width: 100%; }
+.mentor-plan-table th, .mentor-plan-table td { text-align: left; padding: 2px 6px 2px 0; vertical-align: top; }
+.mentor-plan-table th { opacity: 0.7; font-weight: 500; }
+.mentor-confirm textarea { width: 100%; box-sizing: border-box; font: inherit; color: inherit; background: var(--vscode-input-background, transparent); border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.4)); border-radius: 4px; padding: 4px 6px; }

@@ -6,7 +6,7 @@ import { loadCatalog } from "../src/mentor/catalog.js";
 import { Mentor } from "../src/mentor/index.js";
 import { attemptScore, dayOf, expected, fold, heatmap, pickToday, START_RATING, streakOf, type MentorEvent } from "../src/mentor/model.js";
 import { MentorSession, StageRefused } from "../src/mentor/session.js";
-import { fileId, vscodeKey } from "../src/mentor/store.js";
+import { cellRole, exerciseCells, exerciseIn, foreignCells, learnerWork, withWork } from "../src/mentor/notebook.js";
 
 const catalog = loadCatalog();
 const DAY = 86_400_000;
@@ -19,7 +19,7 @@ function mentorAt(clock: { now: number }) {
 
 /** Run an attempt to the end: pass the judge, answer the probes. */
 function finish(m: Mentor, opts: { hints?: number; fails?: number; grades?: (0 | 1 | 2)[]; exerciseId?: string } = {}) {
-  const { attemptId } = m.start(opts.exerciseId);
+  const { attemptId } = m.begin(opts.exerciseId);
   const s = new MentorSession(m, attemptId);
   s.setStage("build", "agent");
   for (let i = 0; i < (opts.hints ?? 0); i++) s.raiseHint();
@@ -105,24 +105,74 @@ describe("today's exercise", () => {
     const m = mentorAt(clock);
     const first = pickToday(m.state(), catalog, clock.now)!;
     expect(first).toMatchObject({ reason: "diagnostic", exerciseId: "broadcast-pairwise" });
-    const { attemptId } = m.start();
+    const { attemptId } = m.begin();
     expect(pickToday(m.state(), catalog, clock.now)).toMatchObject({ reason: "continue", attemptId });
-    // Starting it again reopens the same attempt and notebook.
-    expect(m.start()).toMatchObject({ attemptId, resumed: true });
+    // Starting it again reopens the same attempt.
+    expect(m.begin()).toMatchObject({ attemptId, resumed: true });
   });
 
-  it("finds the attempt by VS Code's notebook key", () => {
+});
+
+describe("notebooks holding attempts", () => {
+  const A = "kaggle:/code/me/one";
+  const B = "kaggle:/code/me/two";
+
+  it("follows the latest load: a notebook holds one attempt, an attempt sits in one notebook", () => {
     const m = mentorAt({ now: T0 });
-    const { attemptId, file } = m.start();
-    expect(m.attemptForFile(vscodeKey(file))?.attemptId).toBe(attemptId);
-    expect(fileId("vscode:file:///d%3A/Docs/ml-mentor/x.ipynb")).toBe(fileId("D:\\Docs\\ml-mentor\\x.ipynb"));
+    const first = m.begin("broadcast-pairwise").attemptId;
+    const second = m.begin("layernorm").attemptId;
+    m.record({ t: "load", attemptId: first, notebook: A });
+    expect(m.attemptIn(A)?.attemptId).toBe(first);
+    // Another exercise into the same notebook: the first one leaves it.
+    m.record({ t: "load", attemptId: second, notebook: A });
+    expect(m.attemptIn(A)?.attemptId).toBe(second);
+    expect(m.attempt(first)?.notebook).toBeUndefined();
+    // The first one again, in another notebook.
+    m.record({ t: "load", attemptId: first, notebook: B });
+    expect(m.attemptIn(B)?.attemptId).toBe(first);
+    expect(m.attemptIn(A)?.attemptId).toBe(second);
+    // Moved on (a renamed notebook): the old key no longer holds it.
+    m.record({ t: "load", attemptId: first, notebook: "kaggle:/code/me/three" });
+    expect(m.attemptIn(B)).toBeUndefined();
+    expect(m.attempt(first)?.notebook).toBe("kaggle:/code/me/three");
+  });
+
+  it("still reads an old attempt that was a local file", () => {
+    const events = [
+      { t: "start", attemptId: "a1", exerciseId: "broadcast-pairwise", file: "D:\\Docs\\ml-mentor\\x.ipynb", at: T0, day: "2026-11-02" },
+      { t: "verdict", attemptId: "a1", ok: true, passed: 3, total: 3, at: T0 + 1, day: "2026-11-02" },
+    ] as unknown as MentorEvent[];
+    const state = fold(events, catalog);
+    expect(state.attempts.get("a1")).toMatchObject({ exerciseId: "broadcast-pairwise", file: "D:\\Docs\\ml-mentor\\x.ipynb" });
+    expect(state.places.size).toBe(0);
+  });
+
+  it("restores the learner's work into a fresh copy of the exercise", () => {
+    const m = mentorAt({ now: T0 });
+    const { attemptId } = m.begin("broadcast-pairwise");
+    const cells = m.cellsFor(attemptId);
+    expect(exerciseIn(cells)).toBe("broadcast-pairwise");
+    expect(foreignCells(cells)).toBe(0);
+    const written = cells.map((c) => (cellRole(c) === "solution" ? { ...c, source: `${c.source}\nreturn 42` } : cellRole(c) === "sketch" ? { ...c, source: `${c.source.split("\n")[0]}\nchia hàm` } : c));
+    const work = learnerWork(written);
+    expect(work.sketch).toBe("chia hàm");
+    expect(work.solution.join("\n")).toContain("return 42");
+    m.store.saveWork(attemptId, work);
+    const again = m.cellsFor(attemptId);
+    expect(learnerWork(again)).toEqual(work);
+    // Without saved work, the copy is the plain exercise.
+    expect(withWork(exerciseCells(m.exercise("broadcast-pairwise")), null).length).toBe(exerciseCells(m.exercise("broadcast-pairwise")).length);
+  });
+
+  it("counts the cells of a notebook that holds no exercise", () => {
+    expect(foreignCells([{ id: "x", type: "code", source: "print(1)" }, { id: "y", type: "code", source: "  " }])).toBe(1);
   });
 });
 
 describe("steps", () => {
   it("refuses the defence before a passing verdict, and done before the probes", () => {
     const m = mentorAt({ now: T0 });
-    const s = new MentorSession(m, m.start().attemptId);
+    const s = new MentorSession(m, m.begin().attemptId);
     expect(() => s.setStage("defend", "user")).toThrow(StageRefused);
     s.judged({ at: 0, ok: true, passed: 2, total: 2, tests: [] });
     expect(s.stage).toBe("defend");
@@ -143,7 +193,7 @@ describe("steps", () => {
 
 /** A review of the exercise: re-implement it, pass the judge (or not) with some hints. */
 function review(m: Mentor, exerciseId: string, opts: { pass?: boolean; hints?: number } = {}) {
-  const { attemptId } = m.start(exerciseId, "review");
+  const { attemptId } = m.begin(exerciseId, "review");
   const s = new MentorSession(m, attemptId);
   for (let i = 0; i < (opts.hints ?? 0); i++) s.raiseHint();
   if (opts.pass === false) {
@@ -197,7 +247,7 @@ describe("spaced reviews", () => {
     const home = m.home();
     expect(home.warmup).toMatchObject({ reason: "continue", attemptId: s.attemptId });
     expect(home.today?.attemptId).not.toBe(s.attemptId);
-    expect(m.start(id, "review")).toMatchObject({ attemptId: s.attemptId, resumed: true });
+    expect(m.begin(id, "review")).toMatchObject({ attemptId: s.attemptId, resumed: true });
   });
 
   it("dims the star as its review goes overdue", () => {
@@ -219,7 +269,7 @@ describe("spaced reviews", () => {
     const clock = { now: T0 };
     const m = mentorAt(clock);
     const id = finish(m).s.exercise.id;
-    const s = new MentorSession(m, m.start(id, "review").attemptId);
+    const s = new MentorSession(m, m.begin(id, "review").attemptId);
     expect(s.stage).toBe("build");
     expect(() => s.setStage("defend", "agent")).toThrow(StageRefused);
     expect(() => s.probe(2, "q")).toThrow(StageRefused);
@@ -230,18 +280,18 @@ describe("misconception book", () => {
   it("asks a misconception again two days later, and two right answers make it solid", () => {
     const clock = { now: T0 };
     const m = mentorAt(clock);
-    const first = new MentorSession(m, m.start().attemptId);
+    const first = new MentorSession(m, m.begin().attemptId);
     first.misconception("broadcast-axis", "Nghĩ rằng broadcasting ghép trục từ trái sang.");
     expect(m.recallsDue(first.attemptId)).toEqual([]);
     expect(m.home().mistakes[0]).toMatchObject({ tag: "broadcast-axis", status: "waiting", due: "2026-11-04" });
     clock.now += 2 * DAY;
-    const next = new MentorSession(m, m.start("layernorm").attemptId);
+    const next = new MentorSession(m, m.begin("layernorm").attemptId);
     expect(m.recallsDue(next.attemptId).map((d) => d.tag)).toEqual(["broadcast-axis"]);
     next.recall("broadcast-axis", 2);
     expect(m.recallsDue(next.attemptId)).toEqual([]);
     expect(m.home().mistakes[0]).toMatchObject({ status: "waiting", streak: 1 });
     clock.now += 7 * DAY;
-    const later = new MentorSession(m, m.start("einsum-scores").attemptId);
+    const later = new MentorSession(m, m.begin("einsum-scores").attemptId);
     later.recall("broadcast-axis", 2);
     expect(m.home().mistakes[0]).toMatchObject({ status: "solid", streak: 2 });
     expect(() => later.recall("broadcast-axis", 2)).toThrow(StageRefused);
@@ -250,10 +300,10 @@ describe("misconception book", () => {
   it("starts over after a wrong answer, and gives the bank's question when the tag comes from it", () => {
     const clock = { now: T0 };
     const m = mentorAt(clock);
-    const s = new MentorSession(m, m.start("layernorm").attemptId);
+    const s = new MentorSession(m, m.begin("layernorm").attemptId);
     s.misconception("eps-placement", "Đặt ε ngoài căn.");
     clock.now += 2 * DAY;
-    const again = new MentorSession(m, m.start("einsum-scores").attemptId);
+    const again = new MentorSession(m, m.begin("einsum-scores").attemptId);
     const due = m.recallsDue(again.attemptId);
     expect(due[0]).toMatchObject({ tag: "eps-placement", exercise: s.exercise.title });
     expect(due[0]!.question).toMatch(/ε/);
@@ -291,7 +341,7 @@ describe("variations", () => {
     expect(pickToday(m.state(), catalog, clock.now)?.exerciseId).not.toBe(variant!.id);
     finish(m, { exerciseId: parent });
     expect(pickToday(m.state(), catalog, clock.now)).toMatchObject({ reason: "variant", exerciseId: variant!.id });
-    const s = new MentorSession(m, m.start(variant!.id).attemptId);
+    const s = new MentorSession(m, m.begin(variant!.id).attemptId);
     expect(s.view().variantOf).toBe(catalog.exercise(parent)!.title);
     expect(m.home().stars.find((x) => x.id === variant!.star)!.exercises.find((x) => x.id === variant!.id)).toMatchObject({ variant: true });
   });

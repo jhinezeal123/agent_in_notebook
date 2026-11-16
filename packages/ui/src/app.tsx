@@ -5,7 +5,7 @@ import { DEFAULT_PREFS, type AttachedCell, type BridgeState, type NotebookChoice
 import { usePanelHost } from "./host.js";
 import { AttachedChip, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { Icon, type IconName } from "./icons.js";
-import { MentorBar } from "./mentor-bar.js";
+import { MentorBar, WorkshopBar } from "./mentor-bar.js";
 import type { MentorStage } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
@@ -71,6 +71,8 @@ export function App() {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, usage: params.usage } : c));
         } else if (method === "chat.mentor") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, mentor: params.mentor } : c));
+        } else if (method === "chat.workshop") {
+          setChat((c) => (c && c.chatId === params.chatId ? { ...c, workshop: params.workshop } : c));
         } else if (method === "chat.machine") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, machine: params.machine } : c));
         } else if (method === "chat.status") {
@@ -268,6 +270,17 @@ export function App() {
           onHint={() => mentorCall("mentor.hint")}
           onStage={(stage: MentorStage) => mentorCall("mentor.stage", { stage })}
           onCodeReview={() => mentorCall("mentor.codeReview")}
+          onReport={(reason) => mentorCall("mentor.report", { reason })}
+          onHome={() => void run(client.request("mentor.open"))}
+        />
+      )}
+      {live?.workshop && (
+        <WorkshopBar
+          workshop={live.workshop}
+          busy={running || live.status === "starting"}
+          onApprove={() => mentorCall("mentor.paper.approve")}
+          onAuthor={() => mentorCall("mentor.paper.author")}
+          onStop={() => mentorCall("mentor.paper.stopAuthoring")}
           onHome={() => void run(client.request("mentor.open"))}
         />
       )}
@@ -276,7 +289,7 @@ export function App() {
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
         </Welcome>
       ) : (
-        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} mentor={!!mentor} review={mentor?.kind === "review"} />
+        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} mentor={!!mentor || !!live?.workshop} review={mentor?.kind === "review"} />
       )}
 
       {live?.error && <div class="banner error">{live.error}</div>}

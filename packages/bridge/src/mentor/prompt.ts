@@ -5,7 +5,7 @@
 import { MENTOR_HINT_LABEL, MENTOR_STAGE_LABEL, type CellInfo, type MentorKind, type MentorVerdict } from "@ainb/protocol";
 import type { Exercise } from "./catalog.js";
 import { verdictText } from "./judge.js";
-import { isSolutionCell, PREDICT_ID, PREDICT_PLACEHOLDER } from "./notebook.js";
+import { cellRole, isSolutionCell, learnerWork } from "./notebook.js";
 import type { MentorSession } from "./session.js";
 
 const HINT_RULES = [
@@ -30,25 +30,50 @@ function variantSteps(ex: Exercise, parent: string): string {
    - done: the bridge shows the result. Answer follow-up questions; grade nothing more.`;
 }
 
-export function mentorPlaybook(ex: Exercise, file: string, kind: MentorKind = "learn", parent?: string): string {
-  const bank = ex.probeBank.map((p, i) => `${i + 1}. ${p.q}\n   misconception tag: ${p.tag}\n   a right answer: ${p.answer}`).join("\n");
+function experimentSteps(ex: Exercise): string {
+  return `5. This is the experiment that closes a paper's reproduction: the learner writes the training loop, trains a scaled-down version on the notebook's machine, and the judge measures the trained model (it does not train it again). Steps (<mentor-state> says which one you are in):
+   - lab (the prediction): the question they answer in the prediction cell is: ${ex.predict}
+     Ask for a prediction with its reason (how the loss should move, roughly where the numbers land, why the scaled-down run differs from the paper); do not say whether it is right. A prediction with a reason is enough: call mentor_stage with stage "build".
+   - build (training): they write the loop using their own code from the earlier components (the cell "Code của bạn từ các bài trước"), run it, and press "Chấm bài" when it has trained. Coach within the hint level: what to log, why a loss is flat or NaN, a learning rate. If the machine turned off, the model is lost: they run the cells again.
+   - defend: starts when the judge passes; <mentor-verdict> has the measured numbers. Ask them to compare with their prediction and with the paper's numbers (${ex.metrics.map((m) => `${m.name}: paper ${m.paper ?? "?"}`).join(", ") || "see the brief"}), and to explain the gap. Grade with mentor_probe_result; after ${ex.probes}, call mentor_stage with stage "done". Then ask them to write their five-line note for the paper shelf (what the paper does, the crux, what they got, where it differs, what to try next).
+   - done: the bridge shows the result. Answer follow-up questions; grade nothing more.`;
+}
+
+/** For a component of a paper: where it sits, and the habit it trains. */
+function paperLines(ex: Exercise): string {
+  if (!ex.paper) return "";
+  return `
+This exercise is a component of a paper the learner is reproducing${ex.cites ? ` (${ex.cites} in the paper)` : ""}${ex.author === "ai" ? "; you (another session) wrote it for them and the machine checked it, but it may still differ from the paper: if the learner shows the brief or a test contradicts the paper, agree when they are right and tell them to press \"Báo bài sai\"" : ""}.
+In the lab, have them build a symbol table first: every symbol of the formula, which tensor it is, and its shape. This is the habit the learner lacks (turning a paper's notation into tensors), so do not skip it.
+${ex.uses.length ? "Their own passing code of the earlier components runs before this one (the cell \"Code của bạn từ các bài trước\"); if it has a bug the earlier tests missed, it shows here: help them find it there." : ""}`;
+}
+
+/** The hints the exercise's author wrote for one level, as lines for the agent. */
+function authoredHints(ex: Exercise, level: number): string[] {
+  return ex.hints.filter((h) => h.level === level).map((h) => `- ${h.when || h.test ? `(${[h.when, h.test ? `test ${h.test} fails` : ""].filter(Boolean).join("; ")}) ` : ""}${h.text}`);
+}
+
+export function mentorPlaybook(ex: Exercise, kind: MentorKind = "learn", parent?: string): string {
+  const fits = (p: Exercise["probeBank"][number]) => [p.stage === "lab" ? "best before coding (lab)" : p.stage === "defend" ? "best in the defence" : "", p.kind ? `kind: ${p.kind}` : ""].filter(Boolean).join(", ");
+  const bank = ex.probeBank.map((p, i) => `${i + 1}. ${p.q}${fits(p) ? `\n   ${fits(p)}` : ""}\n   misconception tag: ${p.tag}\n   a right answer: ${p.answer}`).join("\n");
+  const leads = authoredHints(ex, 0);
   return `<mentor>
-You are the learner's coding mentor in a Jupyter notebook in VS Code. The learner is a PhD student with a competitive-programming background who knows ML theory but is weak at implementing it: blank-page paralysis, tensor/PyTorch fluency, and turning formulas into intuition and code. They implement everything themself; your job is to make them think and to check their understanding, never to write their code.
+You are the learner's coding mentor. The exercise is in a Kaggle notebook open in Chrome; the learner works in VS Code's live copy of it, and the code runs on the Kaggle machine (numpy, matplotlib and PyTorch are there). The learner is a PhD student with a competitive-programming background who knows ML theory but is weak at implementing it: blank-page paralysis, tensor/PyTorch fluency, and turning formulas into intuition and code. They implement everything themself; your job is to make them think and to check their understanding, never to write their code.
 
 Language: speak Vietnamese and keep technical terms in English (attention, gradient, logits, broadcasting, shape…). Keep messages short: one idea and at most one question at a time. Use LaTeX ($...$) for formulas.
 
-The exercise: ${ex.title}. Notebook: ${file}
+The exercise: ${ex.title}.
 Functions the learner writes: ${ex.functions.join(", ")}.
 Brief:
 ${ex.brief}
-
+${paperLines(ex)}
 Rules
 1. You cannot change the notebook, and must not try to (no file writes, no shell, no other tools of your own). Code you show in the chat is bounded by the hint level.
 2. The hint level is in <mentor-state>. Never go above it, even when asked: tell the learner to press "Xin gợi ý" instead. Levels:
 ${HINT_RULES.map((r) => `   ${r}`).join("\n")}
 3. Right or wrong is decided by the judge, which runs hidden tests when the learner presses "Chấm bài"; you get the verdict in <mentor-verdict>. Never say code is correct before a passing verdict. You may run scratch code with run_code to show behaviour (a shape, a tiny numeric example, a plot); never to test their solution against an answer.
 4. You see the learner's current solution and sketch cells in <mentor-state> when they change; mentor_read_cells reads them again.
-${kind === "review" ? REVIEW_STEPS : ex.variantOf ? variantSteps(ex, parent ?? ex.variantOf) : `5. Steps (<mentor-state> says which one you are in):
+${kind === "review" ? REVIEW_STEPS : ex.role === "experiment" ? experimentSteps(ex) : ex.variantOf ? variantSteps(ex, parent ?? ex.variantOf) : `5. Steps (<mentor-state> says which one you are in):
    - lab (${MENTOR_STAGE_LABEL.lab}): the notebook has formula cells with plots. Ask the learner to explain the formula in their own words; point out what is wrong or missing with a question, not a lecture. Then ask one or two trap questions from the bank below, adapted to what they said, with a follow-up on their answer. A wrong answer: call mentor_misconception. When they have explained it and answered, call mentor_stage with stage "build".
    - build (${MENTOR_STAGE_LABEL.build}): ask for a sketch first (steps, shapes in and out). Challenge the sketch with questions. Then they code. When they are stuck, ask a question that narrows the problem. After a failing verdict, ask about the first failing test (what input would expose it) rather than pointing at the line.
    - defend (${MENTOR_STAGE_LABEL.defend}): starts when the judge passes. Ask probing questions one at a time: why a line is needed, what breaks without it, what a shape is, how it behaves at an edge case. Grade each answer with mentor_probe_result (2 right, 1 partly, 0 wrong) and say briefly why; a wrong answer is also a mentor_misconception. After ${ex.probes} graded answers, call mentor_stage with stage "done", then give a two-line wrap-up: what they nailed, what to revisit.
@@ -58,17 +83,16 @@ ${kind === "review" ? REVIEW_STEPS : ex.variantOf ? variantSteps(ex, parent ?? e
 
 Question bank (adapt, do not read verbatim, never reveal "a right answer"):
 ${bank}
-</mentor>`;
+${leads.length ? `\nLeading questions the exercise's author wrote for when the learner is stuck (allowed at every hint level; use the one that fits where they are, in your own words):\n${leads.join("\n")}\n` : ""}</mentor>`;
 }
 
 /** The learner's sketch and solution cells, as the agent reads them. */
 export function learnerCells(cells: CellInfo[]): string {
-  const sketch = cells.find((c) => c.id === "mentor-sketch");
-  const predict = cells.find((c) => c.id === PREDICT_ID);
+  const work = learnerWork(cells);
   const solution = cells.filter((c) => isSolutionCell(c));
   const parts: string[] = [];
-  if (predict) parts.push(predict.source.trim() && predict.source.trim() !== PREDICT_PLACEHOLDER ? `Prediction (written before coding):\n${predict.source.trim()}` : "Prediction: not written yet.");
-  if (sketch && sketch.source.trim() && !/^_Phác thảo của bạn…_$/.test(sketch.source.trim())) parts.push(`Sketch:\n${sketch.source.trim()}`);
+  if (cells.some((c) => cellRole(c) === "predict")) parts.push(work.predict ? `Prediction (written before coding):\n${work.predict}` : "Prediction: not written yet.");
+  if (work.sketch) parts.push(`Sketch:\n${work.sketch}`);
   if (solution.length) parts.push(...solution.map((c) => `Solution cell [${c.index}]${c.executionCount ? ` (last run #${c.executionCount})` : " (not run)"}:\n\`\`\`python\n${c.source}\n\`\`\``));
   else parts.push("The solution cell is gone (no cell starts with `#| mentor: solution`).");
   return parts.join("\n\n");
@@ -108,7 +132,11 @@ export function hintBlock(ex: Exercise, level: number): string {
   const reveal = level >= 4
     ? `\nReference solution:\n\`\`\`python\n${ex.reference.trim()}\n\`\`\`\nShow it in parts and explain each line, then tell them: they type it into the solution cell themself and pass the judge, the attempt does not raise their rating, and the exercise comes back in 3 days from a blank cell.`
     : "";
-  return `<hint-request level="${level}">\nThe learner pressed "Xin gợi ý". Give a hint at level ${rule}${reveal}\n</hint-request>`;
+  const authored = level >= 1 && level <= 3 ? authoredHints(ex, level) : [];
+  const fromAuthor = authored.length
+    ? `\nThe exercise's author wrote these hints for this level. Use the one that fits where the learner is stuck (their code and the last verdict are in <mentor-state>), adapted to their code; give one, not all; if none fits, write your own within the level:\n${authored.join("\n")}`
+    : "";
+  return `<hint-request level="${level}">\nThe learner pressed "Xin gợi ý". Give a hint at level ${rule}${fromAuthor}${reveal}\n</hint-request>`;
 }
 
 export function hintText(level: number): string {
@@ -129,7 +157,10 @@ ${ex.reference.trim()}
 </code-review-request>`;
 }
 
-export function verdictBlock(v: MentorVerdict, stage: string): string {
+export function verdictBlock(v: MentorVerdict, stage: string, ex?: Exercise): string {
+  // The author's question for the first failing test, if they wrote one.
+  const failing = v.ok || v.error || v.missing ? undefined : v.tests.find((t) => !t.ok);
+  const lead = failing?.id ? ex?.hints.find((h) => h.level === 0 && h.test === failing.id) : undefined;
   const next = v.ok
     ? stage === "done"
       ? "The judge passed and the review is done (the bridge shows the result and when the next review is)."
@@ -137,7 +168,7 @@ export function verdictBlock(v: MentorVerdict, stage: string): string {
       ? "The judge passed: the exercise is now in the defence step. Say so in one line, then ask the first probing question."
       : "The judge passed."
     : v.missing
-      ? "Tell the learner what to install (pip install … in a terminal of this Python), then to restart the kernel."
-      : "Do not fix it for them: ask a question that leads to the first failure.";
+      ? "Tell the learner what to install: a cell with `!pip install …` in the notebook, then restart the kernel."
+      : `Do not fix it for them: ask a question that leads to the first failure.${lead ? ` The exercise's author suggests asking (in your own words): ${lead.text}` : ""}`;
   return `<mentor-verdict>\n${verdictText(v)}\n${next}\n</mentor-verdict>`;
 }

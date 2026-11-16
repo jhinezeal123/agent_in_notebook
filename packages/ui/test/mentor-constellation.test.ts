@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { MentorConstellation, MentorStarState, MentorStarView } from "@ainb/protocol";
-import { MAP_H, MAP_W, heatWeeks, layout, ratingShare } from "../src/mentor/constellation.js";
+import { MAP_H, MAP_W, heatWeeks, layout, ratingShare, topicHeight } from "../src/mentor/constellation.js";
 
 function star(id: string, x: number, y: number, state: MentorStarState, after: string[] = []): MentorStarView {
   return { id, name: id, constellation: "foundation", x, y, after, state, fade: 0, exercises: [] };
 }
 
-const constellations: MentorConstellation[] = [{ id: "foundation", name: "Nền móng", stars: ["a", "b", "c"], mastered: 2 }];
+const constellations: MentorConstellation[] = [{ id: "foundation", name: "Nền móng", kind: "map", stars: ["a", "b", "c"], mastered: 2 }];
 
 describe("layout", () => {
   const stars = [star("a", 0, 0, "mastered"), star("b", 100, 100, "mastered", ["a"]), star("c", 50, 50, "locked", ["b"])];
@@ -40,6 +40,39 @@ describe("layout", () => {
     expect(label).toMatchObject({ id: "foundation", mastered: 2, total: 3 });
     expect(label.y).toBeLessThan(Math.min(...map.stars.map((s) => s.cy)) + 1);
     expect(layout({ stars, constellations, today: null }).dust).toEqual(map.dust);
+  });
+});
+
+describe("a topic pack's constellation", () => {
+  const topic: MentorConstellation = { id: "classic-ml", name: "ML cổ điển", kind: "topic", stars: ["t1", "t2", "t3"], mastered: 0 };
+  const own = [
+    { ...star("t1", 8, 50, "open"), constellation: "classic-ml" },
+    { ...star("t2", 92, 18, "locked", ["t1", "a"]), constellation: "classic-ml" },
+    { ...star("t3", 92, 82, "locked", ["t1"]), constellation: "classic-ml" },
+  ];
+  const home = { stars: [star("a", 10, 10, "mastered"), ...own], constellations: [...constellations, topic], today: null };
+
+  it("stays off the star map and has a small map of its own", () => {
+    expect(layout(home).stars.map((s) => s.id)).toEqual(["a"]);
+    expect(layout(home).labels.map((l) => l.id)).toEqual(["foundation"]);
+    const height = topicHeight(own);
+    const small = layout(home, (id) => id === "classic-ml", height);
+    expect(small.stars.map((s) => s.id)).toEqual(["t1", "t2", "t3"]);
+    // Links to stars of other constellations are not drawn; no constellation name inside its own map.
+    expect(small.links.map((l) => `${l.from}-${l.to}`)).toEqual(["t1-t2", "t1-t3"]);
+    expect(small.labels).toEqual([]);
+    for (const s of small.stars) {
+      expect(s.cy).toBeGreaterThan(20);
+      expect(s.cy).toBeLessThan(height - 20);
+    }
+  });
+
+  it("is as tall as its fullest column needs", () => {
+    expect(topicHeight(own.slice(0, 1))).toBe(150);
+    expect(topicHeight([{ x: 8 }, { x: 8 }, { x: 8 }, { x: 8 }])).toBeGreaterThan(topicHeight(own));
+    const height = topicHeight(own);
+    const small = layout(home, (id) => id === "classic-ml", height);
+    expect(Math.abs(small.stars[1]!.cy - small.stars[2]!.cy)).toBeGreaterThanOrEqual(40);
   });
 });
 

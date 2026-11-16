@@ -23,6 +23,11 @@ Usage:
   ainb agents                        List the agents found on this machine
   ainb mcp                           Notebook MCP server over stdio (started by agents)
   ainb native-host                   Native messaging host (started by the browser)
+  ainb mentor check [PACK|ID…] [--all]  Check Mentor content against its protocol on this computer
+                                     (default: every topic pack; --all: the original exercises too)
+  ainb mentor verify [ID…] [--tab N]  Check Mentor exercises (default: the PyTorch ones) on a
+                                     notebook open in Chrome; passing ones go to verified.json
+  ainb mentor reload                 Have the running Mentor read its exercises again
 
 Data directory: ${process.env.AINB_HOME ?? "~/.agent-in-notebook"}  (set AINB_HOME to change)
 Custom ACP agents: add them to agents.json in the data directory.`;
@@ -142,6 +147,16 @@ async function main() {
     case "mcp":
       await (await import("./mcp-stdio.js")).runMcpStdio();
       return;
+    case "mentor": {
+      if (rest[0] === "check") process.exit(await (await import("./mentor/check-cli.js")).mentorCheck(rest.slice(1)));
+      if (rest[0] === "reload") process.exit(await (await import("./mentor/check-cli.js")).mentorReload());
+      if (rest[0] !== "verify") {
+        console.error("Usage: ainb mentor check [PACK|ID…] [--all] | ainb mentor verify [ID…] [--tab N] | ainb mentor reload");
+        process.exit(2);
+      }
+      const { mentorVerify } = await import("./mentor/verify-cli.js");
+      process.exit(await mentorVerify(rest.slice(1)));
+    }
     case "native-host":
       await (await native()).runNativeHost(self);
       return;

@@ -1,0 +1,13 @@
+{
+  "id": "torch-autograd",
+  "title": "Autograd: lấy gradient, chặn gradient, sửa tham số ngoài đồ thị",
+  "star": "torch",
+  "skills": ["tensor", "theory"],
+  "difficulty": 1400,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["grads_of", "td_loss", "ema_update"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

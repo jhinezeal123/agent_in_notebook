@@ -1,0 +1,13 @@
+{
+  "id": "torch-trainloop",
+  "title": "Vòng lặp train và đánh giá chuẩn PyTorch",
+  "star": "torch",
+  "skills": ["train"],
+  "difficulty": 1500,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 4,
+  "functions": ["train_epoch", "evaluate"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

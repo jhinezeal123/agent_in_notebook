@@ -47,7 +47,25 @@ export class MentorSession {
       ...(verdict ? { verdict } : {}),
       probes: { done: a.probes.length, needed: this.probesNeeded },
       ...(a.result ? { result: a.result } : {}),
+      ...(this.paperView() ? { paper: this.paperView()! } : {}),
     };
+  }
+
+  /** Where the exercise sits in its paper, when it is a component of one. */
+  private paperView(): MentorChat["paper"] | undefined {
+    const ex = this.exercise;
+    if (!ex.paper) return undefined;
+    const pkg = this.mentor.paperPackage(ex.paper);
+    if (!pkg) return undefined;
+    const view = this.mentor.paperView(pkg);
+    const built = view.components.filter((c) => c.mode === "build");
+    const index = built.findIndex((c) => c.exerciseId === ex.id);
+    return { paperId: ex.paper, title: pkg.info.title, index: index + 1, total: built.length, ...(ex.cites ? { cites: ex.cites } : {}), role: ex.role, ai: ex.author === "ai" };
+  }
+
+  /** "Báo bài sai": the attempt no longer counts. */
+  report(reason: string): void {
+    this.mentor.record({ t: "void", attemptId: this.attemptId, reason: reason.slice(0, 500) });
   }
 
   /** Probing answers that finish the defence (a review has none). */
@@ -98,7 +116,10 @@ export class MentorSession {
   /** A verdict: passing moves to the defence (a review is then done, and its result returned). */
   judged(verdict: MentorVerdict): MentorResult | undefined {
     this.verdict = verdict;
-    this.mentor.record({ t: "judge", attemptId: this.attemptId, ok: verdict.ok, passed: verdict.passed, total: verdict.total, ...(verdict.error ? { error: verdict.error } : {}) });
+    this.mentor.record({
+      t: "judge", attemptId: this.attemptId, ok: verdict.ok, passed: verdict.passed, total: verdict.total,
+      ...(verdict.error ? { error: verdict.error } : {}), ...(verdict.metrics?.length ? { metrics: verdict.metrics } : {}),
+    });
     if (!verdict.ok || (this.stage !== "lab" && this.stage !== "build")) return undefined;
     return this.setStage(this.attempt.kind === "review" ? "done" : "defend", "judge");
   }

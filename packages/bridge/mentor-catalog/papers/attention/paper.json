@@ -1,0 +1,11 @@
+{
+  "id": "attention",
+  "title": "Attention Is All You Need",
+  "authors": "Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, Polosukhin",
+  "year": 2017,
+  "url": "https://arxiv.org/abs/1706.03762",
+  "arxiv": "1706.03762",
+  "closes": "foundation",
+  "goal": "Tự dựng lại Transformer encoder-decoder của paper (multi-head attention, positional encoding, các lớp post-LN) rồi train bản thu nhỏ trên CPU vài phút để nó học đảo ngược chuỗi chữ số, một bài \"dịch\" đồ chơi.",
+  "status": "ready"
+}

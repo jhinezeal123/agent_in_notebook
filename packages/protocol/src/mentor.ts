@@ -48,11 +48,14 @@ export interface MentorVerdict {
   ok: boolean;
   passed: number;
   total: number;
-  tests: { name: string; ok: boolean; message?: string }[];
+  /** `id`: the test function's name (hints written for a test name it); `name`: what the learner reads. */
+  tests: { id?: string; name: string; ok: boolean; message?: string }[];
   /** The learner's cells did not run (a syntax error, an exception at import time), or the judge could not run. */
   error?: string;
   /** Python modules the exercise needs that the kernel does not have. */
   missing?: string[];
+  /** What an experiment measured (its tests' t.report). */
+  metrics?: { name: string; value: number }[];
 }
 
 /** An exercise in a chat: where the learner is, for the panel's stepper and buttons. */
@@ -75,6 +78,8 @@ export interface MentorChat {
   probes: { done: number; needed: number };
   /** Set once the attempt is done. */
   result?: MentorResult;
+  /** A component of a paper: which, where in the paper, and whether the mentor wrote it. */
+  paper?: { paperId: string; title: string; index: number; total: number; cites?: string; role: "formula" | "component" | "experiment"; ai: boolean };
 }
 
 export interface MentorResult {
@@ -134,6 +139,12 @@ export interface MentorStarView {
 export interface MentorConstellation {
   id: string;
   name: string;
+  /** map: on the star map; paper: a paper's own small constellation (on the paper shelf); topic: a topic pack's own small map, under the star map. */
+  kind: "map" | "paper" | "topic";
+  /** A topic's line of description. */
+  description?: string;
+  /** false: its exercises are not offered as today's exercise unless it is the focus. */
+  daily?: boolean;
   /** The paper that closes it (reproduced in a later phase). */
   paper?: string;
   stars: string[];
@@ -147,12 +158,14 @@ export interface MentorToday {
   minutes: number;
   difficulty: number;
   /** Why this one: a diagnostic session, an exercise to redo after seeing the solution, one left unfinished, the next on the map, or a spaced review. */
-  reason: "diagnostic" | "redo" | "continue" | "next" | "review" | "variant";
+  reason: "diagnostic" | "redo" | "continue" | "next" | "review" | "variant" | "paper" | "focus";
   kind: MentorKind;
   /** For a review: days past its due day (0 = due today). */
   overdue?: number;
   /** For `continue`: the open attempt. */
   attemptId?: string;
+  /** The notebook open in Chrome that holds the open attempt now. */
+  place?: { tabId: number; title: string };
 }
 
 /** A misconception the learner showed, in the "Sổ lỗi sai", and when it is asked again. */
@@ -170,17 +183,119 @@ export interface MentorMistake {
   due?: string;
 }
 
-export interface MentorEnv {
-  python?: { path: string; version: string };
-  modules: Record<string, boolean>;
-  /** Why Python could not be checked. */
-  error?: string;
-  /** A command that installs what is missing. */
-  install?: string;
+/**
+ * A notebook open in Chrome (Kaggle, Colab) that an exercise can be put in:
+ * the bridge writes the exercise's cells into it, and the learner works in
+ * VS Code's copy of it.
+ */
+export interface MentorPlace {
+  /** The Chrome tab. */
+  tabId: number;
+  title: string;
+  platform: string;
+  kernel: string;
+  key: string;
+  /** The Mentor exercise it holds now. */
+  holds?: { attemptId: string; exerciseId: string; title: string; kind: MentorKind; done: boolean };
+  /** Non-empty cells that are not a Mentor exercise's (the learner's own work): replacing them needs a yes. */
+  foreignCells: number;
+  /** The paper it is the workshop of. */
+  workshop?: { paperId: string; title: string };
+}
+
+/** What Mentor follows for "today's exercise", besides the map. */
+export interface MentorFocus {
+  kind: "paper" | "constellation";
+  id: string;
+  title: string;
+}
+
+export type MentorPaperStatus = "reading" | "planning" | "authoring" | "ready" | "learning" | "done" | "archived";
+export type MentorComponentStatus = "planned" | "authoring" | "failed" | "ready" | "learning" | "done";
+
+/** One part of a paper's reproduction plan. */
+export interface MentorPaperComponent {
+  /** The exercise, once there is one. */
+  exerciseId?: string;
+  slug: string;
+  title: string;
+  role: "formula" | "component" | "experiment";
+  /** build: the learner writes it; given: code given with the paper. */
+  mode: "build" | "given";
+  cites?: string;
+  minutes?: number;
+  difficulty?: number;
+  status: MentorComponentStatus;
+  /** Why it failed to be written, or what the author is doing. */
+  note?: string;
+  uses: string[];
+}
+
+/** A paper on the shelf: a landmark that closes a constellation, or one the learner brought. */
+export interface MentorPaper {
+  id: string;
+  title: string;
+  authors?: string;
+  year?: number;
+  url?: string;
+  origin: "curated" | "yours";
+  /** The map constellation a landmark paper closes. */
+  closes?: string;
+  status: MentorPaperStatus;
+  goal?: string;
+  components: MentorPaperComponent[];
+  /** The paper's numbers next to the learner's (an experiment's measured ones). */
+  results: { name: string; paper?: string; yours?: number; unit?: string }[];
+  notes?: string;
+  /** The notebook open in Chrome that is its workshop. */
+  place?: { tabId: number; title: string };
+}
+
+/** The reproduction plan the mentor proposes for a paper, and the learner approves. */
+export interface MentorPaperPlan {
+  title: string;
+  authors?: string;
+  year?: number;
+  goal: string;
+  /** Star ids worth knowing first. */
+  requires: string[];
+  components: {
+    slug: string;
+    title: string;
+    role: "formula" | "component" | "experiment";
+    mode: "build" | "given";
+    cites: string;
+    why: string;
+    /** Signatures with shapes: the interface the whole chain keeps. */
+    functions: string[];
+    uses: string[];
+    minutes: number;
+    difficulty: number;
+    skills: MentorSkill[];
+  }[];
+  experiment: {
+    dataset: string;
+    device: "cpu" | "gpu";
+    trainMinutes: number;
+    metrics: { name: string; paper: string; where: string; target: { op: ">=" | "<="; value: number } }[];
+  };
+  /** What the workshop's machine has (checked when the plan was given). */
+  machine?: { gpu: boolean; internet: boolean; torch?: string | null };
+  /** Learning sessions the plan takes. */
+  sessions?: number;
+}
+
+/** A paper's workshop: the chat that reads it, plans it, and has its exercises written. */
+export interface MentorWorkshop {
+  paperId: string;
+  title: string;
+  status: "reading" | "planning" | "authoring" | "ready";
+  plan?: MentorPaperPlan;
+  approved: boolean;
+  authoring?: { done: number; total: number; failed: number; current?: string; note?: string; running: boolean };
 }
 
 export interface MentorHome {
-  workDir: string;
   today: MentorToday | null;
   /** A spaced review to do first (a short warm-up), when one is due. */
   warmup: MentorToday | null;
@@ -199,4 +314,7 @@ export interface MentorHome {
   recent: { attemptId: string; exerciseId: string; title: string; kind: MentorKind; at: number; stage: MentorStage; score?: number; revealed: boolean }[];
   /** Rating after each finished attempt, oldest first. */
   history: { at: number; overall: number }[];
+  /** The paper shelf. */
+  papers: MentorPaper[];
+  focus: MentorFocus | null;
 }

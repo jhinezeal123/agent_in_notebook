@@ -3,7 +3,7 @@
 // events with the same envelope.
 
 import type { ChatImageMime } from "./chat-image.js";
-import type { MentorCardBody, MentorChat, MentorEnv, MentorHome, MentorKind, MentorStage } from "./mentor.js";
+import type { MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
 import type { CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
@@ -169,6 +169,8 @@ export interface ChatSnapshot {
   code?: ChatCode;
   /** The Mentor exercise this notebook is (absent for other notebooks). */
   mentor?: MentorChat;
+  /** A paper's workshop chat. */
+  workshop?: MentorWorkshop;
 }
 
 /**
@@ -353,11 +355,19 @@ export interface BridgeMethods {
   };
   /** Mentor: the home page (map, ratings, streak, today's exercise). */
   "mentor.home": { params: Record<string, never>; result: MentorHome };
+  /** Mentor: the notebooks open in Chrome an exercise can be put in. */
+  "mentor.places": { params: Record<string, never>; result: MentorPlace[] };
   /**
-   * Mentor: start an exercise (today's when none is named), or reopen its
-   * unfinished attempt. The bridge writes the notebook; the editor opens `file`.
+   * Mentor: start an exercise (today's when none is named) or reopen its
+   * unfinished attempt, in the notebook of Chrome tab `tabId`: the bridge
+   * writes the exercise into it. Without `tabId`, only an attempt already in
+   * an open notebook starts (else the error asks for one). Replacing the
+   * learner's own cells needs `replace` (they are backed up first).
    */
-  "mentor.start": { params: { exerciseId?: string; kind?: MentorKind }; result: { attemptId: string; exerciseId: string; file: string; resumed: boolean } };
+  "mentor.start": {
+    params: { exerciseId?: string; kind?: MentorKind; tabId?: number; replace?: boolean };
+    result: { attemptId: string; exerciseId: string; tabId: number; resumed: boolean };
+  };
   /** Mentor: run the exercise's hidden tests on the learner's cells. */
   "mentor.judge": { params: { chatId: string }; result: { started: boolean } };
   /** Mentor: the learner asks for the next hint level. */
@@ -366,10 +376,22 @@ export interface BridgeMethods {
   "mentor.codeReview": { params: { chatId: string }; result: { started: boolean } };
   /** Mentor: the learner moves the exercise to a step themself (moving past the build needs a passing verdict). */
   "mentor.stage": { params: { chatId: string; stage: MentorStage }; result: MentorChat };
-  /** Mentor: what Python on this computer has (numpy, torch, Jupyter's kernel). */
-  "mentor.env": { params: { refresh?: boolean }; result: MentorEnv };
-  /** Mentor: where exercise notebooks are written. */
-  "mentor.settings": { params: { workDir?: string }; result: MentorHome };
+  /** Bring a paper: its source is fetched, and the notebook of the tab becomes its workshop. */
+  "mentor.paper.add": { params: { source: { arxiv: string } | { pdfPath: string }; tabId: number; replace?: boolean }; result: { paperId: string; tabId: number } };
+  /** Put a paper's workshop (back) in a notebook. */
+  "mentor.paper.open": { params: { paperId: string; tabId: number; replace?: boolean }; result: { paperId: string; tabId: number } };
+  "mentor.paper.get": { params: { paperId: string }; result: MentorPaper };
+  /** The learner approves the plan in the workshop chat; the exercises are then written. */
+  "mentor.paper.approve": { params: { chatId: string }; result: MentorWorkshop };
+  /** Write the exercises not written yet (or again, for one component). */
+  "mentor.paper.author": { params: { chatId: string; slug?: string }; result: MentorWorkshop };
+  "mentor.paper.stopAuthoring": { params: { chatId: string }; result: MentorWorkshop };
+  "mentor.paper.notes": { params: { paperId: string; notes: string }; result: { ok: true } };
+  "mentor.paper.archive": { params: { paperId: string; archived: boolean }; result: { ok: true } };
+  /** What "today's exercise" follows: a paper, a constellation, or the map (null). */
+  "mentor.focus": { params: { focus: { kind: "paper" | "constellation"; id: string } | null }; result: { ok: true } };
+  /** "Báo bài sai": the exercise looks wrong; the attempt no longer counts, and the mentor rewrites it. */
+  "mentor.report": { params: { chatId: string; reason: string }; result: { ok: true } };
 }
 
 /**
@@ -463,6 +485,7 @@ export interface BridgeEvents {
   "research.run": ResearchRun;
   /** A Mentor exercise's step, hint level or verdict changed. */
   "chat.mentor": { chatId: string; tabId: number; mentor: MentorChat };
+  "chat.workshop": { chatId: string; tabId: number; workshop: MentorWorkshop };
   /** Mentor progress changed (an attempt, a verdict, a rating): the home page reloads. */
   "mentor.updated": Record<string, never>;
   ping: { t: number };

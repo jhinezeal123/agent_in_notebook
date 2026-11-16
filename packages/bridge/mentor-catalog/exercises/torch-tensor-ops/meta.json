@@ -1,0 +1,13 @@
+{
+  "id": "torch-tensor-ops",
+  "title": "Phản xạ numpy trong PyTorch: broadcasting, gather, einsum",
+  "star": "torch",
+  "skills": ["tensor"],
+  "difficulty": 1300,
+  "minutes": 20,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["pairwise_sq_dists", "pick_logprobs", "batched_scores"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

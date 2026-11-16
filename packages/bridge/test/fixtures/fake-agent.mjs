@@ -4,6 +4,7 @@
 // A tool step can `capture` {name: regex} from its result; later args use it as {{name}}.
 // Every tool result is echoed back as a message chunk "RESULT <tool>: <text>".
 
+import { readFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import { agent, ndJsonStream } from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -79,6 +80,8 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<undo-note>")) await say("[saw undo note]");
     if (text.includes("<lit-review>\n")) await say(text.includes("They named no topic") ? "[saw lit-review, no topic]" : "[saw lit-review]");
     if (text.includes("<mentor>\n")) await say("[saw mentor playbook]");
+    if (text.includes("<mentor-paper>\n")) await say("[saw paper playbook]");
+    if (text.includes("<mentor-author>\n")) await say("[saw author playbook]");
     if (text.includes("<hint-request level=")) await say(`[saw hint ${text.match(/<hint-request level="(\d)"/)?.[1]}${text.includes("Reference solution:") ? " with solution" : ""}]`);
     if (text.includes("<mentor-verdict>\n")) await say("[saw verdict]");
     if (text.includes("<code-review-request>\n")) await say(`[saw code review${text.includes("```python") ? " with reference" : ""}]`);
@@ -94,7 +97,10 @@ const app = agent({ name: "fake-agent" })
     if (text.split("\n").at(-1) === "CRASH") process.exit(3);
     // A handoff recap may contain earlier scripts; only execute this turn's input.
     const m = text.split("\n").at(-1).match(/SCRIPT: (\[.*\])/);
-    const steps = m ? JSON.parse(m[1]) : [{ say: `echo: ${text.split("\n").at(-1)}` }];
+    let steps = m ? JSON.parse(m[1]) : [{ say: `echo: ${text.split("\n").at(-1)}` }];
+    // A paper's author: scripted per component in the file FAKE_AUTHOR names.
+    const task = text.match(/<author-task (?:component="([^"]+)"|kind="given")/);
+    if (task && process.env.FAKE_AUTHOR) steps = JSON.parse(readFileSync(process.env.FAKE_AUTHOR, "utf8"))[task[1] ?? "given"] ?? [{ say: "no script" }];
     let n = 0;
     const vars = {};
     for (const step of steps) {

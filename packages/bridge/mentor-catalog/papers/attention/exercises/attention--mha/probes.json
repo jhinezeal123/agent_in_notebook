@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Vì sao chia điểm attention cho √d_k mà không phải √d_model? Bỏ hẳn phép chia thì chuyện gì xảy ra khi d_k lớn?",
+    "tag": "scale-dk",
+    "answer": "Mỗi head tính tích vô hướng trên d_k chiều, nên phương sai của q·k cỡ d_k (thành phần độc lập, phương sai 1); chia √d_k đưa nó về phương sai 1. Chia √d_model là chia quá tay khi có nhiều head (softmax quá phẳng). Không chia thì điểm lớn, softmax bão hoà gần one-hot, gradient qua softmax gần 0 nên khó học (§3.2.1, chú thích 4)."
+  },
+  {
+    "q": "Sau w_q(q) có shape (B, T, d_model). Vì sao tách head bằng view(B, T, h, d_k) rồi transpose(1, 2), mà không view thẳng thành (B, h, T, d_k)? Lúc ghép lại cần làm gì trước reshape?",
+    "tag": "head-split",
+    "answer": "Head i là một khối feature liên tiếp của từng token; view(B, T, h, d_k) cắt trục feature đúng như vậy, transpose đưa trục head ra trước để nhân ma trận theo từng head. View thẳng (B, h, T, d_k) cắt bộ nhớ theo thứ tự khác: trộn token với feature, mỗi 'head' chứa feature của nhiều token khác nhau. Lúc ghép phải transpose ngược về (B, T, h, d_k) rồi mới reshape (cần reshape hoặc contiguous vì tensor sau transpose không liên tục)."
+  },
+  {
+    "q": "Vì sao điền -inf vào điểm trước softmax, chứ không nhân trọng số với 0 sau softmax? Mask (B, 1, 1, Tk) broadcast với điểm (B, h, Tq, Tk) thế nào?",
+    "tag": "mask-before-softmax",
+    "answer": "exp(-inf) = 0 nên key bị che có trọng số đúng 0 và các trọng số còn lại vẫn cộng thành 1. Nhân 0 sau softmax thì phần xác suất của key bị che mất đi, tổng không còn là 1 (phải chuẩn hoá lại). Trục kích thước 1 được lặp: cùng một mask cho mọi head (trục 1) và mọi query (trục 2), riêng cho từng câu (trục 0) và từng key (trục 3)."
+  },
+  {
+    "q": "Nếu một query có mọi key đều bị che (ví dụ câu toàn PAD, hoặc mask causal lệch một vị trí ở hàng đầu), đầu ra là gì? Làm sao tránh?",
+    "tag": "fully-masked-row",
+    "answer": "softmax của một hàng toàn -inf là 0/0 = NaN, và NaN lan ra mọi thứ phía sau (cả loss và gradient). Tránh bằng cách bảo đảm mỗi query luôn có ít nhất một key được nhìn (mask causal gồm cả đường chéo, câu không rỗng), hoặc điền một số âm lớn hữu hạn thay vì -inf, hoặc xử lý riêng hàng toàn bị che."
+  },
+  {
+    "q": "So với một head với d_k = d_model, h head với d_k = d_model/h tốn thêm bao nhiêu tham số và phép tính? Vậy được gì?",
+    "tag": "heads-cost",
+    "answer": "Không thêm tham số (vẫn bốn ma trận d_model × d_model) và gần như cùng số phép tính (§3.2.2). Được h phân phối attention khác nhau trong cùng một lớp: mỗi head có thể nhìn một kiểu quan hệ (vị trí, nội dung), thay vì một trung bình duy nhất làm nhoè thông tin."
+  }
+]

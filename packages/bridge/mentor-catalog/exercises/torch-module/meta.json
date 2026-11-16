@@ -1,0 +1,13 @@
+{
+  "id": "torch-module",
+  "title": "nn.Module: tự viết Linear và MLP",
+  "star": "torch",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1450,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 3,
+  "functions": ["MyLinear", "MLP"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

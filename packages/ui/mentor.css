@@ -59,8 +59,6 @@ code { font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, 
 .mh-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-radius: var(--mh-r); margin-bottom: 12px; border: 1px solid var(--mh-card-line); background: var(--mh-card); }
 .mh-banner p { margin: 4px 0; }
 .mh-error { border-color: rgba(255, 122, 133, 0.45); color: #ffd3d7; }
-.mh-env { border-color: rgba(242, 201, 76, 0.4); }
-.mh-cmd { display: block; white-space: pre-wrap; font-size: 12px; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.35); color: var(--mh-gold-soft); }
 .mh-x { margin-left: auto; border: 0; background: none; color: var(--mh-muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
 .mh-x:hover { color: var(--mh-fg); }
 
@@ -80,6 +78,12 @@ code { font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, 
 /* map */
 .mh-map-wrap { position: relative; border-radius: 18px; border: 1px solid var(--mh-card-line); background: radial-gradient(ellipse at 40% 30%, rgba(60, 76, 190, 0.18), transparent 70%), rgba(6, 9, 26, 0.55); overflow: hidden; }
 .mh-map { display: block; width: 100%; height: auto; }
+/* A topic pack's own small map, under the star map. */
+.mh-topic { margin-top: 12px; }
+.mh-topic-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px 0; }
+.mh-topic-head h3 { margin: 0; font-size: 14px; letter-spacing: 0.04em; }
+.mh-topic-note { margin: 2px 16px 0; }
+.mh-topic .mh-star-card { position: static; width: auto; max-height: none; margin: 0 10px 10px; }
 .mh-dust { fill: #dfe6ff; }
 @media (prefers-reduced-motion: no-preference) { .mh-dust { animation: mh-twinkle 4.5s ease-in-out infinite; } }
 @keyframes mh-twinkle { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.7; } }
@@ -200,7 +204,7 @@ code { font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, 
 .mh-chip.mistake-waiting { background: rgba(124, 140, 255, 0.16); color: #cdd5ff; }
 .mh-chip.mistake-solid { background: rgba(74, 222, 128, 0.14); color: #a7f3c0; }
 
-.mh-path { display: block; font-size: 12px; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 8px; }
+.mh-where { font-size: 12px; margin: 10px 0 0; }
 
 /* ranks */
 .rank-gray { color: #a7aebb; } .rank-green { color: #4ade80; } .rank-cyan { color: #6ee7ff; } .rank-blue { color: #7aa7ff; }
@@ -225,3 +229,27 @@ code { font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, 
 }
 @keyframes mh-burst { 0% { opacity: 0.9; transform: scale(0.2); } 100% { opacity: 0; transform: scale(1.3); } }
 @keyframes mh-ignite { 0% { transform: scale(0.4); fill: #ffffff; } 40% { transform: scale(1.8); } 100% { transform: scale(1); } }
+
+/* Paper shelf */
+.mh-focus { background: rgba(242, 201, 76, 0.12); border-color: rgba(242, 201, 76, 0.4); }
+.mh-focus .mh-link-btn { margin-left: 8px; }
+.mh-papers { list-style: none; padding: 0; margin: 8px 0 4px; display: grid; gap: 10px; }
+.mh-paper { border: 1px solid rgba(160, 180, 255, 0.18); border-radius: 10px; padding: 10px 12px; background: rgba(10, 16, 40, 0.35); }
+.mh-paper.done { border-color: rgba(242, 201, 76, 0.55); box-shadow: 0 0 18px rgba(242, 201, 76, 0.12); }
+.mh-paper.archived { opacity: 0.6; }
+.mh-paper-title { font-weight: 600; text-align: left; }
+.mh-paper-map { width: 100%; height: 64px; display: block; margin: 6px 0; }
+.mh-paper-actions { gap: 8px; flex-wrap: wrap; justify-content: flex-start; }
+.mh-paper-detail { margin-top: 8px; font-size: 13px; }
+.mh-components { margin: 6px 0; padding-left: 20px; }
+.mh-components li { margin: 3px 0; }
+.mh-components li.done > span:first-child { color: #ffe7a3; }
+.mh-components li.failed > span:first-child { color: #ff9b9b; }
+.mh-results { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.mh-results th, .mh-results td { padding: 3px 10px 3px 0; text-align: left; }
+.mh-results th { opacity: 0.7; font-weight: 500; }
+.mh-notes { display: grid; gap: 4px; margin: 8px 0; }
+.mh-notes textarea { width: 100%; box-sizing: border-box; background: rgba(0, 0, 0, 0.25); color: inherit; border: 1px solid rgba(160, 180, 255, 0.25); border-radius: 6px; padding: 6px 8px; font: inherit; resize: vertical; }
+.mh-sub { margin: 14px 0 4px; font-size: 13px; opacity: 0.8; }
+.mh-btn.ghost { background: transparent; border: 1px solid rgba(160, 180, 255, 0.35); }
+.small { font-size: 12px; }

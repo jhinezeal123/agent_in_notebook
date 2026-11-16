@@ -86,19 +86,28 @@ VS Code                                     bridge                     orx up --
 Mentor là người hướng dẫn **không code hộ**: bạn tự viết từng hàm, máy chấm quyết định đúng sai, AI chỉ hỏi dẫn, đưa gợi ý theo mức và hỏi vặn. Spec đầy đủ nằm trong kế hoạch "Spec: Mentor"; mục này tả cách nó được cài.
 
 ```
-VS Code                                   bridge (bridge/src/mentor)                 kernel của notebook
- tab "Mentor" (mentor.js, Preact)  ─WS─►  Mentor: catalog, store, model     
+VS Code                                   bridge (bridge/src/mentor)                 Chrome: notebook Kaggle
+ tab "Mentor" (mentor.js, Preact)  ─WS─►  Mentor: catalog, store, model
  thanh trạng thái 🔥 chuỗi · ★ rating      events.jsonl → fold → rating, chuỗi ngày
- notebook bài làm + khung chat     ─WS─►  Chat (mentor = MentorSession)  ──execute──► harness chấm bài
+ Bắt đầu → chọn notebook (QuickPick) ─►   MentorPlaces (place.ts)  ──insert/delete_cell──► đề bài trong notebook
+ bản sao notebook + khung chat     ─WS─►  Chat (mentor = MentorSession)  ──execute──► harness chấm bài trên máy Kaggle
    thanh 3 chặng, Chấm bài, Xin gợi ý     playbook <mentor>, tool mentor_*
 ```
 
+- **Bài chạy trên notebook bạn tự mở trong Chrome** (Kaggle), không chạy trên máy bạn.
+  - Bạn mở một notebook (mới hoặc cũ), extension Chrome nối nó với bridge như mọi notebook khác. Trên trang Mentor, bấm Bắt đầu: `mentor-host.ts` gọi `mentor.places` (các notebook đang nối, notebook nào đang chứa bài nào, bao nhiêu cell của bạn) và hiện QuickPick. Notebook đang chứa đúng bài dở này thì mở thẳng, không hỏi. Trang chủ ghi bài dở đang nằm ở notebook nào (`MentorToday.place`, bridge thêm vào từ các tab đang mở); notebook chứa bài mở hoặc đóng trong Chrome thì bridge phát `mentor.updated`. `mentor.start` không kèm `tabId` dùng notebook đang chứa bài dở, nếu có.
+  - `MentorPlaces.start` (`place.ts`), tuần tự theo tab: đọc cell; notebook có cell không phải của Mentor thì cần `replace: true` (VS Code đã hỏi), bản cũ lưu thành `mentor/backups/<giờ> <tên>.ipynb`; notebook đang chứa bài khác thì phác thảo, dự đoán và lời giải của bạn được lưu vào `mentor/attempts/<attemptId>.json`. Rồi xóa mọi cell và chèn các cell của bài (`review: false, byUser: true`, nên không thành thay đổi của agent), có bài làm đã lưu thì đặt lại vào chỗ cũ, và ghi sự kiện `load`.
+  - Cuộc trò chuyện đi theo bài: transcript của notebook được cất dưới khóa `mentor:<attemptId>` khi bài rời notebook và quay về khóa của notebook mới khi bài được chép lại. Chat trên tab bị đóng (snapshot `closed`), khung chat tự mở lại thành chat của bài mới.
+  - Cell được nhận ra bằng dấu trong nội dung, không bằng id (id trên Kaggle do JupyterLab đặt): cell đề bài bắt đầu bằng `<!-- mentor: exercise <id> -->`, cell phác thảo/dự đoán bằng `<!-- mentor: sketch|predict -->`, cell lời giải có dòng `#| mentor: solution` (`notebook.ts: cellRole, exerciseIn, learnerWork, withWork`).
+  - Kaggle đổi địa chỉ khi đổi tên notebook: `notebook.attached` với khóa mới trên một tab đang chứa bài thì `followRename` kiểm lại cell đề bài, ghi `load` cho khóa mới và chuyển transcript.
+  - Sau đó VS Code mở bản sao của notebook (`notebook.mirror`) và focus khung chat. Máy Kaggle chưa bật thì Chấm bài báo "bấm nút nguồn trên Kaggle" (`kernelProblem`).
 - **Mentor là một thuộc tính của chat notebook**, không phải loại chat mới.
-  - `chat.open` với khóa `vscode:file:///…` tra file đó trong kho Mentor (`Mentor.attemptForFile`). Nếu là notebook của một lượt làm bài thì chat mang `MentorSession`.
+  - `chat.open` trên một tab Chrome tra khóa notebook trong bảng notebook → bài (`Mentor.attemptIn`, gộp từ các sự kiện `load`). Notebook đang chứa một lượt làm bài thì chat mang `MentorSession`.
   - Chat mentor không có project: bỏ `refreshProject`, `refreshMachine`, không lưu `NotebookMeta`, không hiện trong `chats.list`. OpenResearch không bị khởi động.
 - **Kho** ở `~/.agent-in-notebook/mentor/`:
-  - `events.jsonl` chỉ ghi thêm, là nguồn sự thật: `start` (kèm `kind` và `scaffold`), `stage`, `judge`, `hint`, `probe`, `misconception`, `recall`, `done`. Mỗi sự kiện mang ngày địa phương (ngày đổi lúc 4 giờ sáng).
-  - `profile.json`: thư mục bài làm (mặc định `Documents\ml-mentor`).
+  - `events.jsonl` chỉ ghi thêm, là nguồn sự thật: `start` (kèm `kind` và `scaffold`), `load` (bài được chép vào notebook có khóa nào), `stage`, `judge`, `hint`, `probe`, `misconception`, `recall`, `done`. Mỗi sự kiện mang ngày địa phương (ngày đổi lúc 4 giờ sáng).
+  - `attempts/<id>.json`: bài làm dở của một bài đã rời notebook. `backups/`: notebook của bạn trước khi bị thay.
+  - Sự kiện `start` cũ (đợt 1–2, bài là file `.ipynb` trên máy) còn trường `file`; vẫn được đọc, rating và chuỗi ngày giữ nguyên, làm tiếp thì đề được chép vào notebook Kaggle.
   - Mọi con số đều tính lại bằng phép gộp thuần `model.ts: fold/home`: Elo theo từng kỹ năng (bắt đầu 1000, K = 120/80/40 theo số bài đã làm), chuỗi ngày có ngày nghỉ phép, lịch nhiệt 16 tuần, trạng thái các sao, `pickToday` (làm tiếp → chẩn đoán → làm lại sau khi xem lời giải 3 ngày → biến thể của bài vừa vững → bài kế trên bản đồ).
 - **Ôn ngắt quãng** (`kind: "review"`):
   - Tự làm đúng một bài (không xem lời giải) thì `scheduleReview` hẹn ôn sau 3 ngày. Ôn đạt với gợi ý tối đa mức 1 thì lần sau cách 10, rồi 30 ngày, rồi coi như đã thuộc; dựa vào gợi ý cao hơn hoặc xem lời giải thì quay về 3 ngày.
@@ -107,12 +116,12 @@ VS Code                                   bridge (bridge/src/mentor)            
   - `pickWarmup` chọn bài ôn dở, hoặc bài quá hạn lâu nhất, thành thẻ "Khởi động" trên trang chủ. `starFade` làm sao mờ dần theo số ngày quá hạn (mờ hẳn sau 14 ngày); ôn xong là sáng lại.
 - **Sổ lỗi sai**: `misconception` đưa một tag vào sổ, hẹn hỏi lại sau 2 ngày. Ở chặng `lab` của bài kế tiếp, `<mentor-state>` liệt kê tối đa 3 tag đến hạn, kèm câu hỏi và đáp án trong ngân hàng nếu tag đến từ đó. Mentor hỏi lại và chấm bằng `mentor_recall`: đúng thì hẹn sau 7 ngày, đúng 2 lần liền thì "đã vững"; sai thì quay về 2 ngày.
 - **Khung code thưa dần** (`scaffoldFor`, `scaffoldStarter`): bài chẩn đoán và rating thấp (< 1250 ở kỹ năng yếu nhất của bài) có starter đầy đủ; 1250–1500 chỉ còn dòng `def`; từ 1500 là cell trống. Lượt ôn luôn trống.
-- **Biến thể** (`variantOf`, `predict` trong `meta.json`): một bài nhỏ đổi một chi tiết của bài gốc, cùng ngôi sao, chỉ mở khi bài gốc đã vững. Chặng đầu là viết dự đoán vào cell `mentor-predict`; sau khi chấm đạt, mentor bắt so dự đoán với thực tế rồi mới hỏi vặn.
+- **Biến thể** (`variantOf`, `predict` trong `meta.json`): một bài nhỏ đổi một chi tiết của bài gốc, cùng ngôi sao, chỉ mở khi bài gốc đã vững. Chặng đầu là viết dự đoán vào cell `<!-- mentor: predict -->`; sau khi chấm đạt, mentor bắt so dự đoán với thực tế rồi mới hỏi vặn.
 - **Nhận xét code** (`mentor.codeReview`): sau khi xong bài, mentor review lời giải như một đàn anh, được phép đưa đoạn code mẫu, không ảnh hưởng rating.
 - **Bài soạn sẵn** ở `bridge/mentor-catalog/`:
   - `map.json`: các chòm sao, sao, vị trí và quan hệ "học trước".
   - `exercises/<id>/`: `meta.json` (kiểm bằng zod trong `catalog.ts`), `brief.md`, `lab.py` (Phòng công thức), `starter.py`, `reference.py`, `tests.py`, `probes.json` (câu hiểm kèm đáp án cho mentor), `mutants/*.py` (bản cố tình sai).
-  - `notebook.ts` dựng `.ipynb`: đề → Phòng công thức → Phác thảo → Bài làm (cell có dòng `#| mentor: solution`) → Thử nhanh. Lời giải và test không bao giờ nằm trong notebook.
+  - `notebook.ts: exerciseCells` dựng các cell: đề → Phòng công thức → Phác thảo → Bài làm (cell có dòng `#| mentor: solution`) → Thử nhanh. Lời giải và test không bao giờ nằm trong notebook.
   - `test/mentor-catalog.test.ts` chạy Python thật: lời giải chuẩn qua hết test, starter và mọi mutant đều trượt, không dòng nào của lời giải lọt vào notebook.
 - **Chấm bài** (`judge.ts`, `Chat.judge`):
   - Lấy nguồn các cell lời giải, `exec` trong một dict mới (không dùng biến của kernel), chạy `test_*(user, ref)`, in một dòng `<<MENTOR {json} MENTOR>>` có nonce.
@@ -127,10 +136,29 @@ VS Code                                   bridge (bridge/src/mentor)            
   - Danh sách này không phải hộp cát: `run_code` vẫn ghi được file, và agent không phải Claude giữ shell riêng.
 - **Giao diện**:
   - Khung chat (`ui/src/mentor-bar.tsx`): thanh ba chặng, nút Chấm bài, Xin gợi ý n/4 (mức 4 hỏi xác nhận vì không được cộng rating), thẻ kết quả chấm và thẻ rating.
-  - Trang chủ (`ui/src/mentor/home.tsx`, `constellation.ts`, `ui/mentor.css`): bản đồ chòm sao SVG trên nền trời đêm riêng, thẻ Khởi động (bài ôn), bài hôm nay kèm lịch ôn sắp tới, kỹ năng, chuỗi ngày và lịch nhiệt, sổ lỗi sai, tủ paper, kiểm tra máy (Python, numpy, matplotlib, ipykernel, PyTorch, extension Jupyter) kèm lệnh cài.
+  - Trang chủ (`ui/src/mentor/home.tsx`, `constellation.ts`, `ui/mentor.css`): bản đồ chòm sao SVG trên nền trời đêm riêng, thẻ Khởi động (bài ôn), bài hôm nay kèm lịch ôn sắp tới, kỹ năng, chuỗi ngày và lịch nhiệt, sổ lỗi sai, tủ paper, một dòng nhắc "bài chạy trên notebook Kaggle bạn mở trong Chrome" kèm nút mở notebook Kaggle mới.
   - Chuyển động: sao nhấp nháy, số rating chạy từ giá trị cũ, sao vừa vững (hoặc vừa ôn xong) bùng sáng một lần. Những sao đã thấy được nhớ trong `localStorage` của webview. Mọi chuyển động tắt khi máy bật giảm chuyển động.
-  - Host (`vscode/src/mentor-host.ts`): tab "Mentor" (lệnh `ainb.mentor.open`, nút ngôi sao trên tiêu đề khung chat), mục thanh trạng thái; bắt đầu bài thì mở notebook ở giữa và focus khung chat.
-- **Giao thức**: `WIRE_VERSION = 5`. Phương thức `mentor.home/start/judge/hint/stage/codeReview/env/settings`; sự kiện `chat.mentor` và `mentor.updated`.
+  - Host (`vscode/src/mentor-host.ts`): tab "Mentor" (lệnh `ainb.mentor.open`, nút ngôi sao trên tiêu đề khung chat), mục thanh trạng thái; bắt đầu bài thì chọn notebook (QuickPick, xác nhận khi thay cell của bạn), mở bản sao ở giữa và focus khung chat.
+- **Paper** (đợt 3; thiết kế đầy đủ ở `docs/mentor-dot-3-4.md`):
+  - Gói paper là một thư mục: `paper.json`, `given.py` (code cho sẵn chung), `exercises/` cùng định dạng bài thường. Paper mốc nằm ở `mentor-catalog/papers/` (khép một chòm, `closes`); paper bạn đưa vào nằm ở `~/.agent-in-notebook/mentor/papers/<id>/` kèm `source.md` (nội dung paper), `notes.md`, `drafts/` (bài đang soạn, không bao giờ được nạp) và `verify/` (biên bản kiểm chứng; bài chỉ được nạp khi biên bản khớp hash các file).
+  - `catalog.ts` gộp bài soạn sẵn với bài của các paper (`papers.ts: loadPapers`). Mỗi paper thành một chòm ảo `paper:<id>`, mỗi bài một sao (`paperStars`, bố cục theo `uses`); `MentorConstellation.kind` tách bản đồ chính với tủ paper.
+  - Bài nối tiếp nhau bằng `uses`: chấm đạt thì lời giải được lưu (`mentor/solutions/<id>.py`); bài sau có cell `#| mentor: carried` chứa code của bạn từ các bài trước, và máy chấm chạy code đó trước code mới (`Mentor.judgeContext`, `judgeCode(…, {before, beforeRef})`). Bài thiếu lời giải của bài trước thì không bắt đầu được.
+  - Bài thí nghiệm (`role: "experiment"`, `judge: "kernel"`): chặng đầu là dự đoán; train xong, thẻ "chạy xong" có nút Chấm bài; test đo mô hình đang nằm trong kernel và báo con số (`t.report` → `MentorVerdict.metrics`, sự kiện `judge` mang `metrics`). Thí nghiệm không có ôn ngắt quãng.
+  - Thư viện test `t` (`judge.ts: TEST_LIB`): `seed`, `close`, `shape`, `grad_close`, `load_into`, `report`. Định dạng bài: `mentor-catalog/PROTOCOL.md`.
+  - Kiểm chứng (`verify.ts: verifyExercise`): lời giải chuẩn qua mọi test hai lần, starter và mọi bản sai trượt, Phòng công thức chạy được, chấm đủ nhanh, lời giải không lọt vào notebook. Bài PyTorch soạn sẵn được kiểm trên một notebook Kaggle bằng `ainb mentor verify [id…] [--tab N]` (route `POST /mentor/verify`, token ghép đôi, trả NDJSON); bài đạt ghi vào `mentor-catalog/verified.json`, và `mentor-catalog.test.ts` đòi mọi bài PyTorch có biên bản khớp hash.
+  - Xưởng paper (`workshop.ts`): một notebook trong Chrome có cell đầu `<!-- mentor: paper <id> -->`, sự kiện `workshop` trong nhật ký (`state.workshops`). Chat xưởng (`WorkshopSession` role `plan`) có playbook `<mentor-paper>` và tool `paper_source`, `paper_plan`; `checkPlan` từ chối kế hoạch sai luật và kẹp độ khó quanh rating. Duyệt kế hoạch (`mentor.paper.approve`) chạy việc soạn bài như `busyJob` của chat xưởng: một `Chat` ẩn (role `author`, khóa `mentor-author:<id>`, `emit` rỗng) nhận từng `<author-task>`, ghi bài vào `drafts/` bằng `paper_exercise_write`, rồi `paper_exercise_check` kiểm chứng trên máy của xưởng; đạt thì bài lên tủ, hỏng sau 4 lần thì ghi vào `failed`.
+  - Nội dung paper (`fetch.ts`): mã LaTeX gốc của arXiv (giải nén tar, ghép `\input`), rồi `orx paper --full`, rồi PDF rút chữ bằng `pypdf` trên máy của notebook.
+  - Nhật ký thêm `void` (Báo bài sai: lượt làm không tính rating, không hẹn ôn), `paper` (duyệt kế hoạch là một ngày học), `workshop`. Bài do AI soạn đổi rating bằng một nửa. Trọng tâm (`profile.json: focus`, `mentor.focus`): bài hôm nay đi theo một paper hoặc một chòm, sau chẩn đoán và bài cần làm lại.
+  - Giao diện: Tủ paper trên trang chủ (thẻ paper, chòm sao nhỏ, bảng con số, ghi chú, Mở xưởng, trọng tâm, Thêm paper qua link arXiv hoặc file PDF); thanh xưởng trong khung chat (Đọc paper · Kế hoạch · Soạn bài · Sẵn sàng, thẻ kế hoạch, Duyệt, Soạn tiếp, Dừng); bài thuộc paper có dòng "thành phần i/n · Eq." và nút Báo bài sai.
+- **Giao thức nội dung** (`mentor-catalog/PROTOCOL.md`, phiên bản 1: `catalog.ts: CONTENT_PROTOCOL`): quy định cách thêm và định dạng chủ đề, sao, bài, test, câu hỏi, hint, để người hoặc AI thêm nội dung mà không sửa code.
+  - **Gói chủ đề** `mentor-catalog/packs/<id>/` (`pack.json` + `exercises/`): thêm bài cho sao cũ, thêm sao vào chòm cũ, hoặc mang chòm sao riêng (`kind: "topic"`). `map.json` và `exercises/` là bộ gốc, không sửa khi thêm nội dung.
+  - `catalog.ts: loadPacks` không bao giờ ném lỗi: thứ sai trong gói (file hỏng, id trùng, sao không tồn tại, bài PyTorch chưa kiểm trên Kaggle, `uses` vòng tròn) bị bỏ qua và ghi vào `catalog.problems`; bộ gốc vẫn kiểm chặt như cũ.
+  - Sao không cần tọa độ: chòm riêng xếp cột theo `after` (`autoLayout`); sao thêm vào bản đồ chính tìm chỗ trống gần các sao đứng trước (`freeSpot`). Trang chủ vẽ mỗi chòm `topic` thành một bản đồ nhỏ dưới bản đồ chính (`home.tsx: Maps/TopicMap`, `constellation.ts: topicHeight`). Chòm có `daily: false` chỉ vào "Bài hôm nay" khi là trọng tâm (`model.ts: pickToday`).
+  - `hints.json` (tùy chọn với bộ gốc, bắt buộc với gói): hint tác giả soạn cho mức 0–3. Mức 1–3 vào `<hint-request>` đúng mức người học xin (`prompt.ts: hintBlock`); câu hỏi mức 0 vào playbook, và câu gắn với một test (`"test"`) vào `<mentor-verdict>` khi test đó trượt đầu tiên (verdict mang `id` là tên hàm test). `probes.json` thêm `kind` và `stage` (tùy chọn).
+  - Hash của bài (`exerciseHash`) bỏ qua `probes.json` và `hints.json`: thêm câu hỏi, hint không phải kiểm lại trên Kaggle.
+  - `ainb mentor check [gói|bài…] [--all]` (`check-cli.ts`): luật tĩnh của giao thức (`lint.ts: lintExercise`), cú pháp Python, rồi `verifyExercise` bằng Python của máy; bài thiếu module (PyTorch) được báo là chờ `ainb mentor verify`. `ainb mentor reload` (`POST /mentor/reload`) cho Mentor đang chạy đọc lại catalog.
+  - `AGENTS.md` ở gốc repo trỏ mọi coding agent (Codex, Claude Code…) tới giao thức khi được nhờ thêm nội dung.
+- **Giao thức**: `WIRE_VERSION = 5`. Phương thức `mentor.home/places/start/judge/hint/stage/codeReview/report/focus`, `mentor.paper.add/open/get/approve/author/stopAuthoring/notes/archive`; sự kiện `chat.mentor`, `chat.workshop` và `mentor.updated`.
 
 ## Luồng một tool call
 

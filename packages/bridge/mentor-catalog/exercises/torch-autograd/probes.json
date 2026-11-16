@@ -1,0 +1,22 @@
+[
+  {
+    "q": "loss.backward() rồi đọc p.grad, so với torch.autograd.grad(loss, params): khác nhau ở đâu? Trong grads_of, cách đầu hỏng gì?",
+    "tag": "grad-vs-backward",
+    "answer": "backward cộng gradient vào .grad của mọi tensor lá có liên quan (tác dụng phụ, cộng dồn với gradient cũ); autograd.grad trả gradient ra mà không đụng .grad. Dùng backward trong grads_of sẽ làm bẩn .grad của người gọi, và lần gọi sau cộng dồn ra số sai."
+  },
+  {
+    "q": "Trong td_loss, nếu quên detach target thì mạng học cái gì? Vì sao DQN cần một mạng target riêng, cập nhật bằng EMA hoặc chép định kỳ?",
+    "tag": "detach-target",
+    "answer": "Gradient chảy vào cả nhánh target: mạng vừa kéo Q(s, a) về y vừa kéo y về Q(s, a), tức tối ưu một mục tiêu khác (residual gradient), học chậm và lệch. Mạng target thay đổi chậm giữ cho y gần như cố định, tránh đuổi theo một mục tiêu luôn chạy và giảm dao động."
+  },
+  {
+    "q": "Vì sao p_t.mul_(tau) trên một nn.Parameter báo lỗi nếu không có torch.no_grad()? Còn viết p_t = tau * p_t + ... thì sai ở đâu?",
+    "tag": "inplace-leaf",
+    "answer": "Thay đổi tại chỗ một tensor lá cần gradient sẽ phá đồ thị autograd (giá trị cũ có thể cần cho backward), nên PyTorch cấm; trong no_grad thì phép đó không được ghi lại. Gán p_t = ... chỉ đổi biến cục bộ trỏ sang tensor mới, tham số của module vẫn y nguyên."
+  },
+  {
+    "q": "torch.no_grad() và .detach() khác nhau thế nào? Khi nào dùng cái nào?",
+    "tag": "nograd-vs-detach",
+    "answer": "no_grad là một ngữ cảnh: mọi phép tính bên trong không được ghi vào đồ thị (dùng khi đánh giá hoặc sửa tham số). detach áp lên một tensor: trả về tensor cùng bộ nhớ nhưng tách khỏi đồ thị, phần còn lại của phép tính vẫn được ghi (dùng để chặn gradient một nhánh như target)."
+  }
+]

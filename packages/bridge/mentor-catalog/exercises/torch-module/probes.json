@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Nếu trong MyLinear bạn viết self.weight = torch.randn(..., requires_grad=True) thay vì bọc trong nn.Parameter, forward vẫn chạy. Vậy cái gì hỏng?",
+    "tag": "parameter-registration",
+    "answer": "Tensor thường không được đăng ký: không có trong parameters() nên optimizer không cập nhật, không có trong state_dict() nên không lưu/nạp được, model.to(device) không chuyển nó. nn.Parameter khi gán vào self được nn.Module.__setattr__ ghi vào danh sách tham số."
+  },
+  {
+    "q": "Vì sao weight có shape (out, in) và forward là x @ W.T, chứ không phải (in, out) và x @ W? Với x shape (B, T, in) thì phép nhân đó cho shape gì?",
+    "tag": "weight-layout",
+    "answer": "Quy ước của PyTorch: mỗi hàng của W là một neuron đầu ra (giống W x trong toán), nên cần chuyển vị khi x là hàng. matmul broadcast các trục đầu: (B, T, in) @ (in, out) -> (B, T, out), cộng bias (out,) broadcast theo trục cuối."
+  },
+  {
+    "q": "Bỏ ReLU giữa fc1 và fc2 thì MLP biểu diễn được những hàm nào? Số tham số có đổi không?",
+    "tag": "why-nonlinearity",
+    "answer": "Hợp của hai ánh xạ affine vẫn là một ánh xạ affine (W2 W1 x + W2 b1 + b2), nên MLP chỉ còn bằng một lớp tuyến tính dù số tham số không đổi; ReLU mới cho mạng biểu diễn hàm phi tuyến."
+  },
+  {
+    "q": "Vì sao phải gọi super().__init__() trước khi gán self.fc1? Và vì sao fc1 phải là thuộc tính, không phải phần tử của một list Python thường?",
+    "tag": "module-init",
+    "answer": "nn.Module.__init__ tạo các từ điển _parameters, _modules…; thiếu nó thì gán tham số hay module con báo lỗi. Module con gán làm thuộc tính được đăng ký (tên fc1.weight…); để trong list Python thường thì không được đăng ký, parameters() bỏ sót (phải dùng nn.ModuleList)."
+  }
+]

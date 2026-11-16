@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Trong pairwise_sq_dists, tensor trung gian có shape gì? Với N = M = 10 000 và D = 512 thì nó tốn bao nhiêu bộ nhớ ở float32, và có cách nào tránh?",
+    "tag": "broadcast-memory",
+    "answer": "(N, M, D): 10^4 · 10^4 · 512 · 4 byte ≈ 200 GB, không chạy nổi. Tránh bằng khai triển ||x||² + ||y||² − 2 x·yᵀ (một phép matmul, bộ nhớ O(NM)), hoặc chia khối; đổi lại có sai số làm tròn và có thể ra số âm nhỏ, cần clamp về 0."
+  },
+  {
+    "q": "Vì sao gather cần targets.unsqueeze(-1) rồi squeeze(-1)? Nếu targets là int32 hay float thì chuyện gì xảy ra?",
+    "tag": "gather-index",
+    "answer": "gather đòi index cùng số chiều với tensor nguồn: logits (B, C) cần index (B, 1); kết quả (B, 1) nên bỏ trục cuối để ra (B,). Index phải là int64 (torch.long); int32 hay float sẽ báo lỗi kiểu dữ liệu."
+  },
+  {
+    "q": "log(softmax(z)) và log_softmax(z) khác nhau ở đâu khi logits rất lớn? Viết log_softmax bằng logsumexp.",
+    "tag": "log-softmax-stability",
+    "answer": "softmax làm tròn xác suất rất nhỏ về 0 nên log ra -inf (gradient thành NaN). log_softmax(z)_c = z_c − logsumexp(z), trong đó logsumexp trừ max trước khi lấy exp, nên luôn hữu hạn."
+  },
+  {
+    "q": "Trong einsum \"bhtd,bhsd->bhst\", chữ nào bị cộng dồn và vì sao? Đổi vế phải thành \"bhts\" ra \"bhst\" thì kết quả khác gì? Vì sao chia √d?",
+    "tag": "einsum-reading",
+    "answer": "d không có ở vế phải nên bị cộng dồn (tích vô hướng); b, h giữ nguyên là trục batch. Đổi thành bhts là chuyển vị hai trục cuối (S trước T). Chia √d để phương sai của tích vô hướng giữ cỡ 1 khi q, k có phương sai 1, softmax sau đó không bị bão hoà."
+  }
+]

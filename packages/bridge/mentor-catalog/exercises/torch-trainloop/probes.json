@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Bỏ opt.zero_grad() thì bước thứ k dùng gradient nào? Có lúc nào người ta cố ý không xoá gradient không?",
+    "tag": "zero-grad",
+    "answer": "backward cộng dồn vào .grad, nên bước k dùng tổng gradient của các batch 1..k (như momentum không suy giảm, bước ngày càng lớn). Cố ý cộng dồn khi gradient accumulation: gom gradient vài micro-batch rồi mới step (và xoá) để giả lập batch lớn khi thiếu bộ nhớ."
+  },
+  {
+    "q": "model.eval() và torch.no_grad() làm hai việc khác nhau nào? Thiếu từng cái trong evaluate thì hỏng gì?",
+    "tag": "eval-vs-nograd",
+    "answer": "eval() đổi hành vi của các lớp như Dropout (tắt) và BatchNorm (dùng thống kê chạy thay vì của batch); thiếu nó thì kết quả ngẫu nhiên và sai. no_grad() tắt việc ghi đồ thị autograd; thiếu nó thì kết quả đúng nhưng tốn bộ nhớ và chậm hơn. Hai cái độc lập, cần cả hai."
+  },
+  {
+    "q": "Vì sao cộng loss.item() chứ không cộng thẳng tensor loss vào total?",
+    "tag": "loss-item",
+    "answer": "Tensor loss còn gắn với đồ thị autograd của batch; cộng dồn tensor thì giữ đồ thị (và mọi activation) của mọi batch trong bộ nhớ suốt epoch. .item() lấy ra số Python, đồ thị được giải phóng."
+  },
+  {
+    "q": "Vì sao train_epoch phải gọi model.train() ở đầu, dù model mới tạo đã ở chế độ train?",
+    "tag": "train-mode",
+    "answer": "Vì vòng lặp thường xen kẽ train và evaluate: evaluate chuyển model sang eval, epoch sau nếu không bật lại thì dropout tắt, BatchNorm không cập nhật thống kê, mô hình train sai mà không báo lỗi."
+  }
+]

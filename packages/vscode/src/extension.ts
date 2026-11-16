@@ -156,7 +156,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         return this.bridge.request(method, params);
       },
       connected: () => this.bridge.snapshot().conn === "connected",
-      openNotebook: (file) => this.openMentorNotebook(file),
+      openMirror: (chromeTabId) => this.openMentorMirror(chromeTabId),
     });
     this.subscriptions = [
       vscode.window.onDidChangeActiveNotebookEditor(() => this.activeChanged()),
@@ -508,10 +508,10 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
   }
 
-  /** A Mentor exercise's notebook: in the editor, with its chat (the mentor) in the side bar. */
-  private async openMentorNotebook(file: string): Promise<void> {
-    const document = await vscode.workspace.openNotebookDocument(vscode.Uri.file(file));
-    await vscode.window.showNotebookDocument(document, { preview: false, viewColumn: vscode.ViewColumn.One });
+  /** A Mentor exercise's notebook: VS Code's copy of its Chrome tab, with its chat (the mentor) in the side bar. */
+  private async openMentorMirror(chromeTabId: number): Promise<void> {
+    await this.core.handle("notebooks.select", { tabId: -chromeTabId }).catch(() => {});
+    await this.core.handle("notebook.mirror", { tabId: -chromeTabId });
     await vscode.commands.executeCommand("ainb.chat.focus");
   }
 

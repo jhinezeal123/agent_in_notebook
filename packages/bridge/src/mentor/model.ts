@@ -29,20 +29,36 @@ interface Base {
 }
 
 export type MentorEvent =
-  | (Base & { t: "start"; exerciseId: string; file: string; kind?: MentorKind; scaffold?: MentorScaffold })
+  /** `file`: where an attempt of the local-notebook days was written (no longer used). */
+  | (Base & { t: "start"; exerciseId: string; file?: string; kind?: MentorKind; scaffold?: MentorScaffold })
+  /** The exercise was written into this notebook (its key); the notebook holds it until another one is. */
+  | (Base & { t: "load"; notebook: string })
   | (Base & { t: "stage"; stage: MentorStage; by: "agent" | "user" | "judge" })
-  | (Base & { t: "judge"; ok: boolean; passed: number; total: number; error?: string })
+  | (Base & { t: "judge"; ok: boolean; passed: number; total: number; error?: string; metrics?: { name: string; value: number }[] })
   | (Base & { t: "hint"; level: number })
   | (Base & { t: "probe"; grade: 0 | 1 | 2; question: string; tag?: string })
   | (Base & { t: "misconception"; tag: string; note: string })
   /** A misconception from the book, asked again at the start of a session. */
   | (Base & { t: "recall"; tag: string; grade: 0 | 1 | 2 })
-  | (Base & { t: "done" });
+  | (Base & { t: "done" })
+  /** The learner reported the exercise as wrong: the attempt does not count (no rating, no review). */
+  | (Base & { t: "void"; reason: string })
+  /** A paper's milestones (attemptId "paper:<id>"): its plan approved, or the paper reproduced. Each is a learning day. */
+  | (Base & { t: "paper"; paperId: string; what: "planned" | "done" })
+  /** The notebook (its key) became the paper's workshop (attemptId "paper:<id>"). */
+  | (Base & { t: "workshop"; paperId: string; notebook: string });
+
+/** The attemptId of events about a paper, not an attempt. */
+export function paperEventId(paperId: string): string {
+  return `paper:${paperId}`;
+}
 
 export interface AttemptState {
   attemptId: string;
   exerciseId: string;
-  file: string;
+  file?: string;
+  /** The notebook it is in now (its key). */
+  notebook?: string;
   kind: MentorKind;
   scaffold: MentorScaffold;
   startedAt: number;
@@ -54,6 +70,10 @@ export interface AttemptState {
   failedBeforePass: number;
   passed: boolean;
   lastJudge?: { ok: boolean; passed: number; total: number; error?: string; at: number };
+  /** What the last passing judge measured (an experiment). */
+  metrics?: { name: string; value: number }[];
+  /** Reported as a wrong exercise: it does not count. */
+  voided?: string;
   probes: { grade: 0 | 1 | 2; question: string; tag?: string }[];
   misconceptions: { tag: string; note: string; at: number }[];
   recalls: { tag: string; grade: 0 | 1 | 2 }[];
@@ -74,6 +94,10 @@ export interface MentorState {
   history: { at: number; overall: number }[];
   /** Steps finished per day. */
   days: Map<string, number>;
+  /** Which attempt each notebook holds (by notebook key). */
+  places: Map<string, string>;
+  /** Which paper each notebook is the workshop of (by notebook key). */
+  workshops: Map<string, string>;
   /** Spaced reviews per exercise learnt on the learner's own. */
   reviews: Map<string, ReviewState>;
   /** The misconception book, by tag. */
@@ -125,6 +149,8 @@ const MISTAKE_SOLID = 2;
 const FADE_DAYS = 14;
 /** Misconceptions asked at the start of one session at most. */
 export const RECALLS_PER_SESSION = 3;
+/** An exercise the mentor wrote moves the rating half as much (its difficulty is the mentor's guess). */
+const AI_K = 0.5;
 
 /** The learner's day for a time: local date, shifted so it starts at 4 a.m. */
 export function dayOf(ms: number): string {
@@ -170,14 +196,32 @@ export function overallOf(ratings: Map<MentorSkill, Rating>): number | null {
 
 /** Fold the log into the current state. Events of unknown exercises still count for the streak. */
 export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exercise">): MentorState {
-  const state: MentorState = { attempts: new Map(), order: [], ratings: new Map(), history: [], days: new Map(), reviews: new Map(), mistakes: new Map() };
+  const state: MentorState = { attempts: new Map(), order: [], ratings: new Map(), history: [], days: new Map(), places: new Map(), workshops: new Map(), reviews: new Map(), mistakes: new Map() };
   const active = (day: string) => state.days.set(day, (state.days.get(day) ?? 0) + 1);
+  // A report can come after the attempt is done: it still undoes its rating.
+  const voided = new Map<string, string>();
+  for (const e of events) if (e.t === "void") voided.set(e.attemptId, e.reason);
   for (const e of events) {
+    if (e.t === "paper") {
+      active(e.day);
+      continue;
+    }
+    if (e.t === "workshop") {
+      const held = state.places.get(e.notebook);
+      if (held) {
+        state.places.delete(e.notebook);
+        const a = state.attempts.get(held);
+        if (a) a.notebook = undefined;
+      }
+      for (const [k, v] of state.workshops) if (v === e.paperId) state.workshops.delete(k);
+      state.workshops.set(e.notebook, e.paperId);
+      continue;
+    }
     if (e.t === "start") {
       if (state.attempts.has(e.attemptId)) continue;
       const kind = e.kind ?? "learn";
       state.attempts.set(e.attemptId, {
-        attemptId: e.attemptId, exerciseId: e.exerciseId, file: e.file, kind, scaffold: e.scaffold ?? (kind === "review" ? "blank" : "full"),
+        attemptId: e.attemptId, exerciseId: e.exerciseId, ...(e.file ? { file: e.file } : {}), kind, scaffold: e.scaffold ?? (kind === "review" ? "blank" : "full"),
         startedAt: e.at, stage: kind === "review" ? "build" : "lab", hintLevel: 0, revealed: false,
         judges: 0, failedBeforePass: 0, passed: false, probes: [], misconceptions: [], recalls: [],
       });
@@ -185,6 +229,15 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
       continue;
     }
     const a = state.attempts.get(e.attemptId);
+    if (a && e.t === "load") {
+      state.workshops.delete(e.notebook);
+      if (a.notebook && state.places.get(a.notebook) === a.attemptId) state.places.delete(a.notebook);
+      const before = state.places.get(e.notebook);
+      if (before) state.attempts.get(before)!.notebook = undefined;
+      state.places.set(e.notebook, a.attemptId);
+      a.notebook = e.notebook;
+      continue;
+    }
     if (!a || a.doneAt) continue;
     switch (e.t) {
       case "stage":
@@ -196,6 +249,7 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
       case "judge":
         a.judges++;
         a.lastJudge = { ok: e.ok, passed: e.passed, total: e.total, error: e.error, at: e.at };
+        if (e.ok && e.metrics?.length) a.metrics = e.metrics;
         if (e.ok) a.passed = true;
         else if (!a.passed) a.failedBeforePass++;
         break;
@@ -219,12 +273,18 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
         a.stage = "done";
         active(e.day);
         const ex = catalog.exercise(a.exerciseId);
+        const why = voided.get(a.attemptId);
+        if (why !== undefined) {
+          a.voided = why;
+          a.result = { score: 0, deltas: [], revealed: a.revealed };
+          break;
+        }
         if (!ex) break;
         const deltas: MentorResult["deltas"] = [];
         for (const skill of ex.skills) {
           const now = state.ratings.get(skill) ?? { r: START_RATING, n: 0 };
           const score = attemptScore(a, skill);
-          let delta = kFactor(now.n) * (a.kind === "review" ? REVIEW_K : 1) * (score - expected(now.r, ex.difficulty));
+          let delta = kFactor(now.n) * (a.kind === "review" ? REVIEW_K : 1) * (ex.author === "ai" ? AI_K : 1) * (score - expected(now.r, ex.difficulty));
           // Seeing the solution can only cost rating.
           if (a.revealed) delta = Math.min(0, delta);
           const after = Math.round(now.r + delta);
@@ -233,7 +293,8 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
         }
         const mean = ex.skills.reduce((s, k) => s + attemptScore(a, k), 0) / ex.skills.length;
         a.result = { score: Math.round(mean * 100) / 100, deltas, revealed: a.revealed };
-        const next = scheduleReview(state, a, e.day);
+        // An experiment is trained once; there is nothing to re-implement from memory.
+        const next = ex.role === "experiment" ? undefined : scheduleReview(state, a, e.day);
         if (next !== undefined) a.result.nextReview = next;
         const overall = overallOf(state.ratings);
         if (overall !== null) state.history.push({ at: e.at, overall });
@@ -391,9 +452,16 @@ export function heatmap(days: ReadonlyMap<string, number>, today: string): { day
 }
 
 /** Exercises the learner has finished on their own (not after seeing the solution). */
-function masteredExercises(state: MentorState): Set<string> {
+export function masteredExercises(state: MentorState): Set<string> {
   const out = new Set<string>();
-  for (const a of state.attempts.values()) if (a.doneAt && a.passed && !a.revealed) out.add(a.exerciseId);
+  for (const a of state.attempts.values()) if (a.doneAt && a.passed && !a.revealed && !a.voided) out.add(a.exerciseId);
+  return out;
+}
+
+/** Exercises with a passing, finished attempt (seen the solution or not): what later exercises can build on. */
+export function passedExercises(state: MentorState): Set<string> {
+  const out = new Set<string>();
+  for (const a of state.attempts.values()) if (a.doneAt && a.passed && !a.voided) out.add(a.exerciseId);
   return out;
 }
 
@@ -434,7 +502,44 @@ export function diagnosticExercises(catalog: Catalog): Exercise[] {
   return catalog.exercises.filter((e) => e.diagnostic).sort((a, b) => a.diagnostic! - b.diagnostic! || a.order - b.order);
 }
 
-export function pickToday(state: MentorState, catalog: Catalog, now: number): MentorToday | null {
+export interface FocusRef {
+  kind: "paper" | "constellation";
+  id: string;
+}
+
+/**
+ * The next exercise of what the learner focuses on: a paper's next component
+ * (its exercises in the order they build on each other), or the easiest
+ * exercise not learnt in a constellation and the stars before it.
+ */
+export function focusNext(state: MentorState, catalog: Catalog, focus: FocusRef): Exercise | null {
+  const mastered = masteredExercises(state);
+  const passed = passedExercises(state);
+  if (focus.kind === "paper") {
+    const own = catalog.exercises.filter((e) => e.paper === focus.id);
+    const ids = new Set(own.map((e) => e.id));
+    // Topological: an exercise comes after those it uses.
+    const done = new Set<string>();
+    const ordered: Exercise[] = [];
+    while (ordered.length < own.length) {
+      const next = own.find((e) => !done.has(e.id) && e.uses.every((u) => !ids.has(u) || done.has(u)));
+      if (!next) break;
+      done.add(next.id);
+      ordered.push(next);
+    }
+    return ordered.find((e) => !passed.has(e.id) && e.uses.every((u) => passed.has(u))) ?? null;
+  }
+  const stars = new Set<string>();
+  const add = (id: string) => {
+    if (stars.has(id)) return;
+    stars.add(id);
+    for (const a of catalog.stars.find((s) => s.id === id)?.after ?? []) add(a);
+  };
+  for (const s of catalog.stars) if (s.constellation === focus.id) add(s.id);
+  return catalog.exercises.find((e) => !e.paper && stars.has(e.star) && !mastered.has(e.id) && (!e.variantOf || mastered.has(e.variantOf)) && e.uses.every((u) => passed.has(u))) ?? null;
+}
+
+export function pickToday(state: MentorState, catalog: Catalog, now: number, focus: FocusRef | null = null): MentorToday | null {
   const view = (e: Exercise, reason: MentorToday["reason"], attemptId?: string): MentorToday => todayView(e, reason, "learn", attemptId);
   const today = dayOf(now);
   // An exercise left half way, recently (reviews are the warm-up).
@@ -452,6 +557,10 @@ export function pickToday(state: MentorState, catalog: Catalog, now: number): Me
     const ex = catalog.exercise(a.exerciseId);
     if (ex && daysBetween(dayOf(a.doneAt), today) >= REDO_AFTER_DAYS) return view(ex, "redo");
   }
+  if (focus) {
+    const next = focusNext(state, catalog, focus);
+    if (next) return view(next, focus.kind === "paper" ? "paper" : "focus");
+  }
   // A variation of an exercise just learnt comes next, while it is fresh.
   for (const id of [...state.order].reverse()) {
     const a = state.attempts.get(id)!;
@@ -463,7 +572,12 @@ export function pickToday(state: MentorState, catalog: Catalog, now: number): Me
   const stars = starStates(state, catalog);
   const overall = overallOf(state.ratings) ?? START_RATING;
   // A variation waits for its exercise.
-  const candidates = catalog.exercises.filter((e) => !mastered.has(e.id) && stars.get(e.star) !== "locked" && (!e.variantOf || mastered.has(e.variantOf)));
+  // Paper components are taken from the shelf (or a focus), not from the map.
+  // Nor are the exercises of a topic that asked to be left out of the daily pick.
+  const passed = passedExercises(state);
+  const aside = new Set(catalog.constellations.filter((c) => c.daily === false).map((c) => c.id));
+  const offered = new Set(catalog.stars.filter((s) => !aside.has(s.constellation)).map((s) => s.id));
+  const candidates = catalog.exercises.filter((e) => !e.paper && offered.has(e.star) && !mastered.has(e.id) && stars.get(e.star) !== "locked" && (!e.variantOf || mastered.has(e.variantOf)) && e.uses.every((u) => passed.has(u)));
   const fitting = candidates.filter((e) => e.difficulty >= overall - 200);
   const pick = (fitting.length ? fitting : candidates)[0];
   return pick ? view(pick, "next") : null;
@@ -506,7 +620,7 @@ function todayView(e: Exercise, reason: MentorToday["reason"], kind: MentorKind,
   };
 }
 
-export function home(state: MentorState, catalog: Catalog, now: number, workDir: string): MentorHome {
+export function home(state: MentorState, catalog: Catalog, now: number, focus: FocusRef | null = null): Omit<MentorHome, "papers" | "focus"> {
   const today = dayOf(now);
   const states = starStates(state, catalog);
   const mastered = masteredExercises(state);
@@ -525,7 +639,13 @@ export function home(state: MentorState, catalog: Catalog, now: number, workDir:
   }));
   const constellations: MentorConstellation[] = catalog.constellations.map((c) => {
     const own = catalog.stars.filter((s) => s.constellation === c.id).map((s) => s.id);
-    return { id: c.id, name: c.name, ...(c.paper ? { paper: c.paper } : {}), stars: own, mastered: own.filter((id) => states.get(id) === "mastered").length };
+    return {
+      id: c.id, name: c.name, kind: c.kind,
+      ...(c.paper ? { paper: c.paper } : {}),
+      ...(c.description ? { description: c.description } : {}),
+      ...(c.daily === false ? { daily: false } : {}),
+      stars: own, mastered: own.filter((id) => states.get(id) === "mastered").length,
+    };
   });
   const diag = diagnosticExercises(catalog);
   const finished = new Set([...state.attempts.values()].filter((a) => a.doneAt).map((a) => a.exerciseId));
@@ -551,8 +671,7 @@ export function home(state: MentorState, catalog: Catalog, now: number, workDir:
     };
   });
   return {
-    workDir,
-    today: pickToday(state, catalog, now),
+    today: pickToday(state, catalog, now, focus),
     warmup: pickWarmup(state, catalog, now),
     reviews: {
       due: dueReviews(state, today).length,

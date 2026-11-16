@@ -4,6 +4,9 @@
 // - WebSocket /ext   the browser extension: serves the notebooks open in
 //                     Chrome tabs, has no UI (origin- and token-checked)
 // - POST /mcp/*      tool relays from agents' MCP servers (per-chat bearer token)
+// - POST /mentor/verify  check Mentor exercises on a notebook open in Chrome
+//                     (`ainb mentor verify`; pairing token; answers in NDJSON lines)
+// - POST /mentor/reload  read the Mentor catalog again (`ainb mentor reload`; pairing token)
 // - GET  /health     liveness
 
 import { timingSafeEqual } from "node:crypto";
@@ -18,12 +21,16 @@ import {
   RpcPeer,
   WIRE_VERSION,
   type AppliedChange,
+  type ExecResult,
   type AttachedCell,
   type BridgeMethods,
   type ChatMessage,
   type ChatSettings,
   type Envelope,
   type ExtensionEvents,
+  type MentorHome,
+  type MentorPaper,
+  type MentorToday,
   type NotebookInfo,
   type NotebookOp,
   type ParamsOf,
@@ -40,8 +47,16 @@ import { describeFailure, ResearchProjects } from "./research/projects.js";
 import { forgetSetup, runSetup } from "./notebook/setup.js";
 import { ChatStore, pruneDir } from "./store.js";
 import { Mentor } from "./mentor/index.js";
-import { checkEnv } from "./mentor/env.js";
+import { MentorPlaces } from "./mentor/place.js";
 import { MentorSession } from "./mentor/session.js";
+import { loadCatalog } from "./mentor/catalog.js";
+import { referenceContext, verifyExercise } from "./mentor/verify.js";
+import { fetchArxiv, paperIdFor, parseArxivId, pdfChunkCode, pdfExtractCode, pdfMarked, readSliceCode, type PaperSource } from "./mentor/fetch.js";
+import { authorChatKey } from "./mentor/place.js";
+import { WorkshopHub, WorkshopSession, type AuthorChat } from "./mentor/workshop.js";
+import { slugOf } from "./mentor/papers.js";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 
 /** Saved transcripts and agent working directories untouched this long are deleted at startup. */
 const KEEP_MS = 30 * 24 * 3600_000;
@@ -103,6 +118,10 @@ export class Bridge {
   readonly links: ProjectLinks;
   /** Mentor: exercises, the learner's log and ratings. */
   readonly mentor: Mentor;
+  /** The notebooks in Chrome exercises are written into. */
+  readonly mentorPlaces: MentorPlaces;
+  /** Paper workshops: plans, and the exercises being written. */
+  readonly workshops: WorkshopHub;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
@@ -115,7 +134,24 @@ export class Bridge {
       onRun: (run) => this.toEditor("research.run", run),
     });
     this.links = new ProjectLinks(this.store, new ResearchProjects(this.orx, (m) => this.log(m)), (m) => this.log(m));
-    this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.toEditor("mentor.updated", {}) });
+    this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.toEditor("mentor.updated", {}), log: (m) => this.log(m) });
+    this.workshops = new WorkshopHub(this.mentor, {
+      authorChat: (paperId, tabId) => this.authorChat(paperId, tabId),
+      changed: () => this.toEditor("mentor.updated", {}),
+      log: (m) => this.log(m),
+    });
+    this.mentorPlaces = new MentorPlaces(this.mentor, {
+      notebooks: () => this.browserNotebooks,
+      op: (tabId, op, timeoutMs) => this.notebookOp({ kind: "browser", tabId }, op, timeoutMs) as never,
+      closeChats: (tabId) => {
+        for (const chat of this.chatsOn("browser", tabId)) {
+          this.dropChat(chat);
+          this.toEditor("chat.snapshot", chat.snapshot());
+        }
+      },
+      chats: this.store,
+      log: (m) => this.log(m),
+    });
     try {
       this.store.prune(KEEP_MS, META_KEEP_MS);
       const workspaces = join(dataDir(), "workspaces");
@@ -337,17 +373,19 @@ export class Bridge {
         const info = target.kind === "browser" ? this.browserNotebooks.get(target.tabId) : undefined;
         // A Mentor exercise's notebook: the agent coaches; it belongs to no project.
         const mentor = this.mentorSession(target, key);
+        const workshop = mentor ? undefined : this.workshopSession(target, key);
+        const tutor = !!mentor || !!workshop;
         // The bridge decides the notebook's project (its meta file); the editor only overrides it.
-        const project = key && !mentor ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, !!mentor), { notebookKey: key, carried, note, journal, project, mentor });
+        const project = key && !tutor ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, mentor, workshop });
         this.chats.set(p.tabId, chat);
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
         this.byToken.set(chat.mcpToken, chat);
-        // A Mentor notebook runs on this computer: its kernel is left free for the learner and the judge.
-        if (!mentor) void chat.refreshMachine();
+        // A Mentor notebook's kernel is left free for the learner and the judge (no machine polling).
+        if (!tutor) void chat.refreshMachine();
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
-        if (key && !mentor) void this.refreshProject(chat);
+        if (key && !tutor) void this.refreshProject(chat);
         return chat.snapshot();
       }),
     );
@@ -423,8 +461,14 @@ export class Bridge {
       const waitMs = Math.min(110, Math.max(5, Number(p.waitSeconds) || 90)) * 1000;
       return runSetup((op, timeoutMs) => this.notebookOp(target, op, timeoutMs), `${target.kind}:${target.tabId}`, String(p.script ?? ""), waitMs);
     }));
-    rpc.handle("mentor.home", guard<"mentor.home">(() => this.mentor.home()));
-    rpc.handle("mentor.start", guard<"mentor.start">((p) => this.mentor.start(typeof p?.exerciseId === "string" && p.exerciseId ? p.exerciseId : undefined, p?.kind === "review" ? "review" : "learn")));
+    rpc.handle("mentor.home", guard<"mentor.home">(() => this.mentorHome()));
+    rpc.handle("mentor.places", guard<"mentor.places">(() => this.mentorPlaces.list()));
+    rpc.handle("mentor.start", guard<"mentor.start">((p) => this.mentorPlaces.start({
+      exerciseId: typeof p?.exerciseId === "string" && p.exerciseId ? p.exerciseId : undefined,
+      kind: p?.kind === "review" ? "review" : "learn",
+      tabId: Number.isSafeInteger(p?.tabId) ? p.tabId : undefined,
+      replace: p?.replace === true,
+    })));
     rpc.handle("mentor.judge", guard<"mentor.judge">(async (p) => {
       // The verdict arrives in the chat; the request only says it started.
       const chat = this.chatById(p.chatId);
@@ -443,10 +487,63 @@ export class Bridge {
       chat.mentorStage(p.stage);
       return chat.mentor!.view();
     }));
-    rpc.handle("mentor.env", guard<"mentor.env">((p) => checkEnv(!!p?.refresh)));
-    rpc.handle("mentor.settings", guard<"mentor.settings">((p) => {
-      if (typeof p?.workDir === "string" && p.workDir.trim()) this.mentor.setWorkDir(p.workDir.trim());
-      return this.mentor.home();
+    rpc.handle("mentor.paper.add", guard<"mentor.paper.add">(async (p) => {
+      if (!this.browserNotebooks.has(p.tabId)) throw new Error("Notebook này không còn mở trong Chrome.");
+      // Already on the shelf (the same arXiv paper): its workshop moves here.
+      const arxiv = "arxiv" in p.source ? parseArxivId(p.source.arxiv) : null;
+      const known = arxiv ? paperIdFor(arxiv) : undefined;
+      if (known && this.mentor.shelf.has(known)) return this.mentorPlaces.openWorkshop(known, p.tabId, p.replace);
+      const src = await this.paperSource(p.source, p.tabId);
+      const paperId = this.mentor.shelf.create({
+        ...(src.id ? { id: src.id } : {}), title: src.title, ...(src.authors ? { authors: src.authors } : {}), ...(src.year ? { year: src.year } : {}),
+        ...(src.url ? { url: src.url } : {}), ...(src.arxiv ? { arxiv: src.arxiv } : {}), source: src.text, kind: src.kind,
+      });
+      this.mentor.reloadCatalog();
+      return this.mentorPlaces.openWorkshop(paperId, p.tabId, p.replace);
+    }));
+    rpc.handle("mentor.paper.open", guard<"mentor.paper.open">((p) => this.mentorPlaces.openWorkshop(p.paperId, p.tabId, p.replace)));
+    rpc.handle("mentor.paper.get", guard<"mentor.paper.get">((p) => {
+      const pkg = this.mentor.paperPackage(p.paperId);
+      if (!pkg) throw new Error(`Không có paper ${p.paperId}.`);
+      return this.placedPaper(this.mentor.paperView(pkg));
+    }));
+    rpc.handle("mentor.paper.approve", guard<"mentor.paper.approve">((p) => {
+      const { ws, chat } = this.workshopChat(p.chatId);
+      if (chat.isBusy()) throw new Error("Đợi mentor trả lời xong rồi hãy duyệt.");
+      const view = this.workshops.approve(ws.paperId);
+      this.startAuthoring(p.chatId);
+      return view;
+    }));
+    rpc.handle("mentor.paper.author", guard<"mentor.paper.author">((p) => {
+      const { ws } = this.workshopChat(p.chatId);
+      this.startAuthoring(p.chatId, p.slug);
+      return this.workshops.view(ws.paperId);
+    }));
+    rpc.handle("mentor.paper.stopAuthoring", guard<"mentor.paper.stopAuthoring">(async (p) => {
+      const { chat, ws } = this.workshopChat(p.chatId);
+      await chat.cancel();
+      return this.workshops.view(ws.paperId);
+    }));
+    rpc.handle("mentor.paper.notes", guard<"mentor.paper.notes">((p) => {
+      if (!this.mentor.paperPackage(p.paperId)) throw new Error(`Không có paper ${p.paperId}.`);
+      this.mentor.shelf.saveNotes(p.paperId, String(p.notes ?? ""));
+      this.toEditor("mentor.updated", {});
+      return { ok: true as const };
+    }));
+    rpc.handle("mentor.paper.archive", guard<"mentor.paper.archive">((p) => {
+      if (!this.mentor.shelf.has(p.paperId)) throw new Error("Chỉ cất được paper bạn tự thêm.");
+      this.mentor.shelf.write(p.paperId, { archived: !!p.archived });
+      this.mentor.reloadCatalog();
+      return { ok: true as const };
+    }));
+    rpc.handle("mentor.focus", guard<"mentor.focus">((p) => {
+      this.mentor.setFocus(p.focus ?? null);
+      return { ok: true as const };
+    }));
+    rpc.handle("mentor.report", guard<"mentor.report">((p) => {
+      const chat = this.chatById(p.chatId);
+      this.reportExercise(chat, String(p.reason ?? "").slice(0, 1000));
+      return { ok: true as const };
     }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
@@ -492,7 +589,12 @@ export class Bridge {
     });
     rpc.on("notebook.attached", (p: ExtensionEvents["notebook.attached"]) => {
       if (!authed()) return;
+      const was = browser ? this.browserNotebooks.get(p.tabId)?.key : undefined;
       if (browser) this.setBrowserNotebook(p.tabId, p.info);
+      // A Mentor exercise's notebook renamed on Kaggle: the exercise follows its new address.
+      if (browser && was && p.info?.key && was !== p.info.key && this.isMentorNotebook(was)) {
+        void this.mentorPlaces.followRename(p.tabId, was, p.info.key).catch((e) => this.log(`Mentor: ${(e as Error).message}`));
+      }
       for (const chat of this.chatsOn(kind, p.tabId)) {
         if (chat.notebookKey && p.info?.key && chat.notebookKey !== p.info.key) {
           // Another notebook now fills this tab. The chat belongs to the old one:
@@ -522,9 +624,32 @@ export class Bridge {
   }
 
   private setBrowserNotebook(tabId: number, info: NotebookInfo | null): void {
+    const was = this.browserNotebooks.get(tabId)?.key;
     if (info) this.browserNotebooks.set(tabId, info);
     else if (!this.browserNotebooks.delete(tabId)) return;
     this.toEditor("browser.notebook", { tabId, info });
+    // A notebook holding an exercise opened or closed: the home page shows where each exercise is.
+    if (was !== info?.key && [was, info?.key].some((k) => k && this.isMentorNotebook(k))) this.toEditor("mentor.updated", {});
+  }
+
+  /** Mentor's home, with the notebook open in Chrome that holds each unfinished exercise. */
+  private mentorHome(): MentorHome {
+    const home = this.mentor.home();
+    const placed = (t: MentorToday | null): MentorToday | null => {
+      const key = t?.attemptId ? this.mentor.attempt(t.attemptId)?.notebook : undefined;
+      const tabId = key ? this.mentorPlaces.tabOf(key) : undefined;
+      return t && tabId !== undefined ? { ...t, place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : t;
+    };
+    return { ...home, today: placed(home.today), warmup: placed(home.warmup), papers: home.papers.map((p) => this.placedPaper(p)) };
+  }
+
+  /** A paper with the Chrome tab of its workshop, when it is open. */
+  private placedPaper(p: MentorPaper): MentorPaper {
+    const key = this.mentor.workshopOf(p.id);
+    const tabId = key ? this.mentorPlaces.tabOf(key) : undefined;
+    const running = this.workshops.running(p.id);
+    const out = { ...p, ...(tabId !== undefined ? { place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : {}) };
+    return running ? { ...out, components: out.components.map((c) => (c.status === "planned" ? { ...c, status: "authoring" as const } : c)) } : out;
   }
 
   private forgetBrowserNotebooks(): void {
@@ -607,11 +732,11 @@ export class Bridge {
     return res.project;
   }
 
-  /** The Mentor attempt a VS Code notebook is, for its chat. */
+  /** The Mentor attempt a notebook in Chrome holds, for its chat. */
   private mentorSession(target: Target, key: string | undefined): MentorSession | undefined {
-    if (!key || target.kind !== "vscode" || !key.startsWith("vscode:")) return undefined;
+    if (!key || target.kind !== "browser") return undefined;
     try {
-      const attempt = this.mentor.attemptForFile(key);
+      const attempt = this.mentor.attemptIn(key);
       return attempt ? new MentorSession(this.mentor, attempt.attemptId) : undefined;
     } catch (e) {
       this.log(`Mentor: ${(e as Error).message}`);
@@ -621,10 +746,110 @@ export class Bridge {
 
   private isMentorNotebook(key: string): boolean {
     try {
-      return key.startsWith("vscode:") && !!this.mentor.attemptForFile(key);
+      return !!this.mentor.attemptIn(key) || !!this.mentor.workshopIn(key);
     } catch {
       return false;
     }
+  }
+
+  /** The paper workshop a notebook in Chrome is, for its chat. */
+  private workshopSession(target: Target, key: string | undefined): WorkshopSession | undefined {
+    if (!key || target.kind !== "browser") return undefined;
+    try {
+      const paperId = this.mentor.workshopIn(key);
+      return paperId && this.mentor.shelf.has(paperId) ? new WorkshopSession(this.workshops, paperId, "plan") : undefined;
+    } catch (e) {
+      this.log(`Mentor: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
+  private authorSeq = 0;
+
+  /** The hidden chat that writes a paper's exercises: same agent as the workshop's chat, on the same notebook, shown nowhere. */
+  private authorChat(paperId: string, tabId: number): AuthorChat {
+    const target: Target = { kind: "browser", tabId };
+    const shown = this.chatsOn("browser", tabId).find((c) => c.workshop?.paperId === paperId);
+    const spec = shown?.spec ?? findAgent("claude");
+    if (!spec) throw new Error("No agent to write the exercises.");
+    const key = authorChatKey(paperId);
+    const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
+    const chat = new Chat(-1_000_000_000 - ++this.authorSeq, spec, DEFAULT_SETTINGS, host, { notebookKey: key, workshop: new WorkshopSession(this.workshops, paperId, "author") });
+    chat.notebook = this.browserNotebooks.get(tabId) ?? null;
+    this.byToken.set(chat.mcpToken, chat);
+    return {
+      send: (text, context) => chat.send(text, { context }),
+      whenIdle: async (signal) => {
+        await new Promise((r) => setTimeout(r, 200));
+        await chat.whenIdle(signal);
+        if (signal.aborted) await chat.cancel().catch(() => false);
+      },
+      close: () => {
+        chat.close();
+        this.byToken.delete(chat.mcpToken);
+      },
+    };
+  }
+
+  /** A chat of a paper's workshop (the shown one), and the Chrome tab it is on. */
+  private workshopChat(chatId: string): { chat: Chat; ws: WorkshopSession; tabId: number } {
+    const chat = this.chatById(chatId);
+    const target = this.targets.get(chat);
+    if (!chat.workshop || chat.workshop.role !== "plan" || target?.kind !== "browser") throw new Error("Chat này không phải xưởng của một paper.");
+    return { chat, ws: chat.workshop, tabId: target.tabId };
+  }
+
+  /** The exercises of the workshop's paper are written, as the chat's job. */
+  private startAuthoring(chatId: string, slug?: string): void {
+    const { chat, ws, tabId } = this.workshopChat(chatId);
+    if (this.workshops.running(ws.paperId)) throw new Error("Mentor đang soạn bài cho paper này.");
+    if (chat.isBusy()) throw new Error("Đợi mentor trả lời xong rồi bấm lại.");
+    void chat.runAuthoring((signal) => this.workshops.author(ws.paperId, tabId, { slug, signal }))
+      .catch((e) => this.log(`Mentor: writing the exercises of ${ws.paperId}: ${(e as Error).message}`));
+  }
+
+  /** A paper's text: from arXiv, or out of a PDF on the notebook's machine. */
+  private async paperSource(source: { arxiv: string } | { pdfPath: string }, tabId: number): Promise<PaperSource & { id?: string }> {
+    if ("arxiv" in source) {
+      const arxiv = parseArxivId(source.arxiv);
+      if (!arxiv) throw new Error(`"${source.arxiv}" không phải link hay id arXiv (ví dụ 2006.11239 hoặc https://arxiv.org/abs/2006.11239).`);
+      const src = await fetchArxiv(arxiv, { orxPaper: (id) => this.orx.cli(["paper", "--full", "--", id], { timeoutMs: 120_000 }), log: (m) => this.log(m) });
+      return { ...src, id: paperIdFor(arxiv) };
+    }
+    const size = statSync(source.pdfPath).size;
+    if (size > 40 * 1024 * 1024) throw new Error("File PDF lớn quá (tối đa 40 MB).");
+    const data = readFileSync(source.pdfPath).toString("base64");
+    const target: Target = { kind: "browser", tabId };
+    const exec = async (code: string, waitMs = 120_000) => {
+      const r = await this.notebookOp(target, { op: "execute", code, waitMs }, waitMs + 30_000) as ExecResult;
+      if (r.status === "error") throw new Error(`Máy của notebook báo lỗi: ${r.outputs.find((o) => o.kind === "error")?.evalue ?? r.message ?? ""}`);
+      return r.outputs.filter((o) => o.kind === "stream").map((o) => o.text ?? "").join("");
+    };
+    const stamp = randomBytes(4).toString("hex");
+    const pdf = `/tmp/ainb-paper-${stamp}.pdf`;
+    const txt = `/tmp/ainb-paper-${stamp}.txt`;
+    const CHUNK = 700_000;
+    for (let at = 0; at < data.length; at += CHUNK) await exec(pdfChunkCode(pdf, data.slice(at, at + CHUNK), at === 0));
+    const meta = JSON.parse(pdfMarked(await exec(pdfExtractCode(pdf, txt), 300_000)) ?? "{}") as { chars?: number; pages?: number; title?: string; error?: string };
+    if (meta.error || !meta.chars) throw new Error(meta.error ?? "Không rút được chữ từ PDF (PDF chỉ có ảnh?).");
+    let text = "";
+    for (let at = 0; at < Math.min(meta.chars, 600_000); at += 100_000) {
+      const b64 = pdfMarked(await exec(readSliceCode(txt, at, 100_000)));
+      text += b64 ? Buffer.from(b64, "base64").toString("utf8") : "";
+    }
+    const name = source.pdfPath.split(/[\\/]/).pop()!.replace(/\.pdf$/i, "");
+    const title = meta.title?.trim() || name;
+    return { title, kind: "pdf", text: `<!-- source: text taken out of the PDF ${name}.pdf (${meta.pages} pages); formulas may be garbled: check them against the PDF -->\n# ${title}\n\n${text}` };
+  }
+
+  /** "Báo bài sai": kept for whoever fixes the exercise (the mentor, or the catalog's author). */
+  private reportExercise(chat: Chat, reason: string): void {
+    const s = chat.mentor;
+    if (!s) throw new Error("Chat này không phải một bài Mentor.");
+    s.report(reason);
+    const dir = join(dataDir(), "mentor");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "reports.jsonl"), `${JSON.stringify({ at: Date.now(), exerciseId: s.exercise.id, attemptId: s.attemptId, author: s.exercise.author, reason })}\n`);
   }
 
   private chatHost(target: Target, key?: string, mentor = false): ChatHost {
@@ -682,6 +907,55 @@ export class Bridge {
     };
   }
 
+  // ------------------------------------------------------------ Mentor: verify
+
+  /**
+   * `ainb mentor verify`: check exercises (of the caller's catalog, a dev
+   * checkout's) on a notebook open in Chrome, one NDJSON line per step and
+   * per report. A line every 20 s keeps the request alive through long checks.
+   */
+  private async mentorVerify(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: { exerciseIds?: unknown; tabId?: unknown; catalogDir?: unknown };
+    try {
+      body = JSON.parse((await readBody(req)) || "{}");
+    } catch {
+      return json(res, 400, { error: "bad json" });
+    }
+    res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8" });
+    const line = (o: unknown) => res.write(`${JSON.stringify(o)}\n`);
+    const tick = setInterval(() => line({ t: "tick" }), 20_000);
+    try {
+      const catalog = loadCatalog(typeof body.catalogDir === "string" ? body.catalogDir : undefined, { unverified: true });
+      const tabs = [...this.browserNotebooks.keys()];
+      const tabId = typeof body.tabId === "number" ? body.tabId : tabs.length === 1 ? tabs[0] : undefined;
+      if (tabId === undefined || !this.browserNotebooks.has(tabId)) {
+        throw new Error(tabs.length ? `Several notebooks are open in Chrome; name one with --tab (${tabs.map((t) => `${t}: ${this.browserNotebooks.get(t)?.title}`).join(", ")}).` : "No notebook is open in Chrome: open a Kaggle notebook and turn its machine on.");
+      }
+      const wanted = Array.isArray(body.exerciseIds) && body.exerciseIds.length ? body.exerciseIds.map(String) : catalog.exercises.filter((e) => e.requires.includes("torch")).map((e) => e.id);
+      line({ t: "start", tabId, title: this.browserNotebooks.get(tabId)?.title ?? "", exercises: wanted });
+      const target: Target = { kind: "browser", tabId };
+      const exec = async (code: string, waitMs: number) => {
+        const r = await this.notebookOp(target, { op: "execute", code, waitMs }, waitMs + 30_000) as ExecResult;
+        if (r.status === "running") await this.notebookOp(target, { op: "interrupt" }).catch(() => {});
+        return r;
+      };
+      for (const id of wanted) {
+        const ex = catalog.exercise(id);
+        if (!ex) {
+          line({ t: "error", exerciseId: id, message: `No exercise ${id}.` });
+          continue;
+        }
+        const report = await verifyExercise(ex, exec, { context: referenceContext(catalog, ex), onStep: (text) => line({ t: "step", exerciseId: id, text }) });
+        line({ t: "report", report });
+      }
+    } catch (e) {
+      line({ t: "error", message: (e as Error).message });
+    } finally {
+      clearInterval(tick);
+      res.end();
+    }
+  }
+
   // ------------------------------------------------------------ MCP relay
 
   private async onHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -689,7 +963,7 @@ export class Bridge {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, version: BRIDGE_VERSION, extension: !!(this.clients.browser.connection || this.clients.vscode.connection) });
     }
-    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || url.pathname === "/shutdown")) return json(res, 404, { error: "not found" });
+    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || url.pathname === "/shutdown" || url.pathname === "/mentor/verify" || url.pathname === "/mentor/reload")) return json(res, 404, { error: "not found" });
     // Browsers attach Origin to cross-site requests; the relay is for local processes only.
     if (req.headers.origin) return json(res, 403, { error: "forbidden" });
     const auth = req.headers.authorization ?? "";
@@ -699,6 +973,21 @@ export class Bridge {
       json(res, 200, { ok: true });
       setTimeout(() => this.opts.onShutdown?.(), 50);
       return;
+    }
+    if (url.pathname === "/mentor/verify") {
+      if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });
+      return this.mentorVerify(req, res);
+    }
+    if (url.pathname === "/mentor/reload") {
+      // Content was added (a topic pack, an exercise, questions, hints): the catalog is read again.
+      if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });
+      try {
+        this.mentor.reloadCatalog();
+        const c = this.mentor.catalog;
+        return json(res, 200, { ok: true, exercises: c.exercises.length, packs: c.packs.map((p) => ({ id: p.id, exercises: p.exercises.length })), problems: c.problems });
+      } catch (e) {
+        return json(res, 500, { error: (e as Error).message });
+      }
     }
     const chat = this.byToken.get(auth.replace(/^Bearer\s+/i, ""));
     if (!chat) return json(res, 401, { error: "unknown chat token" });
