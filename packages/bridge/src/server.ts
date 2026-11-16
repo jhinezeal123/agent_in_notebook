@@ -46,6 +46,7 @@ import { ProjectLinks } from "./research/links.js";
 import { describeFailure, ResearchProjects } from "./research/projects.js";
 import { forgetSetup, runSetup } from "./notebook/setup.js";
 import { ChatStore, pruneDir } from "./store.js";
+import { MentorChat, WorkshopChat, mentorOf, requireMentor, workshopOf } from "./mentor/chat.js";
 import { Mentor } from "./mentor/index.js";
 import { MentorPlaces } from "./mentor/place.js";
 import { MentorSession } from "./mentor/session.js";
@@ -143,7 +144,7 @@ export class Bridge {
         if (r.status === "running") await this.notebookOp(target, { op: "interrupt" }).catch(() => {});
         return r;
       },
-      say: (paperId, text) => [...this.chats.values()].find((c) => c.workshop?.paperId === paperId && c.workshop.role === "plan")?.notice(text),
+      say: (paperId, text) => [...this.chats.values()].find((c) => workshopOf(c)?.paperId === paperId && workshopOf(c)!.role === "plan")?.notice(text),
       changed: () => this.toEditor("mentor.updated", {}),
       log: (m) => this.log(m),
     });
@@ -384,7 +385,7 @@ export class Bridge {
         const tutor = !!mentor || !!workshop;
         // The bridge decides the notebook's project (its meta file); the editor only overrides it.
         const project = key && !tutor ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, mentor, workshop });
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, role: mentor ? new MentorChat(mentor) : workshop ? new WorkshopChat(workshop) : undefined });
         this.chats.set(p.tabId, chat);
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
@@ -478,21 +479,20 @@ export class Bridge {
     })));
     rpc.handle("mentor.judge", guard<"mentor.judge">(async (p) => {
       // The verdict arrives in the chat; the request only says it started.
-      const chat = this.chatById(p.chatId);
-      const running = chat.judge();
+      const running = requireMentor(this.chatById(p.chatId)).judge();
       running.catch(() => {});
       await Promise.race([running, new Promise((r) => setTimeout(r, 50))]);
       return { started: true };
     }));
-    rpc.handle("mentor.hint", guard<"mentor.hint">((p) => ({ level: this.chatById(p.chatId).hint() })));
+    rpc.handle("mentor.hint", guard<"mentor.hint">((p) => ({ level: requireMentor(this.chatById(p.chatId)).hint() })));
     rpc.handle("mentor.codeReview", guard<"mentor.codeReview">((p) => {
-      this.chatById(p.chatId).codeReview();
+      requireMentor(this.chatById(p.chatId)).codeReview();
       return { started: true };
     }));
     rpc.handle("mentor.stage", guard<"mentor.stage">((p) => {
-      const chat = this.chatById(p.chatId);
-      chat.mentorStage(p.stage);
-      return chat.mentor!.view();
+      const mentor = requireMentor(this.chatById(p.chatId));
+      mentor.stage(p.stage);
+      return mentor.session.view();
     }));
     rpc.handle("mentor.paper.add", guard<"mentor.paper.add">(async (p) => {
       if (!this.browserNotebooks.has(p.tabId)) throw new Error("Notebook này không còn mở trong Chrome.");
@@ -611,7 +611,7 @@ export class Bridge {
           continue;
         }
         chat.notebook = p.info;
-        if (chat.notebookKey && p.info?.key === chat.notebookKey && !chat.mentor) {
+        if (chat.notebookKey && p.info?.key === chat.notebookKey && !mentorOf(chat)) {
           try {
             this.store.saveMeta(chat.notebookKey, { title: p.info.title, url: p.info.url, platform: p.info.platform });
           } catch (e) {
@@ -776,12 +776,12 @@ export class Bridge {
   /** The hidden chat that writes a paper's exercises: same agent as the workshop's chat, on the same notebook, shown nowhere. */
   private authorChat(paperId: string, tabId: number): AuthorChat {
     const target: Target = { kind: "browser", tabId };
-    const shown = this.chatsOn("browser", tabId).find((c) => c.workshop?.paperId === paperId);
+    const shown = this.chatsOn("browser", tabId).find((c) => workshopOf(c)?.paperId === paperId);
     const spec = shown?.spec ?? findAgent("claude");
     if (!spec) throw new Error("No agent to write the exercises.");
     const key = authorChatKey(paperId);
     const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
-    const chat = new Chat(-1_000_000_000 - ++this.authorSeq, spec, DEFAULT_SETTINGS, host, { notebookKey: key, workshop: new WorkshopSession(this.workshops, paperId, "author") });
+    const chat = new Chat(-1_000_000_000 - ++this.authorSeq, spec, DEFAULT_SETTINGS, host, { notebookKey: key, role: new WorkshopChat(new WorkshopSession(this.workshops, paperId, "author")) });
     chat.notebook = this.browserNotebooks.get(tabId) ?? null;
     this.byToken.set(chat.mcpToken, chat);
     return {
@@ -802,8 +802,9 @@ export class Bridge {
   private workshopChat(chatId: string): { chat: Chat; ws: WorkshopSession; tabId: number } {
     const chat = this.chatById(chatId);
     const target = this.targets.get(chat);
-    if (!chat.workshop || chat.workshop.role !== "plan" || target?.kind !== "browser") throw new Error("Chat này không phải xưởng của một paper.");
-    return { chat, ws: chat.workshop, tabId: target.tabId };
+    const ws = workshopOf(chat);
+    if (!ws || ws.role !== "plan" || target?.kind !== "browser") throw new Error("Chat này không phải xưởng của một paper.");
+    return { chat, ws, tabId: target.tabId };
   }
 
   /** The exercises of the workshop's paper are written, as the chat's job. */
@@ -811,7 +812,7 @@ export class Bridge {
     const { chat, ws, tabId } = this.workshopChat(chatId);
     if (this.workshops.running(ws.paperId)) throw new Error("Mentor đang soạn bài cho paper này.");
     if (chat.isBusy()) throw new Error("Đợi mentor trả lời xong rồi bấm lại.");
-    void chat.runAuthoring((signal) => this.workshops.author(ws.paperId, tabId, { ...opts, signal }))
+    void chat.runJob((signal) => this.workshops.author(ws.paperId, tabId, { ...opts, signal }))
       .catch((e) => {
         // The learner pressed a button and nothing would happen: say why, where they are looking.
         this.log(`Mentor: writing the exercises of ${ws.paperId}: ${(e as Error).message}`);
@@ -860,8 +861,7 @@ export class Bridge {
    * the catalog's author.
    */
   private reportExercise(chat: Chat, reason: string): void {
-    const s = chat.mentor;
-    if (!s) throw new Error("Chat này không phải một bài Mentor.");
+    const s = requireMentor(chat).session;
     s.report(reason);
     if (s.exercise.paper) this.workshops.report(s.exercise.paper, s.exercise.id, reason);
     const dir = join(dataDir(), "mentor");

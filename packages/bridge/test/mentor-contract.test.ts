@@ -38,6 +38,17 @@ describe("the core's tools a Mentor chat keeps", () => {
   });
 });
 
+describe("the chat and Mentor, apart", () => {
+  // Mentor is a role the chat takes (chat-role.ts); what it does in a chat is in mentor/chat.ts.
+  it("the chat knows the role, not Mentor", () => {
+    const chat = source("packages/bridge/src/chat.ts");
+    const imports = chat.split("\n").filter((l) => /^import\b/.test(l) || /\bfrom "/.test(l));
+    expect(imports.filter((l) => /["']\.\/mentor\//.test(l)), "chat.ts imports from mentor/ again; put it behind ChatRole (chat-role.ts) instead").toEqual([]);
+    expect(chat).toContain('from "./chat-role.js"');
+    expect(source("packages/bridge/src/chat-role.ts")).not.toMatch(/from "\.\/mentor\//);
+  });
+});
+
 describe("the core's error sentences Mentor explains", () => {
   // Each sentence as the core writes it, the file that writes it, and the advice the learner must get.
   const SENTENCES: { from: string; says: string; advice: RegExp }[] = [

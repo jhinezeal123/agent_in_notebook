@@ -31,8 +31,6 @@ import {
   type NotebookOpOf,
   type NotebookOpResults,
   type OutputImage,
-  type MentorResult,
-  type MentorVerdict,
   type Part,
   type PartOp,
   type ReviewInfo,
@@ -55,12 +53,7 @@ import type { NotebookMeta, ProjectCache } from "./store.js";
 import { ensureWorktree } from "./project/worktree.js";
 import { describeFailure, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
-import { judgeCode, kernelProblem, newNonce, parseVerdict } from "./mentor/judge.js";
-import { isSolutionCell } from "./mentor/notebook.js";
-import { codeReviewBlock, hintBlock, hintText, learnerCells, mentorPlaybook, mentorState, verdictBlock } from "./mentor/prompt.js";
-import { StageRefused, type MentorSession } from "./mentor/session.js";
-import { MENTOR_CHAT_TOOLS } from "./mentor/tools.js";
-import type { WorkshopSession } from "./mentor/workshop.js";
+import type { ChatPort, ChatRole } from "./chat-role.js";
 
 /** How the chat reaches its notebook and the chat UI. */
 export interface ChatHost {
@@ -104,14 +97,9 @@ export interface ChatOptions {
   journal?: Record<string, AppliedChange[]>;
   /** The notebook's project as known when the chat opens. */
   project?: ChatProject;
-  /** The Mentor exercise the notebook is: the agent coaches instead of editing. */
-  mentor?: MentorSession;
-  /** A paper's workshop: the agent plans the paper's reproduction (or, hidden, writes its exercises). */
-  workshop?: WorkshopSession;
+  /** The chat's agent is not the notebook's coding agent: who it is instead (chat-role.ts). */
+  role?: ChatRole;
 }
-
-/** A Mentor chat's fixed mode: the agent may run scratch code; it has no tool that edits the notebook. */
-const MENTOR_SETTINGS: ChatSettings = { scope: "auto", review: false, targetCellIds: [], notebookOnly: true };
 /** Longest the judge waits for the tests before stopping them. */
 
 const TOOL_DETAIL_MAX = 4000;
@@ -241,13 +229,9 @@ export class Chat {
   private lastCodeShown = "";
   /** Parts of each message as last sent to the extension, to send only what changed. */
   private sent = new Map<string, SentPart[]>();
-  /** The Mentor exercise this chat coaches, if it is one. */
-  readonly mentor: MentorSession | undefined;
-  /** The learner's cells as the agent last saw them. */
-  private lastLearnerCells = "";
-  private unsubscribeMentor: (() => void) | undefined;
-  /** The paper workshop this chat plans in (or writes exercises for), if it is one. */
-  readonly workshop: WorkshopSession | undefined;
+  /** Who the agent is in this chat, when not the notebook's coding agent. */
+  readonly role: ChatRole | undefined;
+  private detachRole: (() => void) | undefined;
 
   constructor(
     readonly tabId: number,
@@ -258,21 +242,10 @@ export class Chat {
   ) {
     this.notebookKey = opts.notebookKey;
     this.project = opts.project;
-    this.mentor = opts.mentor;
-    if (this.mentor) {
-      this.settings = MENTOR_SETTINGS;
-      const attemptId = this.mentor.attemptId;
-      this.unsubscribeMentor = this.mentor.mentor.subscribe((id) => {
-        if (id === attemptId && !this.closed) this.host.emit("chat.mentor", { chatId: this.id, tabId: this.tabId, mentor: this.mentor!.view() });
-      });
-    }
-    this.workshop = opts.workshop;
-    if (this.workshop) {
-      this.settings = MENTOR_SETTINGS;
-      const ws = this.workshop;
-      this.unsubscribeMentor = ws.hub.subscribe((paperId) => {
-        if (paperId === ws.paperId && !this.closed && ws.role === "plan") this.host.emit("chat.workshop", { chatId: this.id, tabId: this.tabId, workshop: ws.view() });
-      });
+    this.role = opts.role;
+    if (this.role) {
+      this.settings = this.role.settings;
+      this.detachRole = this.role.attach(this.port());
     }
     this.code = host.project && opts.notebookKey ? new CodeSync((op, ms) => this.call(op as never, ms) as Promise<unknown>, opts.notebookKey) : null;
     this.codeState = this.code ? { state: "missing", why: "Not put on the notebook's machine since the chat opened." } : undefined;
@@ -313,17 +286,26 @@ export class Chat {
       machine: this.machine,
       ...(this.project ? { project: this.project } : {}),
       ...(this.codeState ? { code: this.codeState } : {}),
-      ...(this.mentor ? { mentor: this.mentor.view() } : {}),
-      ...(this.workshop?.role === "plan" ? { workshop: this.workshopView() } : {}),
+      ...this.role?.snapshot(),
     };
   }
 
-  private workshopView(): NonNullable<ChatSnapshot["workshop"]> | undefined {
-    try {
-      return this.workshop!.view();
-    } catch {
-      return undefined;
-    }
+  /** What the chat's role may do in it. */
+  private port(): ChatPort {
+    return {
+      chatId: this.id,
+      tabId: this.tabId,
+      closed: () => this.closed,
+      busy: () => !!(this.current || this.busyJob),
+      emit: (event, params) => this.host.emit(event, params),
+      call: (op, timeoutMs) => this.call(op, timeoutMs),
+      exclusive: (lock, fn) => this.exclusive(lock, fn),
+      job: (fn) => this.runJob(fn),
+      addCard: (card, onAction) => this.addCard(card, onAction),
+      closeCard: (cardId, state, outcome, tone) => this.closeCard(cardId, state, outcome, tone),
+      send: (text, extra) => this.send(text, extra),
+      system: (text) => this.system(text),
+    };
   }
 
   options(): AgentOption[] {
@@ -411,7 +393,7 @@ export class Chat {
     for (const r of this.reviews.values()) r.waiters.forEach((w) => w("pending"));
     this.agent?.dispose();
     this.agent = null;
-    this.unsubscribeMentor?.();
+    this.detachRole?.();
     this.setStatus("closed");
     this.persistNow();
   }
@@ -497,12 +479,26 @@ export class Chat {
   }
 
   private async buildPrompt(input: TurnInput): Promise<string> {
-    if (this.mentor) return this.buildMentorPrompt(input, this.mentor);
-    if (this.workshop) {
+    if (this.role) {
       const rules = this.sessionFresh || this.rulesDue;
       this.rulesDue = false;
-      const blocks = [rules ? this.workshop.playbook() : "", this.pendingRecap, this.workshop.state(), input.context ?? "", input.text];
-      return blocks.filter(Boolean).join("\n\n");
+      return this.role.prompt({
+        text: input.text,
+        ...(input.context ? { context: input.context } : {}),
+        rules,
+        recap: this.pendingRecap,
+        cells: async () => {
+          try {
+            this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
+            return (await this.call({ op: "get_cells" })).cells;
+          } catch {
+            this.notebook = null;
+            return null;
+          }
+        },
+        activity: () => this.activityBlock(),
+        attached: async () => (input.cells?.length ? this.attachedBlock(input.cells) : null),
+      });
     }
     let machineTimer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
@@ -573,127 +569,9 @@ export class Chat {
     return `<notebook-activity>\n${activity}\n</notebook-activity>`;
   }
 
-  /** A Mentor chat's prompt: its own rules, the exercise's state, and the learner's cells when they changed. */
-  private async buildMentorPrompt(input: TurnInput, s: MentorSession): Promise<string> {
-    const rules = this.sessionFresh || this.rulesDue;
-    let cells: CellInfo[] | null = null;
-    try {
-      this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
-      cells = (await this.call({ op: "get_cells" })).cells;
-    } catch {
-      this.notebook = null;
-    }
-    const blocks: string[] = [];
-    if (rules) blocks.push(mentorPlaybook(s.exercise, s.attempt.kind, s.view().variantOf));
-    this.rulesDue = false;
-    const full = rules || !!this.pendingRecap;
-    if (this.pendingRecap) blocks.push(this.pendingRecap);
-    const activity = this.activityBlock();
-    if (activity) blocks.push(activity);
-    if (input.context) blocks.push(input.context);
-    if (input.cells?.length) blocks.push(await this.attachedBlock(input.cells));
-    const seen = cells ? learnerCells(cells) : null;
-    const shown = seen === null
-      ? "The notebook could not be read this turn."
-      : full || seen !== this.lastLearnerCells ? seen : "The learner's sketch and solution cells are unchanged since your last turn.";
-    if (seen !== null) this.lastLearnerCells = seen;
-    blocks.push(mentorState(s, shown, full ? s.mentor.learnerSummary(s.attemptId) : ""));
-    blocks.push(input.text);
-    return blocks.join("\n\n");
-  }
-
-  // ------------------------------------------------------------ mentor
-
-  /** "Chấm bài": run the exercise's hidden tests on the learner's cells, show the verdict, and let the mentor react. */
-  async judge(): Promise<void> {
-    const s = this.requireMentor();
-    if (this.current || this.busyJob) throw new Error("Đợi mentor trả lời xong (hoặc bấm dừng) rồi hãy chấm bài.");
-    const card = this.addCard({ kind: "mentor", tone: "info", title: "Đang chấm bài…", actions: [] }, () => {});
-    let verdict: MentorVerdict;
-    let judged = "";
-    try {
-      verdict = await this.withBusyJob(async () => {
-        const { cells } = await this.call({ op: "get_cells" });
-        const source = cells.filter((c) => isSolutionCell(c)).map((c) => c.source).join("\n\n");
-        if (!source.trim()) {
-          return { at: Date.now(), ok: false, passed: 0, total: 0, tests: [], error: "Không thấy cell bài làm (cell bắt đầu bằng dòng `#| mentor: solution`)." };
-        }
-        judged = source;
-        const nonce = newNonce();
-        const waitMs = s.exercise.judgeSeconds * 1000;
-        const code = judgeCode(s.exercise, source, nonce, s.mentor.judgeContext(s.exercise));
-        const res = await this.exclusive("run", () => this.call({ op: "execute", code, waitMs }, waitMs + 30_000));
-        if (res.status === "running") await this.call({ op: "interrupt" }).catch(() => {});
-        return parseVerdict(res, nonce);
-      });
-    } catch (e) {
-      card.title = "Chưa chấm được";
-      this.closeCard(card.cardId, "done", kernelProblem((e as Error).message), "error");
-      return;
-    }
-    if (this.closed) return;
-    // A passing solution is what later exercises build on.
-    if (verdict.ok && judged) s.mentor.store.saveSolution(s.exercise.id, judged);
-    const result = s.judged(verdict);
-    card.title = verdict.missing ? "Thiếu thư viện" : verdict.error ? "Bài làm chưa chạy được" : `Đạt ${verdict.passed}/${verdict.total} test`;
-    card.tone = verdict.ok ? "ok" : "error";
-    card.mentor = { type: "verdict", verdict };
-    this.closeCard(card.cardId, "done");
-    if (result) this.showResult(result);
-    this.send("Chấm bài", { context: verdictBlock(verdict, s.stage, s.exercise) });
-  }
-
-  /** "Xin gợi ý": one hint level up, and the mentor gives a hint at it. */
-  hint(): number {
-    const s = this.requireMentor();
-    if (s.stage === "done") throw new Error("Bài đã xong.");
-    const level = s.raiseHint();
-    this.send(hintText(level), { context: hintBlock(s.exercise, level) });
-    return level;
-  }
-
-  /** "Nhận xét code": once the exercise is done, the mentor reviews the solution (no effect on the rating). */
-  codeReview(): void {
-    const s = this.requireMentor();
-    if (s.stage !== "done") throw new Error("Nhận xét code mở ra sau khi xong bài.");
-    if (this.current || this.busyJob) throw new Error("Đợi mentor trả lời xong rồi hãy xin nhận xét.");
-    this.send("Nhận xét code giúp mình", { context: codeReviewBlock(s.exercise) });
-  }
-
-  /** The learner moved the exercise on themself (skipping the lab, say). */
-  mentorStage(stage: Parameters<MentorSession["setStage"]>[0]): void {
-    const s = this.requireMentor();
-    try {
-      const result = s.setStage(stage, "user");
-      if (result) this.showResult(result);
-    } catch (e) {
-      if (e instanceof StageRefused) throw new Error(e.message);
-      throw e;
-    }
-  }
-
-  private requireMentor(): MentorSession {
-    if (!this.mentor) throw new Error("Chat này không phải một bài Mentor.");
-    return this.mentor;
-  }
-
-  /** The attempt is done: its rating change and the streak, as a card. */
-  private showResult(result: MentorResult): void {
-    const streak = this.mentor!.mentor.home().streak.current;
-    const gained = result.deltas.reduce((sum, d) => sum + d.after - d.before, 0);
-    const card = this.addCard({
-      kind: "mentor",
-      tone: "ok",
-      title: `${this.mentor!.attempt.kind === "review" ? "Ôn xong" : "Xong bài"}${result.revealed ? " (đã xem lời giải mẫu)" : ` · ${gained >= 0 ? "+" : ""}${gained} rating`}`,
-      actions: [],
-      mentor: { type: "result", result, streak },
-    }, () => {});
-    this.closeCard(card.cardId, "done");
-  }
-
   /** The tools this chat's agent gets. */
   tools(): readonly ToolDef<any, any>[] {
-    return this.workshop ? this.workshop.tools() : this.mentor ? MENTOR_CHAT_TOOLS : TOOLS;
+    return this.role ? this.role.tools() : TOOLS;
   }
 
   /** A turn or a notebook job is running (or waiting). */
@@ -708,8 +586,8 @@ export class Chat {
     }
   }
 
-  /** The workshop's exercises are written as this chat's job: the learner's messages wait, Stop stops it. */
-  runAuthoring(fn: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  /** Run `fn` as this chat's job: the user's messages wait for it, Stop aborts its signal. Refused while the chat is busy. */
+  runJob<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
     return this.withBusyJob((controller) => fn(controller.signal));
   }
 
@@ -1106,7 +984,7 @@ ${st.place.branch}`);
   // ------------------------------------------------------------ settings
 
   updateSettings(settings: ChatSettings): void {
-    this.settings = this.mentor || this.workshop ? MENTOR_SETTINGS : settings;
+    this.settings = this.role ? this.role.settings : settings;
     this.host.emit("chat.snapshot", this.snapshot());
   }
 
@@ -1495,15 +1373,7 @@ ${st.place.branch}`);
 
   runTool(name: string, args: unknown): Promise<ToolResult> {
     this.markNotebookCall(name, args, "notebook");
-    if (this.workshop) return callTool(Object.assign(this.toolContext(), { workshop: this.workshop }), name, args, this.workshop.tools());
-    if (this.mentor) {
-      const before = this.mentor.attempt.result;
-      return callTool(Object.assign(this.toolContext(), { mentor: this.mentor }), name, args, MENTOR_CHAT_TOOLS).then((r) => {
-        const after = this.mentor!.attempt.result;
-        if (after && !before) this.showResult(after);
-        return r;
-      });
-    }
+    if (this.role) return this.role.runTool(this.toolContext(), name, args);
     // The GitHub token is on the machine (for git): what the agent reads never shows it.
     return callTool(this.toolContext(), name, args).then(hideTokens);
   }
@@ -1618,11 +1488,11 @@ ${st.place.branch}`);
     // During a turn the agent sees its own runs through its tools.
     if (this.current) return;
     const long = (run.durationMs ?? 0) >= LONG_RUN_MS;
-    let card: ChatCard;
+    let card: ChatCard | null;
     if (run.status === "error") card = this.addRunCard(run);
-    else if (run.status === "ok" && long && !this.busyJob && !this.mentor) card = this.addFinishedCard(run);
-    else if (run.status === "ok" && long && !this.busyJob && this.mentor?.exercise.role === "experiment" && this.mentor.stage !== "done") card = this.addTrainedCard(run);
+    else if (run.status === "ok" && long && !this.busyJob) card = this.role?.longRun ? this.addRoleRunCard(run) : this.addFinishedCard(run);
     else return;
+    if (!card) return;
     if (long) this.host.emit("chat.run", { chatId: this.id, tabId: this.tabId, cardId: card.cardId, run, title: this.notebook?.title ?? "" });
   }
 
@@ -1642,9 +1512,9 @@ ${st.place.branch}`);
       title,
       detail,
       cellId: run.cellId,
-      // A Mentor chat never fixes the learner's code: the mentor helps them find the bug.
-      actions: this.mentor
-        ? [{ id: "explain", label: "Hỏi mentor", primary: true }, { id: "dismiss", label: "Bỏ qua" }]
+      // A role may not want the agent fixing the code: it then only explains.
+      actions: this.role?.failedRun
+        ? [{ id: "explain", label: this.role.failedRun.explain, primary: true }, { id: "dismiss", label: this.role.failedRun.dismiss }]
         : [
             { id: "fix", label: "Fix", primary: true },
             { id: "explain", label: "Explain" },
@@ -1671,19 +1541,14 @@ ${st.place.branch}`);
     return card;
   }
 
-  /** An experiment's long cell finished (training, most likely): the judge measures what it left in the kernel. */
-  private addTrainedCard(run: CellRun): ChatCard {
+  /** A long cell finished in a chat with a role: the role's card for it, if it has one. */
+  private addRoleRunCard(run: CellRun): ChatCard | null {
+    const spec = this.role?.longRun?.(run);
+    if (!spec) return null;
     let cardId = "";
-    const card = this.addCard({
-      kind: "run",
-      tone: "ok",
-      title: `Cell [${run.index}] chạy xong · ${runDuration(run.durationMs ?? 0)}`,
-      detail: "Train xong thì bấm Chấm bài: máy chấm đo trên mô hình đang nằm trong máy.",
-      cellId: run.cellId,
-      actions: [{ id: "judge", label: "Chấm bài", primary: true }, { id: "dismiss", label: "Bỏ qua" }],
-    }, () => {
-      this.closeCard(cardId, "done", "Đã chấm bài");
-      void this.judge().catch((e) => this.system((e as Error).message));
+    const card = this.addCard({ kind: "run", tone: "ok", title: spec.title, detail: spec.detail, cellId: run.cellId, actions: spec.actions }, () => {
+      this.closeCard(cardId, "done", spec.done);
+      spec.act();
     });
     cardId = card.cardId;
     this.limitRunCards();
@@ -1707,8 +1572,8 @@ ${st.place.branch}`);
     }
     if (this.closed) return;
     const context = cellRunBlock(action, run, rendered);
-    const text = this.mentor
-      ? `Cell [${run.index}] bị lỗi. Gợi ý giúp mình tìm ra lỗi (đừng sửa hộ).`
+    const text = this.role?.failedRun
+      ? this.role.failedRun.ask(run)
       : action === "fix" ? `Fix the error in cell [${run.index}]` : action === "explain" ? `Explain the error in cell [${run.index}]` : `Summarize the result of cell [${run.index}]`;
     this.send(text, { context, targets: [run.cellId] });
   }
