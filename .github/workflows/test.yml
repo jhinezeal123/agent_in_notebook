@@ -1,0 +1,41 @@
+# Typecheck and every package's tests, on each push to main or mentor and on
+# each pull request. The checkout includes the OpenResearch submodule: the
+# studio is built from it, and Mentor's contract test reads its `orx paper`
+# command.
+name: test
+
+on:
+  push:
+    branches: [main, mentor]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      # The Mentor exercises check themselves with a real Python.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install numpy matplotlib ipython
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
