@@ -8,7 +8,7 @@
 // only verified exercises, unchanged since, are loaded.
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { MENTOR_SKILLS, type MentorPaperPlan, type MentorSkill } from "@ainb/protocol";
@@ -101,8 +101,12 @@ const PaperFile = z.object({
   status: z.enum(["reading", "planning", "authoring", "ready"]).default("ready"),
   plan: PlanSchema.optional(),
   approved: z.boolean().default(false),
+  /** The learner approved a plan at least once (a changed plan waits for their approval again). */
+  approvedOnce: z.boolean().default(false),
   /** Components the author could not write, with why (by slug). */
   failed: z.record(z.string(), z.string()).default({}),
+  /** Exercises the learner reported as wrong, with what they said (by slug): each waits to be written again. */
+  reports: z.record(z.string(), z.string()).default({}),
   archived: z.boolean().default(false),
   /** Where its text came from, and how much of it there is. */
   source: z.object({ kind: z.enum(["latex", "alphaxiv", "pdf"]), chars: z.number() }).optional(),
@@ -311,6 +315,14 @@ export class PaperShelf {
     };
     walk(dir, "");
     return out;
+  }
+
+  /** An exercise's files as its draft again, to be fixed (the exercise stays on the shelf until the fixed one passes). */
+  seedDraft(paperId: string, slug: string): void {
+    const from = join(this.dir(paperId), "exercises", paperExerciseId(paperId, slug));
+    if (!existsSync(from)) return;
+    rmSync(this.draftDir(paperId, slug), { recursive: true, force: true });
+    cpSync(from, this.draftDir(paperId, slug), { recursive: true });
   }
 
   removeDraft(paperId: string, slug: string): void {

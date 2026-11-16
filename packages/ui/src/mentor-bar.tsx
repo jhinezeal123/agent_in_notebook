@@ -188,7 +188,8 @@ export function WorkshopBar({ workshop: w, busy, onApprove, onAuthor, onStop, on
   workshop: MentorWorkshop;
   busy: boolean;
   onApprove: () => void;
-  onAuthor: () => void;
+  /** Write what is left; `retry`: also what could not be written; `slug`: one exercise again. */
+  onAuthor: (opts?: { slug?: string; retry?: boolean }) => void;
   onStop: () => void;
   onHome: () => void;
 }) {
@@ -217,7 +218,20 @@ export function WorkshopBar({ workshop: w, busy, onApprove, onAuthor, onStop, on
         <div class="mentor-now">
           {a?.running ? `Đang soạn: ${a.current ?? "…"}${a.note ? ` (${a.note})` : ""}` : WORKSHOP_STEPS[Math.max(0, at)]!.hint}
           {a && a.failed > 0 && !a.running && ` · ${a.failed} bài chưa soạn được`}
+          {a && !a.running && a.note && ` · ${a.note}`}
         </div>
+        {w.reported.length > 0 && (
+          <ul class="mentor-reported">
+            {w.reported.map((r) => (
+              <li key={r.slug}>
+                <span><b>{r.title}</b>: bạn đã báo sai. <span class="muted">“{r.reason}”</span></span>
+                {w.approved && !a?.running && (
+                  <button class="secondary small" disabled={busy} onClick={() => onAuthor({ slug: r.slug })} title="Mentor đọc lại paper, sửa bài theo điều bạn báo, rồi máy kiểm chứng lại. Bài cũ còn đó cho tới khi bài mới qua kiểm chứng.">Soạn lại bài này</button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         {plan && (
           <div class="mentor-plan">
             <button class="linkish" aria-expanded={showPlan} onClick={() => setShowPlan(!showPlan)}>{showPlan ? "▾" : "▸"} Kế hoạch reproduce ({plan.components.length} thành phần{plan.sessions ? `, ${plan.sessions} buổi` : ""})</button>
@@ -254,7 +268,7 @@ export function WorkshopBar({ workshop: w, busy, onApprove, onAuthor, onStop, on
         <div class="mentor-actions">
           {plan && !w.approved && <button class="primary small" disabled={busy} onClick={onApprove} title="Mentor sẽ soạn bài theo kế hoạch này (chạy nền 15–30 phút)">Duyệt kế hoạch</button>}
           {w.approved && !a?.running && (left > 0 || (a?.failed ?? 0) > 0) && (
-            <button class="secondary small" disabled={busy} onClick={onAuthor}>{left > 0 ? "Soạn tiếp" : "Soạn lại phần hỏng"}</button>
+            <button class="secondary small" disabled={busy} onClick={() => onAuthor({ retry: left <= 0 })}>{left > 0 ? "Soạn tiếp" : "Soạn lại phần hỏng"}</button>
           )}
           {a?.running && <button class="secondary small" onClick={onStop}>Dừng soạn</button>}
         </div>

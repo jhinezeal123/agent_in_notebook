@@ -180,7 +180,13 @@ export async function verifyExercise(ex: Exercise, exec: Exec, opts: VerifyOptio
   const slowest = Math.max(first.ms, second.ms);
   const limit = experiment ? refWait : judgeWait / 3;
   add("speed", slowest <= limit, `${(slowest / 1000).toFixed(1)} s (giới hạn ${(limit / 1000).toFixed(0)} s)`);
-  if (experiment) add("metrics", !!first.verdict.metrics?.length, first.verdict.metrics?.map((m) => `${m.name} = ${m.value.toPrecision(4)}`).join(", ") || "tests chưa gọi t.report");
+  if (experiment) {
+    const got = first.verdict.metrics ?? [];
+    const unreported = ex.metrics.filter((m) => !got.some((g) => g.name === m.name)).map((m) => m.name);
+    add("metrics", got.length > 0 && !unreported.length, unreported.length && got.length
+      ? `tests chưa gọi t.report cho: ${unreported.join(", ")} (tên phải đúng như trong meta.json)`
+      : got.map((m) => `${m.name} = ${m.value.toPrecision(4)}`).join(", ") || "tests chưa gọi t.report");
+  }
 
   // 4. The starter and the broken solutions fail.
   if (!experiment) {

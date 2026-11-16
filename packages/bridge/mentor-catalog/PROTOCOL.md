@@ -335,7 +335,7 @@ Một paper mốc khép một chòm sao. Thư mục gồm:
 - `exercises/<paperId>--<slug>/`: các thành phần, đúng định dạng bài ở mục 4–8, thêm trong `meta.json`:
   - `"cites": "Eq. 1, §3.2"` (chỗ trong paper), `"role": "formula" | "component" | "experiment"`, `"uses": ["<id bài trước của paper>"]`.
   - `"star"`: điền id của chính bài (catalog tự gán lại).
-- Thành phần cuối là **thí nghiệm** (`"role": "experiment"`, `"judge": "kernel"`, `"judgeSeconds": 120`, `"predict"`, `"metrics": [{"name", "paper": "con số trong paper", "unit"}]`): người học viết vòng lặp train dùng code của các bài trước, train bản thu nhỏ ≤ 15 phút trên Kaggle, để mô hình trong biến toàn cục (ví dụ `model`). `reference.py` là vòng train chuẩn; test **không train**, chỉ đo `user["model"]` trên dữ liệu tự tạo, gọi `t.report`, rồi assert ngưỡng đạt. Cần ít nhất 1 test và 1 mutant (mô hình chưa train phải trượt).
+- Thành phần cuối là **thí nghiệm** (`"role": "experiment"`, `"judge": "kernel"`, `"judgeSeconds": 120`, `"predict"`, `"metrics": [{"name", "paper": "con số trong paper", "unit", "target": {"op": ">=", "value": 0.8}}]`): người học viết vòng lặp train dùng code của các bài trước, train bản thu nhỏ ≤ 15 phút trên Kaggle, để mô hình trong biến toàn cục (ví dụ `model`). `reference.py` là vòng train chuẩn; test **không train**, chỉ đo `user["model"]` trên dữ liệu tự tạo và gọi `t.report(name, value)` với đúng tên trong `metrics`. Ngưỡng đạt ghi ở `target`: **máy chấm tự so** con số báo về với ngưỡng (hiện thành một dòng test riêng), nên test không cần assert ngưỡng. Cần ít nhất 1 test và 1 mutant (mô hình chưa train phải trượt).
 
 Paper người học tự đưa vào đi theo luồng "xưởng" trong ứng dụng, không soạn tay ở đây.
 

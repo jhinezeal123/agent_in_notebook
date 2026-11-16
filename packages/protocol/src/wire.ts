@@ -384,7 +384,8 @@ export interface BridgeMethods {
   /** The learner approves the plan in the workshop chat; the exercises are then written. */
   "mentor.paper.approve": { params: { chatId: string }; result: MentorWorkshop };
   /** Write the exercises not written yet (or again, for one component). */
-  "mentor.paper.author": { params: { chatId: string; slug?: string }; result: MentorWorkshop };
+  /** Write what is not written yet; `retry`: also what could not be written; `slug`: one exercise again (one the learner reported as wrong). */
+  "mentor.paper.author": { params: { chatId: string; slug?: string; retry?: boolean }; result: MentorWorkshop };
   "mentor.paper.stopAuthoring": { params: { chatId: string }; result: MentorWorkshop };
   "mentor.paper.notes": { params: { paperId: string; notes: string }; result: { ok: true } };
   "mentor.paper.archive": { params: { paperId: string; archived: boolean }; result: { ok: true } };

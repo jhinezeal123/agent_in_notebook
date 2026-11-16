@@ -224,6 +224,8 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
         attemptId: e.attemptId, exerciseId: e.exerciseId, ...(e.file ? { file: e.file } : {}), kind, scaffold: e.scaffold ?? (kind === "review" ? "blank" : "full"),
         startedAt: e.at, stage: kind === "review" ? "build" : "lab", hintLevel: 0, revealed: false,
         judges: 0, failedBeforePass: 0, passed: false, probes: [], misconceptions: [], recalls: [],
+        // Reported as wrong: it never counts, and is not taken up again.
+        ...(voided.has(e.attemptId) ? { voided: voided.get(e.attemptId)! } : {}),
       });
       state.order.push(e.attemptId);
       continue;
@@ -546,7 +548,7 @@ export function pickToday(state: MentorState, catalog: Catalog, now: number, foc
   for (const id of [...state.order].reverse()) {
     const a = state.attempts.get(id)!;
     const ex = catalog.exercise(a.exerciseId);
-    if (a.kind === "learn" && !a.doneAt && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) return view(ex, "continue", a.attemptId);
+    if (a.kind === "learn" && !a.doneAt && a.voided === undefined && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) return view(ex, "continue", a.attemptId);
   }
   const finished = new Set([...state.attempts.values()].filter((a) => a.doneAt).map((a) => a.exerciseId));
   const diagnostic = diagnosticExercises(catalog).find((e) => !finished.has(e.id));
@@ -601,7 +603,7 @@ export function pickWarmup(state: MentorState, catalog: Catalog, now: number): M
   for (const id of [...state.order].reverse()) {
     const a = state.attempts.get(id)!;
     const ex = catalog.exercise(a.exerciseId);
-    if (a.kind === "review" && !a.doneAt && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) {
+    if (a.kind === "review" && !a.doneAt && a.voided === undefined && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) {
       const r = state.reviews.get(ex.id);
       return { ...todayView(ex, "continue", "review", a.attemptId), overdue: r?.due ? Math.max(0, daysBetween(r.due, today)) : 0 };
     }

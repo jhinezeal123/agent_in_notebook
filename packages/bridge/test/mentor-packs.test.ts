@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { autoLayout, freeSpot, loadCatalog, type Exercise } from "../src/mentor/catalog.js";
 import { findPython, mentorCheck } from "../src/mentor/check-cli.js";
 import { lintExercise } from "../src/mentor/lint.js";
+import { Mentor } from "../src/mentor/index.js";
 import { fold, pickToday, type MentorEvent } from "../src/mentor/model.js";
 import { hintBlock, mentorPlaybook, verdictBlock } from "../src/mentor/prompt.js";
 
@@ -146,6 +147,11 @@ describe("a topic pack", () => {
     expect(pickToday(fold(done, aside), aside, t)).toBeNull();
     expect(pickToday(fold(done, aside), aside, t, { kind: "constellation", id: "classic-ml" })).toMatchObject({ exerciseId: "linreg-fit", reason: "focus" });
     expect(pickToday(fold(done, catalog), catalog, t)).toMatchObject({ exerciseId: "linreg-fit", reason: "next" });
+    // The learner can make it the focus (as any constellation that is not a paper's).
+    const mentor = new Mentor({ dir: mkdtempSync(join(tmpdir(), "ainb-packs-home-")), catalog: aside });
+    mentor.setFocus({ kind: "constellation", id: "classic-ml" });
+    expect(mentor.home().focus).toEqual({ kind: "constellation", id: "classic-ml", title: "ML cổ điển" });
+    expect(() => mentor.setFocus({ kind: "constellation", id: "nowhere" })).toThrow(/Không có chòm sao/);
   });
 
   it("does not need checking again when only questions or hints change", () => {

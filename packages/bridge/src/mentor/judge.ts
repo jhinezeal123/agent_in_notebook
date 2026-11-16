@@ -88,11 +88,13 @@ export interface JudgeContext {
   mode?: "source" | "kernel";
 }
 
-type Judged = Pick<Exercise, "prelude" | "reference" | "tests" | "requires"> & { given?: string };
+type Judged = Pick<Exercise, "prelude" | "reference" | "tests" | "requires"> & { given?: string; metrics?: Exercise["metrics"] };
 
 /** Python that judges `source` (the learner's cells joined) and prints one marked JSON line. */
 export function judgeCode(ex: Judged, source: string, nonce: string, ctx: JudgeContext = {}): string {
   const kernel = ctx.mode === "kernel";
+  // An experiment's pass marks: checked here, not left to its tests.
+  const targets = (ex.metrics ?? []).filter((m) => m.target).map((m) => ({ name: m.name, op: m.target!.op, value: m.target!.value }));
   return String.raw`
 ${TEST_LIB}
 def _ainb_mentor_judge():
@@ -153,6 +155,17 @@ def _ainb_mentor_judge():
             out["tests"].append({"id": name, "name": label, "ok": False, "message": (str(e) or "Kết quả chưa đúng.")[:300]})
         except Exception as e:
             out["tests"].append({"id": name, "name": label, "ok": False, "message": f"{type(e).__name__}: {str(e)[:250]}"})
+    reported = {m["name"]: m["value"] for m in out.get("metrics", [])}
+    for tg in json.loads(text("${b64(JSON.stringify(targets))}")):
+        entry = {"id": "target_" + tg["name"], "name": f'{tg["name"]} đạt ngưỡng ({tg["op"]} {tg["value"]:g})', "ok": False}
+        if tg["name"] not in reported:
+            entry["message"] = f'Chưa đo được "{tg["name"]}" (một test ở trên phải qua trước).'
+        else:
+            value = reported[tg["name"]]
+            entry["ok"] = bool(value >= tg["value"] if tg["op"] == ">=" else value <= tg["value"])
+            if not entry["ok"]:
+                entry["message"] = f'Đo được {value:.4g}, cần {tg["op"]} {tg["value"]:g}.'
+        out["tests"].append(entry)
     print("\n<<MENTOR " + json.dumps(out, ensure_ascii=False) + " MENTOR>>")
 try:
     _ainb_mentor_judge()

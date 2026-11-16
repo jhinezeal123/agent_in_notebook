@@ -1870,6 +1870,11 @@ ${st.place.branch}`);
    * order: a separate message would sit after the reply (created when the turn
    * began) and stay pinned below everything the agent adds to it.
    */
+  /** A line from the bridge for the person reading this chat (something happened outside a turn). */
+  notice(text: string): void {
+    if (!this.closed) this.system(text);
+  }
+
   private system(text: string): void {
     const part: Part = { type: "notice", level: "info", text };
     if (this.current) this.addPart(this.current, part);

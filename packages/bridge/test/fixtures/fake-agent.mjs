@@ -100,9 +100,15 @@ const app = agent({ name: "fake-agent" })
     let steps = m ? JSON.parse(m[1]) : [{ say: `echo: ${text.split("\n").at(-1)}` }];
     // A paper's author: scripted per component in the file FAKE_AUTHOR names.
     const task = text.match(/<author-task (?:component="([^"]+)"|kind="given")/);
-    if (task && process.env.FAKE_AUTHOR) steps = JSON.parse(readFileSync(process.env.FAKE_AUTHOR, "utf8"))[task[1] ?? "given"] ?? [{ say: "no script" }];
+    // An exercise written again (the learner reported it) has a script of its own, `<slug>:rewrite`, when the file has one.
+    if (task && process.env.FAKE_AUTHOR) {
+      const scripts = JSON.parse(readFileSync(process.env.FAKE_AUTHOR, "utf8"));
+      const again = /<author-task [^>]*kind="rewrite"/.test(text);
+      steps = (again && scripts[`${task[1]}:rewrite`]) || scripts[task[1] ?? "given"] || [{ say: "no script" }];
+    }
     let n = 0;
-    const vars = {};
+    // What the learner said about the exercise, for a script to use as {{reported}}.
+    const vars = { reported: text.match(/reported it as wrong:\n"""\n([\s\S]*?)\n"""/)?.[1] ?? "" };
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
       if (step.say) await say(step.say);
@@ -144,7 +150,7 @@ const app = agent({ name: "fake-agent" })
           update: { sessionUpdate: "tool_call", toolCallId: id, title: `mcp__${step.server ?? "notebook"}__${step.tool}`, kind: "other", status: "in_progress", rawInput: step.args },
         });
         const mcp = s.mcp.find((c) => c.name === (step.server ?? "notebook"));
-        const args = JSON.parse(JSON.stringify(step.args ?? {}).replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? ""));
+        const args = JSON.parse(JSON.stringify(step.args ?? {}).replace(/\{\{(\w+)\}\}/g, (_, k) => JSON.stringify(String(vars[k] ?? "")).slice(1, -1)));
         const r = await mcp.client.callTool({ name: step.tool, arguments: args }, undefined, { timeout: 600_000 });
         const out = r.content.filter((c) => c.type === "text").map((c) => c.text).join("");
         for (const [k, re] of Object.entries(step.capture ?? {})) vars[k] = out.match(new RegExp(re))?.[1];

@@ -279,7 +279,7 @@ export function App() {
           workshop={live.workshop}
           busy={running || live.status === "starting"}
           onApprove={() => mentorCall("mentor.paper.approve")}
-          onAuthor={() => mentorCall("mentor.paper.author")}
+          onAuthor={(opts) => mentorCall("mentor.paper.author", opts ?? {})}
           onStop={() => mentorCall("mentor.paper.stopAuthoring")}
           onHome={() => void run(client.request("mentor.open"))}
         />

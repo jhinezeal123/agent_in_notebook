@@ -78,6 +78,11 @@ export class MentorStore {
     this.writeAtomic(this.solutionFile(exerciseId), source);
   }
 
+  /** The exercise was written again: what passed its old version is nothing to build on. */
+  removeSolution(exerciseId: string): void {
+    rmSync(this.solutionFile(exerciseId), { force: true });
+  }
+
   solution(exerciseId: string): string | null {
     try {
       return readFileSync(this.solutionFile(exerciseId), "utf8");

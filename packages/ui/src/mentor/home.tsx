@@ -560,7 +560,7 @@ function PaperItem(props: {
   const next = nextComponent(p);
   const [notes, setNotes] = useState(p.notes ?? "");
   useEffect(() => setNotes(p.notes ?? ""), [p.notes]);
-  const workshop = p.origin === "yours" && (p.status === "reading" || p.status === "planning" || p.status === "authoring" || p.components.some((c) => c.status === "failed"));
+  const workshop = p.origin === "yours" && (p.status === "reading" || p.status === "planning" || p.status === "authoring" || p.components.some((c) => c.status === "failed" || c.reported));
   return (
     <li class={`mh-paper ${p.status}`}>
       <div class="mh-row">
@@ -589,7 +589,7 @@ function PaperItem(props: {
               <li key={c.slug} class={c.status}>
                 <span>{c.role === "experiment" ? "🧪 " : c.mode === "given" ? "· " : ""}{c.title}</span>
                 {c.cites && <span class="mh-muted small"> ({c.cites})</span>}
-                <span class="mh-muted small"> · {c.mode === "given" ? "cho sẵn" : COMPONENT_STATUS[c.status]}{c.minutes && c.mode === "build" ? ` · ~${c.minutes}′` : ""}</span>
+                <span class="mh-muted small"> · {c.mode === "given" ? "cho sẵn" : COMPONENT_STATUS[c.status]}{c.minutes && c.mode === "build" ? ` · ~${c.minutes}′` : ""}{c.reported ? " · đã báo sai, mở xưởng để soạn lại" : ""}</span>
                 {c.note && <div class="mh-muted small">{c.note}</div>}
               </li>
             ))}

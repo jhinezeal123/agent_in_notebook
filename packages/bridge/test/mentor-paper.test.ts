@@ -6,9 +6,14 @@
 // paper's given code and their own earlier solution carried into the next
 // exercise, the paper as the focus of "today", and a report that voids an
 // attempt. Nothing the author writes reaches the editor.
+// Then what goes wrong: an exercise the learner reports is written again with
+// what they said (and what was built on it is checked again); a component the
+// author cannot write holds back the ones built on it, and is tried again on
+// request; a machine that is off stops the writing without blaming anything;
+// a plan changed after approval waits for approval again.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -24,6 +29,9 @@ const NO_ORX = { knownPorts: [], locate: () => ({ missing: "OpenResearch is not 
 const SETTINGS = { scope: "write", review: true, targetCellIds: [], notebookOnly: false };
 const TAB_W = 21;
 const TAB_L = 22;
+const TAB_W2 = 23;
+const KEY_W2 = "kaggle:/code/me/workshop-two";
+const PAPER2 = "p-chain";
 const KEY_W = "kaggle:/code/me/workshop";
 const KEY_L = "kaggle:/code/me/learn";
 const PAPER = "p-double";
@@ -68,7 +76,8 @@ const write = (component: string, file: string, content: string) => ({ tool: "pa
 const AUTHOR = {
   given: [{ tool: "paper_given_write", args: { code: "def target():\n    return 6.0" } }],
   double: [
-    write("double", "meta.json", JSON.stringify({ functions: ["double"], requires: ["numpy"], probes: 2 })),
+    // The title and the difficulty are the plan's: what the author says of them is dropped.
+    write("double", "meta.json", JSON.stringify({ functions: ["double"], requires: ["numpy"], probes: 2, title: "Hacked", difficulty: 2400, diagnostic: 1 })),
     write("double", "brief.md", "Viết `double(x)` trả về 2x (Eq. 1)."),
     write("double", "starter.py", "def double(x):\n    raise NotImplementedError"),
     write("double", "reference.py", `def double(x):\n    return x + x  # ${SECRET}\n`),
@@ -87,15 +96,61 @@ const AUTHOR = {
     write("fit", "tests.py", 'def test_fit(user, ref):\n    """mô hình khớp"""\n    m = user.get("model")\n    assert m is not None, "Chưa có model."\n    err = abs(m["w"] - 3.0)\n    t.report("err", err)\n    assert err < 0.01, "Chưa khớp."'),
     write("fit", "probes.json", JSON.stringify([1, 2, 3].map((i) => ({ q: `Câu ${i}?`, tag: `fit-${i}`, answer: "đúng" })))),
     write("fit", "mutants/untrained.py", "model = {'w': 0.0}\n"),
+    // The paper's given code is fixed once an exercise is verified against it.
+    { tool: "paper_given_write", args: { code: "def target():\n    return 7.0" } },
     { tool: "paper_exercise_check", args: { component: "fit" } },
   ],
 };
+
+/** A second paper: three components in a chain. */
+const PLAN2 = {
+  title: "Chain, the paper",
+  goal: "Một chuỗi ba thành phần.",
+  requires: [],
+  components: [
+    { slug: "base", title: "Base", role: "formula", mode: "build", cites: "Eq. 1", why: "Nền.", functions: ["base_fn(x: float) -> float"], uses: [], minutes: 10, difficulty: 1000, skills: ["formula"] },
+    { slug: "top", title: "Top", role: "component", mode: "build", cites: "Eq. 2", why: "Dựng trên Base.", functions: ["top_fn(x: float) -> float"], uses: ["base"], minutes: 10, difficulty: 1000, skills: ["formula"] },
+    { slug: "exp2", title: "Thí nghiệm 2", role: "experiment", mode: "build", cites: "Table 1", why: "Kết quả.", functions: [], uses: ["top"], minutes: 10, difficulty: 1000, skills: ["train"] },
+  ],
+  experiment: { dataset: "data generated in given.py", device: "cpu", trainMinutes: 1, metrics: [{ name: "val", paper: "4", where: "Table 1", target: { op: ">=", value: 3.9 } }] },
+};
+
+function simple(slug: string, fn: string, body: string, mutants: string[]) {
+  return [
+    write(slug, "meta.json", JSON.stringify({ functions: [fn], requires: ["numpy"] })),
+    write(slug, "brief.md", `Viết \`${fn}(x)\`.`),
+    write(slug, "starter.py", `def ${fn}(x):\n    raise NotImplementedError`),
+    write(slug, "reference.py", `def ${fn}(x):\n    return ${body}\n`),
+    write(slug, "tests.py", [1, 2, 3, 4].map((i) => `def test_case_${i}(user, ref):\n    """trường hợp ${i}"""\n    t.close(need(user, "${fn}")(${i}.0), ref["${fn}"](${i}.0))`).join("\n\n")),
+    write(slug, "probes.json", JSON.stringify([1, 2, 3].map((i) => ({ q: `Câu ${i}?`, tag: `${slug}-${i}`, answer: "đúng" })))),
+    ...mutants.map((m, i) => write(slug, `mutants/m${i}.py`, `def ${fn}(x):\n    return ${m}\n`)),
+    { tool: "paper_exercise_check", args: { component: slug } },
+  ];
+}
+const CHAIN = {
+  base: simple("base", "base_fn", "x + 1", ["x", "x + 2", "x - 1"]),
+  top: simple("top", "top_fn", "base_fn(x) * 2", ["base_fn(x)", "base_fn(x) * 3", "x * 2"]),
+  exp2: [
+    write("exp2", "meta.json", JSON.stringify({ functions: ["top_fn"], requires: ["numpy"], predict: "val bằng bao nhiêu?" })),
+    write("exp2", "brief.md", "Tính model."),
+    write("exp2", "starter.py", "# của bạn"),
+    write("exp2", "reference.py", "model = {'v': top_fn(1.0)}\n"),
+    write("exp2", "tests.py", 'def test_measure(user, ref):\n    """đo val"""\n    m = user.get("model")\n    assert m is not None, "Chưa có model."\n    t.report("val", m["v"])'),
+    write("exp2", "probes.json", JSON.stringify([1, 2, 3].map((i) => ({ q: `Câu ${i}?`, tag: `exp2-${i}`, answer: "đúng" })))),
+    write("exp2", "mutants/untrained.py", "model = {'v': 0.0}\n"),
+    { tool: "paper_exercise_check", args: { component: "exp2" } },
+  ],
+};
+/** Base as the author cannot get it right: its reference does not even run. */
+const BROKEN_BASE = [write("base", "reference.py", "def base_fn(x):\n    return x +\n"), ...CHAIN.base.filter((step) => !("args" in step && (step.args as { file?: string }).file === "reference.py"))];
 
 let bridge: Bridge;
 let browser: FakeExtension;
 let editor: FakeExtension;
 const nbW = kaggle(new FakeNotebook([]), "workshop", "Workshop");
 const nbL = kaggle(new FakeNotebook([]), "learn", "Learn");
+const nbW2 = kaggle(new FakeNotebook([]), "workshop-two", "Workshop two");
+const scripts = (author: Record<string, unknown>) => writeFileSync(process.env.FAKE_AUTHOR!, JSON.stringify(author));
 
 beforeAll(async () => {
   const home = mkdtempSync(join(tmpdir(), "ainb-mentor-paper-"));
@@ -111,9 +166,12 @@ beforeAll(async () => {
   browser = new FakeExtension(nbW, TAB_W);
   await browser.connect(port, TOKEN, "chrome-extension://abcdef");
   browser.attachNotebook(TAB_L, nbL);
+  nbW2.execResult = pythonKernel;
+  browser.attachNotebook(TAB_W2, nbW2);
   browser.rpc.emit("notebook.attached", { tabId: TAB_W, info: nbW.info() });
   browser.rpc.emit("notebook.attached", { tabId: TAB_L, info: nbL.info() });
-  for (let i = 0; i < 100 && (await editor.request<{ notebooks: unknown[] }>("browser.notebooks", {})).notebooks.length < 2; i++) await new Promise((r) => setTimeout(r, 20));
+  browser.rpc.emit("notebook.attached", { tabId: TAB_W2, info: nbW2.info() });
+  for (let i = 0; i < 100 && (await editor.request<{ notebooks: unknown[] }>("browser.notebooks", {})).notebooks.length < 3; i++) await new Promise((r) => setTimeout(r, 20));
 });
 
 afterAll(async () => {
@@ -140,6 +198,9 @@ async function openOn(tabId: number, key: string) {
 }
 
 const home = () => editor.request<MentorHome>("mentor.home", {});
+const paper = async (id: string) => (await home()).papers.find((x) => x.id === id)!;
+/** The author is done with a paper (it was seen at work, or what it had to do is there). */
+const authored = (id: string, until: () => boolean, what: string) => editor.waitFor(() => until() && !bridge.workshops.running(id), 180_000, what);
 
 describe.skipIf(!python)("a paper brought by the learner", () => {
   let workshopChat = "";
@@ -180,8 +241,11 @@ describe.skipIf(!python)("a paper brought by the learner", () => {
     }, 120_000, "exercises written");
     const shelf = (await home()).papers.find((x) => x.id === PAPER)!;
     expect(shelf.components.filter((c) => c.mode === "build").map((c) => c.status)).toEqual(["ready", "ready"]);
-    expect(bridge.mentor.catalog.exercise(`${PAPER}--double`)).toMatchObject({ author: "ai", paper: PAPER, uses: [] });
-    expect(bridge.mentor.catalog.exercise(`${PAPER}--fit`)).toMatchObject({ role: "experiment", judge: "kernel", uses: [`${PAPER}--double`] });
+    expect(bridge.mentor.catalog.exercise(`${PAPER}--double`)).toMatchObject({ author: "ai", paper: PAPER, uses: [], title: "Nhân đôi", difficulty: 1100 });
+    expect(bridge.mentor.catalog.exercise(`${PAPER}--double`)!.diagnostic).toBeUndefined();
+    // The experiment's pass mark is the plan's, and the judge holds it.
+    expect(bridge.mentor.catalog.exercise(`${PAPER}--fit`)).toMatchObject({ role: "experiment", judge: "kernel", uses: [`${PAPER}--double`], metrics: [{ name: "err", paper: "0.0", target: { op: "<=", value: 0.01 } }] });
+    expect(bridge.mentor.catalog.paperGiven(PAPER)).toContain("return 6.0");
     // The hidden chat never reached the editor.
     const seen = JSON.stringify(editor.parts());
     expect(seen).not.toContain(SECRET);
@@ -237,9 +301,137 @@ describe.skipIf(!python)("a paper brought by the learner", () => {
     expect(snap.mentor?.exerciseId).toBe(`${PAPER}--fit`);
     await editor.request("mentor.report", { chatId: snap.chatId, reason: "Test đòi w = 3 nhưng target là 6." });
     const a = [...bridge.mentor.state().attempts.values()].find((x) => x.exerciseId === `${PAPER}--fit`)!;
+    // It is not taken up again, and the paper's workshop knows what to write again.
+    expect(bridge.mentor.attempt(a.attemptId)!.voided).toMatch(/target là 6/);
+    expect((await home()).today).toMatchObject({ exerciseId: `${PAPER}--fit`, reason: "paper" });
+    expect(bridge.mentor.openAttempt(`${PAPER}--fit`, "learn")).toBeUndefined();
+    expect(bridge.workshops.view(PAPER).reported).toEqual([{ slug: "fit", title: "Thí nghiệm", reason: "Test đòi w = 3 nhưng target là 6." }]);
+    expect((await paper(PAPER)).components.find((c) => c.slug === "fit")).toMatchObject({ reported: true });
     bridge.mentor.record({ t: "done", attemptId: a.attemptId });
     const after = bridge.mentor.attempt(a.attemptId)!;
     expect(after.voided).toMatch(/target là 6/);
     expect(after.result?.deltas).toEqual([]);
   });
+
+  it("writes a reported exercise again with what the learner said, and checks what was built on it", async () => {
+    const id = `${PAPER}--double`;
+    expect((await paper(PAPER)).components.find((c) => c.slug === "double")!.status).toBe("done");
+    bridge.workshops.report(PAPER, id, "Paper nói nhân ba, không phải nhân đôi.");
+    scripts({
+      ...AUTHOR,
+      "double:rewrite": [
+        write("double", "brief.md", "Viết `double(x)` trả về 3x. Sửa theo: {{reported}}"),
+        write("double", "reference.py", "def double(x):\n    return 3 * x\n"),
+        write("double", "mutants/triple.py", "def double(x):\n    return 2 * x\n"),
+        { tool: "paper_exercise_check", args: { component: "double" } },
+      ],
+    });
+    await editor.request("mentor.paper.author", { chatId: workshopChat, slug: "double" });
+    await authored(PAPER, () => !!bridge.mentor.catalog.exercise(id)?.brief.includes("3x"), "double written again");
+    const ex = bridge.mentor.catalog.exercise(id)!;
+    expect(ex.brief).toContain("Sửa theo: Paper nói nhân ba, không phải nhân đôi.");
+    expect(ex.reference).toContain("3 * x");
+    // The files the author did not touch are the old ones.
+    expect(ex.tests).toContain("test_case_4");
+    // What was done on the old version no longer counts, and nothing builds on it.
+    expect([...bridge.mentor.state().attempts.values()].filter((a) => a.exerciseId === id).every((a) => a.voided !== undefined)).toBe(true);
+    expect(bridge.mentor.store.solution(id)).toBeNull();
+    expect((await paper(PAPER)).components.find((c) => c.slug === "double")).toMatchObject({ status: "ready" });
+    await expect(editor.request("mentor.start", { exerciseId: `${PAPER}--fit`, tabId: TAB_L })).rejects.toThrow(/Nhân đôi/);
+    // The experiment built on it no longer passes its check: it waits to be written again too.
+    const reported = bridge.workshops.view(PAPER).reported;
+    expect(reported.map((r) => r.slug)).toEqual(["fit"]);
+    expect(reported[0]!.reason).toMatch(/target là 6[\s\S]*không còn qua kiểm chứng/);
+    expect(bridge.mentor.catalog.paperGiven(PAPER)).toContain("return 6.0");
+  });
+
+  it("keeps the old exercise when the rewrite does not pass, then replaces it by one that does", async () => {
+    const id = `${PAPER}--fit`;
+    const before = bridge.mentor.catalog.exercise(id)!.hash;
+    scripts({ ...AUTHOR, "fit:rewrite": [write("fit", "tests.py", "def test_fit(user, ref):\n    assert False\n"), { tool: "paper_exercise_check", args: { component: "fit" } }] });
+    const seen = editor.parts().length;
+    await editor.request("mentor.paper.author", { chatId: workshopChat, slug: "fit" });
+    await authored(PAPER, () => JSON.stringify(editor.parts().slice(seen)).includes("chưa soạn lại được"), "the failed rewrite");
+    expect(bridge.mentor.catalog.exercise(id)!.hash).toBe(before);
+    expect(bridge.workshops.view(PAPER).reported.map((r) => r.slug)).toEqual(["fit"]);
+    expect((await paper(PAPER)).components.find((c) => c.slug === "fit")!.status).not.toBe("failed");
+
+    scripts({
+      ...AUTHOR,
+      "fit:rewrite": [
+        write("fit", "tests.py", 'def test_fit(user, ref):\n    """đo sai số"""\n    m = user.get("model")\n    assert m is not None, "Chưa có model."\n    t.report("err", abs(m["w"] - 2.0))'),
+        { tool: "paper_exercise_check", args: { component: "fit" } },
+      ],
+    });
+    await editor.request("mentor.paper.author", { chatId: workshopChat, slug: "fit" });
+    await authored(PAPER, () => bridge.mentor.catalog.exercise(id)?.hash !== before, "fit written again");
+    expect(bridge.mentor.catalog.exercise(id)!.tests).toContain("2.0");
+    expect(bridge.workshops.view(PAPER).reported).toEqual([]);
+    expect(bridge.workshops.view(PAPER)).toMatchObject({ status: "ready", authoring: { done: 2, total: 2, failed: 0, running: false } });
+  });
+});
+
+describe.skipIf(!python)("writing a paper's exercises when things go wrong", () => {
+  let chat = "";
+  const view = () => bridge.workshops.view(PAPER2);
+  const statuses = async () => (await paper(PAPER2)).components.map((c) => c.status);
+
+  it("holds back what is built on a component that could not be written", async () => {
+    bridge.mentor.shelf.create({ id: PAPER2, title: "Chain", source: "# Chain\n\nEq. 1.", kind: "latex" });
+    bridge.mentor.reloadCatalog();
+    await editor.request("mentor.paper.open", { paperId: PAPER2, tabId: TAB_W2 });
+    chat = (await openOn(TAB_W2, KEY_W2)).chatId;
+    expect(await turn(chat, script([{ tool: "paper_plan", args: PLAN2 }]))).toMatch(/saved and shown to the learner/);
+    scripts({ ...CHAIN, base: BROKEN_BASE });
+    await editor.request("mentor.paper.approve", { chatId: chat });
+    await authored(PAPER2, () => view().authoring?.failed === 3, "base given up");
+    const p = await paper(PAPER2);
+    expect(p.components.map((c) => c.status)).toEqual(["failed", "failed", "failed"]);
+    expect(p.components[0]!.note).toMatch(/reference/);
+    // The two above it cost nothing: they wait for it.
+    expect(p.components[1]!.note).toMatch(/chờ bài “Base”/);
+    expect(p.components[2]!.note).toMatch(/chờ bài “Top”/);
+    expect(bridge.mentor.shelf.readDraft(PAPER2, "top")).toEqual({});
+    expect(p.status).toBe("authoring");
+  });
+
+  it("asks for approval again when the plan changes, and says why nothing is written meanwhile", async () => {
+    expect(await turn(chat, script([{ tool: "paper_plan", args: PLAN2 }]))).toMatch(/saved and shown/);
+    expect(view().approved).toBe(true);
+    expect(await turn(chat, script([{ tool: "paper_plan", args: { ...PLAN2, goal: "Mục tiêu khác." } }]))).toMatch(/saved and shown/);
+    expect(view()).toMatchObject({ approved: false, status: "planning" });
+    const seen = editor.parts().length;
+    await editor.request("mentor.paper.author", { chatId: chat, retry: true });
+    await editor.waitFor(() => JSON.stringify(editor.parts().slice(seen)).includes("Chưa soạn được bài: Duyệt kế hoạch trước"), 20_000, "the reason, in the chat");
+    await new Promise((r) => setTimeout(r, 300));
+  });
+
+  it("stops without blaming the exercises when the notebook's machine is off", async () => {
+    scripts(CHAIN);
+    nbW2.connected = false;
+    // Approving starts the writing: the machine does not answer.
+    const seen = editor.parts().length;
+    await editor.request("mentor.paper.approve", { chatId: chat });
+    await authored(PAPER2, () => /đã dừng/.test(view().authoring?.note ?? ""), "the writing stopped");
+    await editor.waitFor(() => /Mentor dừng soạn bài[^"]*Bật máy của notebook xưởng/.test(JSON.stringify(editor.parts().slice(seen))), 20_000, "the reason, in the chat");
+    expect(view().authoring).toMatchObject({ done: 0, failed: 3, running: false });
+    // Tried again on request, still off: what could not be written before is not blamed either.
+    await editor.request("mentor.paper.author", { chatId: chat, retry: true });
+    await authored(PAPER2, () => view().authoring?.failed === 0 && /đã dừng/.test(view().authoring?.note ?? ""), "stopped again");
+    expect(await statuses()).toEqual(["planned", "planned", "planned"]);
+    expect(view().status).toBe("authoring");
+  });
+
+  it("writes them once the machine is back", async () => {
+    nbW2.connected = true;
+    await editor.request("mentor.paper.author", { chatId: chat });
+    await authored(PAPER2, () => view().status === "ready", "the chain written");
+    expect(await statuses()).toEqual(["ready", "ready", "ready"]);
+    expect(view().authoring).toMatchObject({ done: 3, total: 3, failed: 0, running: false });
+    expect(bridge.mentor.catalog.exercise(`${PAPER2}--exp2`)!.metrics).toEqual([{ name: "val", paper: "4", target: { op: ">=", value: 3.9 } }]);
+    // What is written keeps its interface, and a written experiment its pass marks.
+    expect(await turn(chat, script([{ tool: "paper_plan", args: { ...PLAN2, goal: "Mục tiêu khác.", components: PLAN2.components.map((c) => (c.slug === "base" ? { ...c, functions: ["other(x)"] } : c)) } }]))).toMatch(/base is already written/);
+    expect(await turn(chat, script([{ tool: "paper_plan", args: { ...PLAN2, goal: "Mục tiêu khác.", experiment: { ...PLAN2.experiment, metrics: [{ ...PLAN2.experiment.metrics[0], target: { op: ">=", value: 1 } }] } } }]))).toMatch(/keep its metrics and pass marks/);
+    expect(readFileSync(process.env.FAKE_AUTHOR!, "utf8")).toContain("exp2");
+  }, 240_000);
 });

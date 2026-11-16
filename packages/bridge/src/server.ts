@@ -137,6 +137,13 @@ export class Bridge {
     this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.toEditor("mentor.updated", {}), log: (m) => this.log(m) });
     this.workshops = new WorkshopHub(this.mentor, {
       authorChat: (paperId, tabId) => this.authorChat(paperId, tabId),
+      exec: async (tabId, code, waitMs) => {
+        const target: Target = { kind: "browser", tabId };
+        const r = await this.notebookOp(target, { op: "execute", code, waitMs }, waitMs + 30_000) as ExecResult;
+        if (r.status === "running") await this.notebookOp(target, { op: "interrupt" }).catch(() => {});
+        return r;
+      },
+      say: (paperId, text) => [...this.chats.values()].find((c) => c.workshop?.paperId === paperId && c.workshop.role === "plan")?.notice(text),
       changed: () => this.toEditor("mentor.updated", {}),
       log: (m) => this.log(m),
     });
@@ -516,7 +523,7 @@ export class Bridge {
     }));
     rpc.handle("mentor.paper.author", guard<"mentor.paper.author">((p) => {
       const { ws } = this.workshopChat(p.chatId);
-      this.startAuthoring(p.chatId, p.slug);
+      this.startAuthoring(p.chatId, { ...(typeof p.slug === "string" ? { slug: p.slug } : {}), retry: !!p.retry });
       return this.workshops.view(ws.paperId);
     }));
     rpc.handle("mentor.paper.stopAuthoring", guard<"mentor.paper.stopAuthoring">(async (p) => {
@@ -800,12 +807,16 @@ export class Bridge {
   }
 
   /** The exercises of the workshop's paper are written, as the chat's job. */
-  private startAuthoring(chatId: string, slug?: string): void {
+  private startAuthoring(chatId: string, opts: { slug?: string; retry?: boolean } = {}): void {
     const { chat, ws, tabId } = this.workshopChat(chatId);
     if (this.workshops.running(ws.paperId)) throw new Error("Mentor đang soạn bài cho paper này.");
     if (chat.isBusy()) throw new Error("Đợi mentor trả lời xong rồi bấm lại.");
-    void chat.runAuthoring((signal) => this.workshops.author(ws.paperId, tabId, { slug, signal }))
-      .catch((e) => this.log(`Mentor: writing the exercises of ${ws.paperId}: ${(e as Error).message}`));
+    void chat.runAuthoring((signal) => this.workshops.author(ws.paperId, tabId, { ...opts, signal }))
+      .catch((e) => {
+        // The learner pressed a button and nothing would happen: say why, where they are looking.
+        this.log(`Mentor: writing the exercises of ${ws.paperId}: ${(e as Error).message}`);
+        chat.notice(`Chưa soạn được bài: ${(e as Error).message}`);
+      });
   }
 
   /** A paper's text: from arXiv, or out of a PDF on the notebook's machine. */
@@ -842,11 +853,17 @@ export class Bridge {
     return { title, kind: "pdf", text: `<!-- source: text taken out of the PDF ${name}.pdf (${meta.pages} pages); formulas may be garbled: check them against the PDF -->\n# ${title}\n\n${text}` };
   }
 
-  /** "Báo bài sai": kept for whoever fixes the exercise (the mentor, or the catalog's author). */
+  /**
+   * "Báo bài sai": the attempt no longer counts. An exercise the mentor wrote
+   * for one of the learner's papers waits to be written again, with what the
+   * learner said (the paper's workshop shows it); a curated one is noted for
+   * the catalog's author.
+   */
   private reportExercise(chat: Chat, reason: string): void {
     const s = chat.mentor;
     if (!s) throw new Error("Chat này không phải một bài Mentor.");
     s.report(reason);
+    if (s.exercise.paper) this.workshops.report(s.exercise.paper, s.exercise.id, reason);
     const dir = join(dataDir(), "mentor");
     mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, "reports.jsonl"), `${JSON.stringify({ at: Date.now(), exerciseId: s.exercise.id, attemptId: s.attemptId, author: s.exercise.author, reason })}\n`);

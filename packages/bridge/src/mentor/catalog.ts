@@ -57,6 +57,8 @@ const Meta = z.object({
     name: z.string().min(1),
     paper: z.string().optional(),
     unit: z.string().optional(),
+    /** The pass mark: the judge itself fails the experiment when the reported number misses it. */
+    target: z.object({ op: z.enum([">=", "<="]), value: z.number() }).optional(),
   })).default([]),
 });
 

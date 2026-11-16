@@ -228,6 +228,8 @@ export interface MentorPaperComponent {
   status: MentorComponentStatus;
   /** Why it failed to be written, or what the author is doing. */
   note?: string;
+  /** The learner reported its exercise as wrong: it waits to be written again (in the workshop). */
+  reported?: boolean;
   uses: string[];
 }
 
@@ -293,6 +295,8 @@ export interface MentorWorkshop {
   plan?: MentorPaperPlan;
   approved: boolean;
   authoring?: { done: number; total: number; failed: number; current?: string; note?: string; running: boolean };
+  /** Exercises the learner reported as wrong: each can be written again, with their reason. */
+  reported: { slug: string; title: string; reason: string }[];
 }
 
 export interface MentorHome {

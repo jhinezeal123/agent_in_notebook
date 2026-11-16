@@ -89,7 +89,7 @@ export class Mentor {
 
   setFocus(focus: FocusRef | null): void {
     if (focus) {
-      const ok = focus.kind === "paper" ? this.catalog.papers.some((p) => p.info.id === focus.id) : this.catalog.constellations.some((c) => c.id === focus.id && c.kind === "map");
+      const ok = focus.kind === "paper" ? this.catalog.papers.some((p) => p.info.id === focus.id) : this.catalog.constellations.some((c) => c.id === focus.id && c.kind !== "paper");
       if (!ok) throw new Error(`Không có ${focus.kind === "paper" ? "paper" : "chòm sao"} ${focus.id}.`);
     }
     this.store.saveProfile({ focus });
@@ -131,10 +131,12 @@ export class Mentor {
         const exerciseId = paperExerciseId(info.id, c.slug);
         const ex = this.catalog.exercise(exerciseId);
         const status: MentorComponentStatus = c.mode === "given" ? "ready" : ex ? exStatus(exerciseId) : info.failed[c.slug] ? "failed" : "planned";
+        const reported = ex ? info.reports[c.slug] : undefined;
         return {
           ...(ex ? { exerciseId } : {}), slug: c.slug, title: c.title, role: c.role, mode: c.mode, cites: c.cites,
           minutes: c.minutes, difficulty: ex?.difficulty ?? c.difficulty, status, uses: c.uses,
           ...(info.failed[c.slug] && !ex ? { note: info.failed[c.slug] } : {}),
+          ...(reported ? { reported: true, note: `Bạn đã báo bài này sai: ${reported}` } : {}),
         };
       });
     } else {
@@ -172,6 +174,17 @@ export class Mentor {
     this.cached = null;
     this.opts.onChange?.(event.attemptId);
     for (const l of this.listeners) l(event.attemptId);
+  }
+
+  /**
+   * An exercise was written again (the learner had reported it as wrong):
+   * what was done on its old version no longer counts, and nothing builds on it.
+   */
+  voidExercise(exerciseId: string, reason: string): void {
+    for (const a of this.state().attempts.values()) {
+      if (a.exerciseId === exerciseId && a.voided === undefined) this.record({ t: "void", attemptId: a.attemptId, reason });
+    }
+    this.store.removeSolution(exerciseId);
   }
 
   /** Called on every recorded event (the chats of an attempt follow it). */
@@ -236,7 +249,7 @@ export class Mentor {
   /** The unfinished attempt of an exercise, of this kind (the latest). */
   openAttempt(exerciseId: string, kind: MentorKind): AttemptState | undefined {
     const state = this.state();
-    return [...state.order].reverse().map((a) => state.attempts.get(a)!).find((a) => a.exerciseId === exerciseId && a.kind === kind && !a.doneAt);
+    return [...state.order].reverse().map((a) => state.attempts.get(a)!).find((a) => a.exerciseId === exerciseId && a.kind === kind && !a.doneAt && a.voided === undefined);
   }
 
   /** The cells to write for an attempt: the exercise, with the learner's saved work back in place. */
