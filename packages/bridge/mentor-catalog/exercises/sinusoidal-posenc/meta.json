@@ -1,0 +1,12 @@
+{
+  "id": "sinusoidal-posenc",
+  "title": "Positional encoding hình sin",
+  "star": "posenc",
+  "skills": ["formula", "theory"],
+  "difficulty": 1300,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["positional_encoding"],
+  "probes": 2
+}

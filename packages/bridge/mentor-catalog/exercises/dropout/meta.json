@@ -1,0 +1,12 @@
+{
+  "id": "dropout",
+  "title": "Inverted dropout: forward và backward",
+  "star": "dropout",
+  "skills": ["formula", "train"],
+  "difficulty": 1250,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["dropout_forward", "dropout_backward"],
+  "probes": 2
+}

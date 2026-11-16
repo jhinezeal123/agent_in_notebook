@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Suy ra Xavier: với y = x @ W, x có trung bình 0 và các phần tử độc lập, Var(y_j) bằng gì? Điều kiện giữ phương sai ở forward và ở backward khác nhau thế nào, và 2/(fan_in + fan_out) là thoả hiệp giữa chúng ra sao?",
+    "tag": "xavier-derivation",
+    "answer": "Var(y_j) = fan_in · Var(W) · Var(x). Forward cần fan_in·Var(W) = 1; backward (gradient đi qua W^T) cần fan_out·Var(W) = 1. Không thoả cả hai khi fan_in ≠ fan_out nên lấy Var(W) = 2/(fan_in + fan_out) (nghịch đảo của trung bình cộng). Giả định activation tuyến tính quanh 0 như tanh."
+  },
+  {
+    "q": "Vì sao Kaiming có thêm hệ số 2 so với 1/fan_in? Nối với hình std qua 30 lớp ReLU trong phòng công thức.",
+    "tag": "relu-gain",
+    "answer": "ReLU giữ lại một nửa phân phối đối xứng nên E[ReLU(z)²] = Var(z)/2. Để Var giữ nguyên qua mỗi lớp cần fan_in · Var(W) · 1/2 = 1, tức Var(W) = 2/fan_in. Thiếu hệ số 2 thì std giảm √2 lần mỗi lớp, sau 30 lớp còn khoảng 2^-15."
+  },
+  {
+    "q": "Với phân phối đều U(−a, a), cận a liên hệ với độ lệch chuẩn thế nào? Nếu lấy a bằng đúng std mục tiêu thì std thực tế sai bao nhiêu lần?",
+    "tag": "uniform-bound",
+    "answer": "Var(U(−a, a)) = a²/3, nên a = √3·σ. Lấy a = σ thì std thực tế chỉ còn σ/√3 ≈ 0.58σ, qua nhiều lớp tín hiệu tắt dần."
+  },
+  {
+    "q": "`rng.normal(0, 2/fan_in, size)` có đúng Kaiming không? Lỗi này ảnh hưởng thế nào khi fan_in = 512?",
+    "tag": "std-vs-var",
+    "answer": "Sai: tham số thứ hai của normal là độ lệch chuẩn (scale), không phải phương sai. Đúng phải là √(2/fan_in) ≈ 0.0625; truyền 2/512 ≈ 0.0039 làm std nhỏ hơn 16 lần, activation gần như tắt sau vài lớp."
+  },
+  {
+    "q": "Vì sao không khởi tạo mọi trọng số bằng 0 (hoặc cùng một hằng số)? Bias khởi tạo bằng 0 thì có sao không?",
+    "tag": "symmetry-breaking",
+    "answer": "Các neuron trong cùng lớp sẽ có cùng output và cùng gradient, cập nhật giống hệt nhau mãi mãi nên lớp chỉ tương đương một neuron (không phá được đối xứng). Với W = 0, gradient của các lớp trước cũng bằng 0. Bias = 0 thì không sao vì W ngẫu nhiên đã phá đối xứng."
+  }
+]

@@ -81,6 +81,7 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<mentor>\n")) await say("[saw mentor playbook]");
     if (text.includes("<hint-request level=")) await say(`[saw hint ${text.match(/<hint-request level="(\d)"/)?.[1]}${text.includes("Reference solution:") ? " with solution" : ""}]`);
     if (text.includes("<mentor-verdict>\n")) await say("[saw verdict]");
+    if (text.includes("<code-review-request>\n")) await say(`[saw code review${text.includes("```python") ? " with reference" : ""}]`);
     const mentorState = text.match(/<mentor-state>[\s\S]*?<\/mentor-state>/);
     if (mentorState && text.includes("ECHO_MENTOR")) await say(mentorState[0]);
     if (text.includes("ECHO_MODEL")) await say(`[model ${model}]`);

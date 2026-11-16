@@ -6,6 +6,18 @@
 export type MentorStage = "lab" | "build" | "defend" | "done";
 export const MENTOR_STAGES: readonly MentorStage[] = ["lab", "build", "defend", "done"];
 
+/**
+ * What an attempt is: learning the exercise (lab, build, defend), or a spaced
+ * review that re-implements it from a blank cell.
+ */
+export type MentorKind = "learn" | "review";
+
+/** How much of the code the notebook gives: the starter with its docstring, the signatures only, or a blank cell. */
+export type MentorScaffold = "full" | "signature" | "blank";
+
+/** Days between spaced reviews: 3, then 10, then 30; after the third the exercise is learnt. */
+export const MENTOR_REVIEW_DAYS: readonly number[] = [3, 10, 30];
+
 /** What a rating measures. */
 export type MentorSkill = "tensor" | "formula" | "blank" | "train" | "theory";
 export const MENTOR_SKILLS: readonly MentorSkill[] = ["tensor", "formula", "blank", "train", "theory"];
@@ -49,6 +61,9 @@ export interface MentorChat {
   exerciseId: string;
   title: string;
   star: string;
+  kind: MentorKind;
+  /** A variation: the title of the exercise it changes (the lab is a written prediction). */
+  variantOf?: string;
   stage: MentorStage;
   hintLevel: number;
   /** The reference solution was shown: the attempt cannot raise a rating, and comes back in three days. */
@@ -67,6 +82,8 @@ export interface MentorResult {
   score: number;
   deltas: { skill: MentorSkill; before: number; after: number }[];
   revealed: boolean;
+  /** For a review: days to the next one, or null once the exercise is learnt. */
+  nextReview?: number | null;
 }
 
 export type MentorCardBody =
@@ -109,7 +126,9 @@ export interface MentorStarView {
   /** Stars to learn first (lines on the map). */
   after: string[];
   state: MentorStarState;
-  exercises: { id: string; title: string; difficulty: number; minutes: number; done: boolean }[];
+  /** 0 while its reviews are on time, up to 1 as one goes overdue: the star dims. */
+  fade: number;
+  exercises: { id: string; title: string; difficulty: number; minutes: number; done: boolean; variant?: boolean }[];
 }
 
 export interface MentorConstellation {
@@ -127,10 +146,28 @@ export interface MentorToday {
   star: string;
   minutes: number;
   difficulty: number;
-  /** Why this one: a diagnostic session, an exercise to redo after seeing the solution, one left unfinished, or the next on the map. */
-  reason: "diagnostic" | "redo" | "continue" | "next";
+  /** Why this one: a diagnostic session, an exercise to redo after seeing the solution, one left unfinished, the next on the map, or a spaced review. */
+  reason: "diagnostic" | "redo" | "continue" | "next" | "review" | "variant";
+  kind: MentorKind;
+  /** For a review: days past its due day (0 = due today). */
+  overdue?: number;
   /** For `continue`: the open attempt. */
   attemptId?: string;
+}
+
+/** A misconception the learner showed, in the "Sổ lỗi sai", and when it is asked again. */
+export interface MentorMistake {
+  tag: string;
+  note: string;
+  exerciseId: string;
+  title: string;
+  /** Times it showed (in answers or in recalls). */
+  seen: number;
+  /** Right answers in a row when asked again; two make it solid. */
+  streak: number;
+  status: "due" | "waiting" | "solid";
+  /** The day it is asked again ("YYYY-MM-DD"); absent once solid. */
+  due?: string;
 }
 
 export interface MentorEnv {
@@ -145,6 +182,12 @@ export interface MentorEnv {
 export interface MentorHome {
   workDir: string;
   today: MentorToday | null;
+  /** A spaced review to do first (a short warm-up), when one is due. */
+  warmup: MentorToday | null;
+  /** Reviews due today or overdue, and the next ones. */
+  reviews: { due: number; upcoming: { exerciseId: string; title: string; day: string }[] };
+  /** The misconception book, the ones to ask again first. */
+  mistakes: MentorMistake[];
   streak: { current: number; best: number; freezes: number; doneToday: boolean };
   /** Active days of the last 16 weeks, oldest first ("YYYY-MM-DD"). */
   heatmap: { day: string; count: number }[];
@@ -153,7 +196,7 @@ export interface MentorHome {
   stars: MentorStarView[];
   constellations: MentorConstellation[];
   diagnostic: { done: number; total: number; weakest: MentorSkill[] };
-  recent: { attemptId: string; exerciseId: string; title: string; at: number; stage: MentorStage; score?: number; revealed: boolean }[];
+  recent: { attemptId: string; exerciseId: string; title: string; kind: MentorKind; at: number; stage: MentorStage; score?: number; revealed: boolean }[];
   /** Rating after each finished attempt, oldest first. */
   history: { at: number; overall: number }[];
 }

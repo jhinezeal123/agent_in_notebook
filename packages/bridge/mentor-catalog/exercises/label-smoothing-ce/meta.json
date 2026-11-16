@@ -1,0 +1,14 @@
+{
+  "id": "label-smoothing-ce",
+  "title": "Cross-entropy với label smoothing",
+  "star": "softmax",
+  "skills": ["formula", "theory"],
+  "difficulty": 1450,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["smoothed_cross_entropy"],
+  "probes": 2,
+  "variantOf": "stable-softmax-ce",
+  "predict": "Với cross-entropy thường, đẩy logit của lớp đúng lên $+\\infty$ làm loss về 0. Với label smoothing $\\varepsilon = 0.1$ và $C = 10$ lớp: loss **nhỏ nhất** đạt được là khoảng bao nhiêu (ghi một con số), và khi cứ tiếp tục đẩy logit đúng lên $+\\infty$ thì loss làm gì?"
+}

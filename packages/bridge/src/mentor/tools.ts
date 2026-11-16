@@ -61,6 +61,19 @@ export const MENTOR_TOOLS = [
     },
   }),
   tool({
+    name: "mentor_recall",
+    description: "Grade the learner's answer to a warm-up question: a misconception from an earlier session, asked again (listed in <mentor-state>). 2 right, 1 partly right, 0 wrong.",
+    schema: z.object({
+      tag: z.string().min(1).describe("The misconception's tag, as <mentor-state> lists it."),
+      grade: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+    }),
+    async run(ctx: MentorToolContext, a) {
+      refused(() => ctx.mentor.recall(a.tag, a.grade));
+      const left = ctx.mentor.mentor.recallsDue(ctx.mentor.attemptId).length;
+      return { text: left ? `Recorded. ${left} more warm-up question${left === 1 ? "" : "s"} due.` : "Recorded. The warm-up is over: go on with the lab." };
+    },
+  }),
+  tool({
     name: "mentor_misconception",
     description: "Record a misconception the learner showed, so it comes back in later sessions.",
     schema: z.object({ tag: z.string().min(1).describe("Short tag, from the question bank when one fits."), note: z.string().min(1).describe("What they believe, in one sentence.") }),

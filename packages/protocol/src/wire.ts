@@ -3,7 +3,7 @@
 // events with the same envelope.
 
 import type { ChatImageMime } from "./chat-image.js";
-import type { MentorCardBody, MentorChat, MentorEnv, MentorHome, MentorStage } from "./mentor.js";
+import type { MentorCardBody, MentorChat, MentorEnv, MentorHome, MentorKind, MentorStage } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
 import type { CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
@@ -357,11 +357,13 @@ export interface BridgeMethods {
    * Mentor: start an exercise (today's when none is named), or reopen its
    * unfinished attempt. The bridge writes the notebook; the editor opens `file`.
    */
-  "mentor.start": { params: { exerciseId?: string }; result: { attemptId: string; exerciseId: string; file: string; resumed: boolean } };
+  "mentor.start": { params: { exerciseId?: string; kind?: MentorKind }; result: { attemptId: string; exerciseId: string; file: string; resumed: boolean } };
   /** Mentor: run the exercise's hidden tests on the learner's cells. */
   "mentor.judge": { params: { chatId: string }; result: { started: boolean } };
   /** Mentor: the learner asks for the next hint level. */
   "mentor.hint": { params: { chatId: string }; result: { level: number } };
+  /** "Nhận xét code": the mentor reviews the finished solution (no effect on the rating). */
+  "mentor.codeReview": { params: { chatId: string }; result: { started: boolean } };
   /** Mentor: the learner moves the exercise to a step themself (moving past the build needs a passing verdict). */
   "mentor.stage": { params: { chatId: string; stage: MentorStage }; result: MentorChat };
   /** Mentor: what Python on this computer has (numpy, torch, Jupyter's kernel). */

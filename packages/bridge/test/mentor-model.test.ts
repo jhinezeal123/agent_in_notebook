@@ -18,8 +18,8 @@ function mentorAt(clock: { now: number }) {
 }
 
 /** Run an attempt to the end: pass the judge, answer the probes. */
-function finish(m: Mentor, opts: { hints?: number; fails?: number; grades?: (0 | 1 | 2)[] } = {}) {
-  const { attemptId } = m.start();
+function finish(m: Mentor, opts: { hints?: number; fails?: number; grades?: (0 | 1 | 2)[]; exerciseId?: string } = {}) {
+  const { attemptId } = m.start(opts.exerciseId);
   const s = new MentorSession(m, attemptId);
   s.setStage("build", "agent");
   for (let i = 0; i < (opts.hints ?? 0); i++) s.raiseHint();
@@ -68,7 +68,7 @@ describe("ratings", () => {
   });
 
   it("scores hints, failed verdicts and wrong answers lower", () => {
-    const base = { passed: true, hintLevel: 0, revealed: false, failedBeforePass: 0, probes: [{ grade: 2 as const, question: "" }] };
+    const base = { kind: "learn" as const, passed: true, hintLevel: 0, revealed: false, failedBeforePass: 0, probes: [{ grade: 2 as const, question: "" }] };
     const clean = attemptScore(base, "tensor");
     expect(attemptScore({ ...base, hintLevel: 2 }, "tensor")).toBeLessThan(clean);
     expect(attemptScore({ ...base, failedBeforePass: 3 }, "tensor")).toBeLessThan(clean);
@@ -138,5 +138,172 @@ describe("steps", () => {
     const again = fold(events, catalog);
     expect([...again.ratings.values()][0]!.n).toBe(1);
     expect(m.home().streak.current).toBe(1);
+  });
+});
+
+/** A review of the exercise: re-implement it, pass the judge (or not) with some hints. */
+function review(m: Mentor, exerciseId: string, opts: { pass?: boolean; hints?: number } = {}) {
+  const { attemptId } = m.start(exerciseId, "review");
+  const s = new MentorSession(m, attemptId);
+  for (let i = 0; i < (opts.hints ?? 0); i++) s.raiseHint();
+  if (opts.pass === false) {
+    s.judged({ at: 0, ok: false, passed: 0, total: 3, tests: [] });
+    return { s, result: undefined };
+  }
+  return { s, result: s.judged({ at: 0, ok: true, passed: 3, total: 3, tests: [] }) };
+}
+
+describe("spaced reviews", () => {
+  it("schedules a review 3 days after learning, then 10 and 30 days, then the exercise is learnt", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const { s, result } = finish(m);
+    const id = s.exercise.id;
+    expect(result.nextReview).toBe(3);
+    expect(m.home().warmup).toBeNull();
+    clock.now += 3 * DAY;
+    expect(m.home().warmup).toMatchObject({ reason: "review", kind: "review", exerciseId: id, overdue: 0 });
+    // The review starts at the build, with a blank cell, and the judge's pass ends it.
+    const r1 = review(m, id);
+    expect(r1.s.view()).toMatchObject({ kind: "review", stage: "done", probes: { needed: 0 } });
+    expect(r1.result?.nextReview).toBe(10);
+    clock.now += 10 * DAY;
+    expect(review(m, id).result?.nextReview).toBe(30);
+    clock.now += 30 * DAY;
+    expect(review(m, id).result?.nextReview).toBeNull();
+    clock.now += 60 * DAY;
+    expect(m.home().warmup).toBeNull();
+  });
+
+  it("starts the intervals over when the review leaned on hints, and moves the rating half as much", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const id = finish(m).s.exercise.id;
+    clock.now += 3 * DAY;
+    const leaned = review(m, id, { hints: 2 }).result!;
+    expect(leaned.nextReview).toBe(3);
+    expect(leaned.deltas.every((d) => d.after < d.before)).toBe(true);
+    clock.now += 3 * DAY;
+    const clean = review(m, id).result!;
+    expect(clean.nextReview).toBe(10);
+  });
+
+  it("keeps an unfinished review as the warm-up, not as today's exercise", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const id = finish(m).s.exercise.id;
+    clock.now += 4 * DAY;
+    const { s } = review(m, id, { pass: false });
+    const home = m.home();
+    expect(home.warmup).toMatchObject({ reason: "continue", attemptId: s.attemptId });
+    expect(home.today?.attemptId).not.toBe(s.attemptId);
+    expect(m.start(id, "review")).toMatchObject({ attemptId: s.attemptId, resumed: true });
+  });
+
+  it("dims the star as its review goes overdue", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const star = finish(m).s.exercise.star;
+    const fade = () => m.home().stars.find((x) => x.id === star)!.fade;
+    expect(fade()).toBe(0);
+    clock.now += 3 * DAY;
+    const dueToday = fade();
+    expect(dueToday).toBeGreaterThan(0);
+    clock.now += 7 * DAY;
+    expect(fade()).toBeGreaterThan(dueToday);
+    clock.now += 30 * DAY;
+    expect(fade()).toBe(1);
+  });
+
+  it("refuses the lab and the defence in a review", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const id = finish(m).s.exercise.id;
+    const s = new MentorSession(m, m.start(id, "review").attemptId);
+    expect(s.stage).toBe("build");
+    expect(() => s.setStage("defend", "agent")).toThrow(StageRefused);
+    expect(() => s.probe(2, "q")).toThrow(StageRefused);
+  });
+});
+
+describe("misconception book", () => {
+  it("asks a misconception again two days later, and two right answers make it solid", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const first = new MentorSession(m, m.start().attemptId);
+    first.misconception("broadcast-axis", "Nghĩ rằng broadcasting ghép trục từ trái sang.");
+    expect(m.recallsDue(first.attemptId)).toEqual([]);
+    expect(m.home().mistakes[0]).toMatchObject({ tag: "broadcast-axis", status: "waiting", due: "2026-11-04" });
+    clock.now += 2 * DAY;
+    const next = new MentorSession(m, m.start("layernorm").attemptId);
+    expect(m.recallsDue(next.attemptId).map((d) => d.tag)).toEqual(["broadcast-axis"]);
+    next.recall("broadcast-axis", 2);
+    expect(m.recallsDue(next.attemptId)).toEqual([]);
+    expect(m.home().mistakes[0]).toMatchObject({ status: "waiting", streak: 1 });
+    clock.now += 7 * DAY;
+    const later = new MentorSession(m, m.start("einsum-scores").attemptId);
+    later.recall("broadcast-axis", 2);
+    expect(m.home().mistakes[0]).toMatchObject({ status: "solid", streak: 2 });
+    expect(() => later.recall("broadcast-axis", 2)).toThrow(StageRefused);
+  });
+
+  it("starts over after a wrong answer, and gives the bank's question when the tag comes from it", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    const s = new MentorSession(m, m.start("layernorm").attemptId);
+    s.misconception("eps-placement", "Đặt ε ngoài căn.");
+    clock.now += 2 * DAY;
+    const again = new MentorSession(m, m.start("einsum-scores").attemptId);
+    const due = m.recallsDue(again.attemptId);
+    expect(due[0]).toMatchObject({ tag: "eps-placement", exercise: s.exercise.title });
+    expect(due[0]!.question).toMatch(/ε/);
+    again.recall("eps-placement", 0);
+    expect(m.home().mistakes[0]).toMatchObject({ status: "waiting", streak: 0, seen: 2, due: "2026-11-06" });
+  });
+});
+
+describe("scaffold", () => {
+  it("gives the full starter in the diagnostic and a blank cell in a review", async () => {
+    const { scaffoldFor } = await import("../src/mentor/model.js");
+    const m = mentorAt({ now: T0 });
+    const diag = catalog.exercises.find((e) => e.diagnostic)!;
+    expect(scaffoldFor(m.state(), diag, "learn")).toBe("full");
+    expect(scaffoldFor(m.state(), diag, "review")).toBe("blank");
+  });
+
+  it("keeps only the signatures, or nothing but the names", async () => {
+    const { scaffoldStarter } = await import("../src/mentor/notebook.js");
+    const ex = { starter: 'def f(x, y):\n    """doc\n    more"""\n    ...\n\n\ndef g(a,\n      b=1):\n    """doc"""\n    ...', functions: ["f", "g"] };
+    expect(scaffoldStarter(ex, "signature")).toBe("def f(x, y):\n    ...\n\ndef g(a,\n      b=1):\n    ...");
+    expect(scaffoldStarter(ex, "blank")).toBe("# Viết f(...), g(...) ở đây.");
+    expect(scaffoldStarter(ex, "full")).toBe(ex.starter);
+  });
+});
+
+describe("variations", () => {
+  const variant = catalog.exercises.find((e) => e.variantOf && !catalog.exercise(e.variantOf)!.diagnostic);
+
+  it.skipIf(!variant)("offers a variation right after its exercise is learnt, never before", () => {
+    const clock = { now: T0 };
+    const m = mentorAt(clock);
+    while (pickToday(m.state(), catalog, clock.now)?.reason === "diagnostic") finish(m);
+    const parent = variant!.variantOf!;
+    expect(pickToday(m.state(), catalog, clock.now)?.exerciseId).not.toBe(variant!.id);
+    finish(m, { exerciseId: parent });
+    expect(pickToday(m.state(), catalog, clock.now)).toMatchObject({ reason: "variant", exerciseId: variant!.id });
+    const s = new MentorSession(m, m.start(variant!.id).attemptId);
+    expect(s.view().variantOf).toBe(catalog.exercise(parent)!.title);
+    expect(m.home().stars.find((x) => x.id === variant!.star)!.exercises.find((x) => x.id === variant!.id)).toMatchObject({ variant: true });
+  });
+
+  it.skipIf(!variant)("writes the prediction cell, and the agent reads it", async () => {
+    const { exerciseCells, PREDICT_ID } = await import("../src/mentor/notebook.js");
+    const { learnerCells } = await import("../src/mentor/prompt.js");
+    const cells = exerciseCells(variant!);
+    expect(cells.some((c) => c.id === PREDICT_ID)).toBe(true);
+    expect(cells.find((c) => c.id === "mentor-lab")!.source).toContain(variant!.predict!.slice(0, 20));
+    const written = cells.map((c) => (c.id === PREDICT_ID ? { ...c, source: "Mình đoán loss nhỏ nhất không còn bằng 0." } : c));
+    expect(learnerCells(written)).toContain("Prediction (written before coding):\nMình đoán");
+    expect(learnerCells(cells)).toContain("Prediction: not written yet.");
   });
 });

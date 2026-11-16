@@ -1,0 +1,22 @@
+[
+  {
+    "q": "So dự đoán với thực tế: với ε = 0.1, C = 10, loss nhỏ nhất là bao nhiêu và đạt tại đâu? Khi đẩy logit đúng lên +∞ thì loss đi về đâu? Bạn đoán đúng phần nào, lệch phần nào?",
+    "tag": "predict-vs-reality",
+    "answer": "Nhỏ nhất khi softmax(z) = q, loss = H(q) = −(0.91 ln 0.91 + 9 · 0.01 ln 0.01) ≈ 0.50, tại khoảng cách logit đúng − sai = ln(0.91/0.01) ≈ 4.5. Đẩy lên +∞ thì log p của lớp sai → −∞ nên loss tăng tuyến tính (≈ ε(C−1)/C · m), không về 0."
+  },
+  {
+    "q": "Gradient của loss (một mẫu) theo logits là gì? So với cross-entropy thường, nó thay đổi điều gì khi mô hình đã đoán đúng rất tự tin?",
+    "tag": "ls-grad",
+    "answer": "softmax(z) − q. Với CE thường là softmax(z) − onehot, chỉ về 0 khi p_y → 1 (logit → ∞). Với smoothing, gradient bằng 0 tại p = q và đổi dấu khi p_y > 1 − ε + ε/C, nên kéo logits về khoảng cách hữu hạn: chống tự tin quá mức, logits không phình."
+  },
+  {
+    "q": "Có quy ước khác chia ε cho C − 1 lớp sai (lớp đúng nhận đúng 1 − ε). Hai quy ước khác nhau thế nào, và vì sao cần nói rõ khi so kết quả với PyTorch?",
+    "tag": "ls-convention",
+    "answer": "PyTorch chia ε/C cho mọi lớp (lớp đúng nhận 1 − ε + ε/C); quy ước kia cho lớp đúng 1 − ε, lớp sai ε/(C−1). Chúng tương đương với ε khác nhau (ε' = ε(C−1)/C) nhưng cho số khác nhau với cùng ε, nên loss và tối ưu lệch nhau."
+  },
+  {
+    "q": "Label smoothing có thể viết thành (1 − ε)·CE(z, y) + ε·(một số hạng khác). Số hạng đó là gì và nó phạt điều gì?",
+    "tag": "ls-decomposition",
+    "answer": "ε · (−(1/C) Σ_c log p_c), tức cross-entropy với phân phối đều = KL(đều ‖ p) + log C. Nó phạt phân phối dự đoán xa phân phối đều, tức phạt tự tin quá mức (giống một regularizer entropy)."
+  }
+]

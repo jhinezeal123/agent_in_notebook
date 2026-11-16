@@ -5,9 +5,9 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { MENTOR_HINT_MAX, type MentorHome, type MentorStage } from "@ainb/protocol";
+import { MENTOR_HINT_MAX, type MentorHome, type MentorKind, type MentorScaffold, type MentorStage } from "@ainb/protocol";
 import { loadCatalog, type Catalog, type Exercise } from "./catalog.js";
-import { dayOf, fold, home, pickToday, type AttemptState, type MentorEvent, type MentorState } from "./model.js";
+import { dayOf, dueMistakes, fold, home, pickToday, pickWarmup, scaffoldFor, type AttemptState, type MentorEvent, type MentorState } from "./model.js";
 import { exerciseNotebook } from "./notebook.js";
 import { fileId, MentorStore } from "./store.js";
 
@@ -92,33 +92,47 @@ export class Mentor {
   }
 
   /**
-   * Start an exercise (today's when none is named), or reopen its unfinished
-   * attempt; the notebook is written again if its file is gone.
+   * Start an exercise (today's, or today's review, when none is named), or
+   * reopen its unfinished attempt of that kind; the notebook is written again
+   * if its file is gone.
    */
-  start(exerciseId?: string): { attemptId: string; exerciseId: string; file: string; resumed: boolean } {
+  start(exerciseId?: string, kind: MentorKind = "learn"): { attemptId: string; exerciseId: string; file: string; resumed: boolean } {
     const state = this.state();
-    const today = pickToday(state, this.catalog, this.now());
+    const today = kind === "review" ? pickWarmup(state, this.catalog, this.now()) : pickToday(state, this.catalog, this.now());
     const id = exerciseId ?? today?.exerciseId;
-    if (!id) throw new Error("Bạn đã làm hết các bài hiện có. Bài mới sẽ được bổ sung.");
+    if (!id) throw new Error(kind === "review" ? "Hôm nay không có bài nào đến hạn ôn." : "Bạn đã làm hết các bài hiện có. Bài mới sẽ được bổ sung.");
     const ex = this.exercise(id);
-    const open = [...state.order].reverse().map((a) => state.attempts.get(a)!).find((a) => a.exerciseId === id && !a.doneAt);
+    const open = [...state.order].reverse().map((a) => state.attempts.get(a)!).find((a) => a.exerciseId === id && a.kind === kind && !a.doneAt);
     if (open) {
-      if (!existsSync(open.file)) this.writeNotebook(ex, open.file);
+      if (!existsSync(open.file)) this.writeNotebook(ex, open.file, open.kind, open.scaffold);
       return { attemptId: open.attemptId, exerciseId: id, file: open.file, resumed: true };
     }
     const dir = this.workDir();
     mkdirSync(dir, { recursive: true });
-    const stem = `${dayOf(this.now())}-${ex.id}`;
+    const stem = `${dayOf(this.now())}-${ex.id}${kind === "review" ? "-on-tap" : ""}`;
     let file = join(dir, `${stem}.ipynb`);
     for (let n = 2; existsSync(file); n++) file = join(dir, `${stem}-${n}.ipynb`);
-    this.writeNotebook(ex, file);
+    const scaffold = scaffoldFor(state, ex, kind);
+    this.writeNotebook(ex, file, kind, scaffold);
     const attemptId = `a${this.now().toString(36)}${randomBytes(3).toString("hex")}`;
-    this.record({ t: "start", attemptId, exerciseId: ex.id, file });
+    this.record({ t: "start", attemptId, exerciseId: ex.id, file, ...(kind === "review" ? { kind } : {}), scaffold });
     return { attemptId, exerciseId: ex.id, file, resumed: false };
   }
 
-  private writeNotebook(ex: Exercise, file: string): void {
-    writeFileSync(file, exerciseNotebook(ex), { flag: existsSync(file) ? "w" : "wx" });
+  private writeNotebook(ex: Exercise, file: string, kind: MentorKind, scaffold: MentorScaffold): void {
+    writeFileSync(file, exerciseNotebook(ex, { kind, scaffold }), { flag: existsSync(file) ? "w" : "wx" });
+  }
+
+  /**
+   * Misconceptions from the book to ask again in this attempt, with the
+   * question bank's question and right answer when the tag comes from one.
+   */
+  recallsDue(attemptId: string): { tag: string; note: string; exercise: string; question?: string; answer?: string }[] {
+    return dueMistakes(this.state(), attemptId, dayOf(this.now())).map((m) => {
+      const ex = this.catalog.exercise(m.exerciseId);
+      const probe = ex?.probeBank.find((p) => p.tag.toLowerCase() === m.tag.toLowerCase());
+      return { tag: m.tag, note: m.note, exercise: ex?.title ?? m.exerciseId, ...(probe ? { question: probe.q, answer: probe.answer } : {}) };
+    });
   }
 
   /** Learner-wide context for the agent: ratings and recent misconceptions. */

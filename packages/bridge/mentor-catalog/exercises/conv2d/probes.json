@@ -1,0 +1,32 @@
+[
+  {
+    "q": "Một lớp conv có C_in = 64, C_out = 128, kernel 3×3. Nó có bao nhiêu tham số? So với một lớp fully-connected nối tensor 64×32×32 vào 128×32×32 thì sao? Hai ý tưởng nào làm nên sự khác biệt?",
+    "tag": "conv-params",
+    "answer": "128·64·3·3 + 128 = 73 856 tham số, không phụ thuộc kích thước ảnh. Fully-connected cần (64·32·32)·(128·32·32) ≈ 8.6·10⁹. Khác biệt đến từ kết nối cục bộ (mỗi output chỉ nhìn cửa sổ k×k) và chia sẻ trọng số (cùng kernel ở mọi vị trí)."
+  },
+  {
+    "q": "Deep learning gọi là 'convolution' nhưng thật ra làm cross-correlation. Lật hay không lật kernel có ảnh hưởng gì tới khả năng học của mạng không? Vậy khi nào nó thực sự quan trọng?",
+    "tag": "flip-matters",
+    "answer": "Không ảnh hưởng tới khả năng học: kernel lật cũng chỉ là một bộ tham số khác, mạng tự học được bản lật. Nó quan trọng khi nạp trọng số đã train từ cài đặt khác, khi so khớp với framework chuẩn, hoặc khi dùng kernel thiết kế sẵn có hướng (Sobel…)."
+  },
+  {
+    "q": "Với stride 1 và kernel k lẻ, cần padding bao nhiêu để output cùng kích thước với input ('same')? Vì sao kernel chẵn khó làm 'same' một cách đối xứng?",
+    "tag": "same-padding",
+    "answer": "p = (k − 1)/2, từ H + 2p − k + 1 = H. Với k chẵn thì k − 1 lẻ, không chia đều cho hai phía, phải pad lệch (một phía nhiều hơn một ô), tâm kernel lệch nửa pixel."
+  },
+  {
+    "q": "Chồng hai lớp conv 3×3 (stride 1) thì một output nhìn thấy vùng bao nhiêu của input? So sánh số tham số của hai lớp 3×3 với một lớp 5×5 (C kênh vào và ra). Vì sao VGG chọn cách chồng?",
+    "tag": "receptive-field",
+    "answer": "Receptive field 5×5. Hai lớp 3×3: 2·9·C² = 18C² tham số; một lớp 5×5: 25C². Chồng 3×3 ít tham số hơn và có thêm một phi tuyến ở giữa, biểu diễn mạnh hơn."
+  },
+  {
+    "q": "Với H = 8, k = 3, stride 2, padding 0 thì H_out bằng mấy? Hàng cuối của ảnh có được cửa sổ nào nhìn thấy không? Điều đó nói gì về phép làm tròn xuống trong công thức?",
+    "tag": "floor-drops-pixels",
+    "answer": "H_out = ⌊(8 − 3)/2⌋ + 1 = 3; cửa sổ bắt đầu ở hàng 0, 2, 4 và phủ tới hàng 6, hàng 7 bị bỏ qua. Làm tròn xuống nghĩa là phần rìa không đủ một bước nhảy bị bỏ, thông tin ở đó không vào output."
+  },
+  {
+    "q": "im2col biến conv thành một phép nhân ma trận. Ma trận cột có shape gì, tốn bao nhiêu bộ nhớ so với x? Đổi lại ta được gì?",
+    "tag": "im2col-cost",
+    "answer": "Shape (N·H_out·W_out, C_in·kH·kW) (hoặc chuyển vị). Mỗi phần tử của x bị chép khoảng kH·kW/s² lần, nên bộ nhớ lớn hơn x cỡ đó. Đổi lại dùng được GEMM đã tối ưu (BLAS, GPU), nhanh hơn nhiều so với vòng lặp Python."
+  }
+]

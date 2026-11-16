@@ -1,0 +1,14 @@
+{
+  "id": "rmsnorm",
+  "title": "RMSNorm (biến thể của LayerNorm)",
+  "star": "norm",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1500,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["rms_norm"],
+  "probes": 2,
+  "variantOf": "layernorm",
+  "predict": "Một token có **mọi feature bằng cùng một hằng số** $c \\neq 0$ (ví dụ $c = 7$ hoặc $c = -3$, $d = 4$). Qua LayerNorm ($\\gamma = 1, \\beta = 0$) token đó ra vector gì, qua RMSNorm ($\\gamma = 1$) ra vector gì? Dấu của $c$ có làm kết quả khác đi không?"
+}

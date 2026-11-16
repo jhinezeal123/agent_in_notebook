@@ -1,0 +1,22 @@
+[
+  {
+    "q": "So dự đoán với thực tế: với vector đơn vị, ||x − y||² bằng gì theo cos(x, y)? Kiểm bằng code của bạn (chuẩn hoá rồi so pairwise_sqdist với cosine_sim). Láng giềng gần nhất theo hai cách có trùng nhau không, và bạn đoán lệch chỗ nào?",
+    "tag": "predict-vs-reality",
+    "answer": "||x − y||² = ||x||² + ||y||² − 2xᵀy = 2 − 2cos(x, y). Đây là hàm affine giảm của cosine nên thứ tự bị đảo ngược hoàn toàn: khoảng cách nhỏ nhất ⇔ cosine lớn nhất, k-NN theo hai cách trùng nhau. Chưa chuẩn hoá thì không trùng, vì khoảng cách còn phụ thuộc độ dài."
+  },
+  {
+    "q": "Chia rồi nhân ma trận ((X/‖X‖) @ (Y/‖Y‖)ᵀ) hay nhân trước rồi chia cho tích ngoài của hai vector chuẩn: bộ nhớ và số phép tính khác nhau thế nào? Có cần mảng trung gian (n, m, d) như cách trừ broadcasting ở bài trước không?",
+    "tag": "cosine-memory",
+    "answer": "Không cần (n, m, d): chỉ một phép nhân ma trận n×d · d×m cộng hai vector chuẩn, bộ nhớ O(nd + md + nm). Chuẩn hoá trước tốn O((n+m)d), chia sau tốn O(nm); cả hai đều rẻ so với phép nhân O(nmd)."
+  },
+  {
+    "q": "Vì sao kẹp max(‖x‖, ε) riêng từng chuẩn mà không kẹp tích max(‖x‖·‖y‖, ε)? Cho một ví dụ hai cách cho kết quả khác nhau.",
+    "tag": "cosine-eps",
+    "answer": "Kẹp tích chỉ có tác dụng khi tích < ε; hai vector chuẩn 1e-5 có tích 1e-10 < ε = 1e-8 nên cosine bị thu nhỏ còn 1e-10/1e-8 · cos dù từng vector không nhỏ đến mức suy biến. Kẹp riêng (cách PyTorch hiện dùng) chỉ ảnh hưởng vector thật sự gần 0, và mỗi vector đã chuẩn hoá có thể dùng lại."
+  },
+  {
+    "q": "Trong CLIP/SimCLR, cosine được chia thêm cho một nhiệt độ τ trước softmax. Vì sao cần τ khi cosine đã nằm trong [−1, 1]?",
+    "tag": "cosine-temperature",
+    "answer": "Logits trong [−1, 1] quá phẳng: softmax gần đều, loss không thể nhỏ và gradient yếu. Chia cho τ nhỏ (0.07) kéo giãn khoảng logits để softmax tập trung được vào cặp dương."
+  }
+]

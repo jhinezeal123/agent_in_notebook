@@ -1,0 +1,12 @@
+{
+  "id": "conv2d",
+  "title": "conv2d forward: stride, padding và nhiều kênh",
+  "star": "conv",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1600,
+  "minutes": 30,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["conv2d"],
+  "probes": 3
+}

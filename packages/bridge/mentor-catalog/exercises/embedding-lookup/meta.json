@@ -1,0 +1,12 @@
+{
+  "id": "embedding-lookup",
+  "title": "Embedding: tra bảng và gradient scatter-add",
+  "star": "embedding",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1300,
+  "minutes": 25,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["embedding_forward", "embedding_backward"],
+  "probes": 3
+}

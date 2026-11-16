@@ -97,9 +97,18 @@ VS Code                                   bridge (bridge/src/mentor)            
   - `chat.open` với khóa `vscode:file:///…` tra file đó trong kho Mentor (`Mentor.attemptForFile`). Nếu là notebook của một lượt làm bài thì chat mang `MentorSession`.
   - Chat mentor không có project: bỏ `refreshProject`, `refreshMachine`, không lưu `NotebookMeta`, không hiện trong `chats.list`. OpenResearch không bị khởi động.
 - **Kho** ở `~/.agent-in-notebook/mentor/`:
-  - `events.jsonl` chỉ ghi thêm, là nguồn sự thật: `start`, `stage`, `judge`, `hint`, `probe`, `misconception`, `done`. Mỗi sự kiện mang ngày địa phương (ngày đổi lúc 4 giờ sáng).
+  - `events.jsonl` chỉ ghi thêm, là nguồn sự thật: `start` (kèm `kind` và `scaffold`), `stage`, `judge`, `hint`, `probe`, `misconception`, `recall`, `done`. Mỗi sự kiện mang ngày địa phương (ngày đổi lúc 4 giờ sáng).
   - `profile.json`: thư mục bài làm (mặc định `Documents\ml-mentor`).
-  - Mọi con số đều tính lại bằng phép gộp thuần `model.ts: fold/home`: Elo theo từng kỹ năng (bắt đầu 1000, K = 120/80/40 theo số bài đã làm), chuỗi ngày có ngày nghỉ phép, lịch nhiệt 16 tuần, trạng thái các sao, `pickToday` (làm tiếp → chẩn đoán → làm lại sau khi xem lời giải 3 ngày → bài kế trên bản đồ).
+  - Mọi con số đều tính lại bằng phép gộp thuần `model.ts: fold/home`: Elo theo từng kỹ năng (bắt đầu 1000, K = 120/80/40 theo số bài đã làm), chuỗi ngày có ngày nghỉ phép, lịch nhiệt 16 tuần, trạng thái các sao, `pickToday` (làm tiếp → chẩn đoán → làm lại sau khi xem lời giải 3 ngày → biến thể của bài vừa vững → bài kế trên bản đồ).
+- **Ôn ngắt quãng** (`kind: "review"`):
+  - Tự làm đúng một bài (không xem lời giải) thì `scheduleReview` hẹn ôn sau 3 ngày. Ôn đạt với gợi ý tối đa mức 1 thì lần sau cách 10, rồi 30 ngày, rồi coi như đã thuộc; dựa vào gợi ý cao hơn hoặc xem lời giải thì quay về 3 ngày.
+  - Lượt ôn bắt đầu ở chặng `build`, notebook chỉ có đề và một cell trống, không có Phòng công thức hay Bảo vệ. Chấm đạt là xong (`judged` gọi `setStage("done")`).
+  - Điểm của lượt ôn chỉ tính phần code; gợi ý quá mức 1 thì điểm tối đa 0,3 (coi là quên). Rating đổi bằng một nửa K.
+  - `pickWarmup` chọn bài ôn dở, hoặc bài quá hạn lâu nhất, thành thẻ "Khởi động" trên trang chủ. `starFade` làm sao mờ dần theo số ngày quá hạn (mờ hẳn sau 14 ngày); ôn xong là sáng lại.
+- **Sổ lỗi sai**: `misconception` đưa một tag vào sổ, hẹn hỏi lại sau 2 ngày. Ở chặng `lab` của bài kế tiếp, `<mentor-state>` liệt kê tối đa 3 tag đến hạn, kèm câu hỏi và đáp án trong ngân hàng nếu tag đến từ đó. Mentor hỏi lại và chấm bằng `mentor_recall`: đúng thì hẹn sau 7 ngày, đúng 2 lần liền thì "đã vững"; sai thì quay về 2 ngày.
+- **Khung code thưa dần** (`scaffoldFor`, `scaffoldStarter`): bài chẩn đoán và rating thấp (< 1250 ở kỹ năng yếu nhất của bài) có starter đầy đủ; 1250–1500 chỉ còn dòng `def`; từ 1500 là cell trống. Lượt ôn luôn trống.
+- **Biến thể** (`variantOf`, `predict` trong `meta.json`): một bài nhỏ đổi một chi tiết của bài gốc, cùng ngôi sao, chỉ mở khi bài gốc đã vững. Chặng đầu là viết dự đoán vào cell `mentor-predict`; sau khi chấm đạt, mentor bắt so dự đoán với thực tế rồi mới hỏi vặn.
+- **Nhận xét code** (`mentor.codeReview`): sau khi xong bài, mentor review lời giải như một đàn anh, được phép đưa đoạn code mẫu, không ảnh hưởng rating.
 - **Bài soạn sẵn** ở `bridge/mentor-catalog/`:
   - `map.json`: các chòm sao, sao, vị trí và quan hệ "học trước".
   - `exercises/<id>/`: `meta.json` (kiểm bằng zod trong `catalog.ts`), `brief.md`, `lab.py` (Phòng công thức), `starter.py`, `reference.py`, `tests.py`, `probes.json` (câu hiểm kèm đáp án cho mentor), `mutants/*.py` (bản cố tình sai).
@@ -114,13 +123,14 @@ VS Code                                   bridge (bridge/src/mentor)            
   - Playbook `<mentor>` thay playbook gốc: không sửa cell của bạn, gợi ý đúng mức cho phép, hỏi câu hiểm từ ngân hàng câu hỏi.
   - Mỗi lượt có `<mentor-state>`: chặng, mức gợi ý, kết quả chấm, các cell bài làm nếu đã đổi.
   - Lời giải mẫu chỉ có trong khối `<hint-request level="4">`.
-  - Danh sách công cụ cho phép (`MENTOR_CHAT_TOOLS`): `kernel_state`, `read_output`, `run_code`, `wait_for_code`, `interrupt_kernel`, cùng `mentor_read_cells`, `mentor_stage`, `mentor_probe_result`, `mentor_misconception`. `/mcp/list` trả theo từng chat. Settings cố định (`MENTOR_SETTINGS`); khung chat ẩn bộ chọn Mode, Review, Notebook only và nút chèn code thành cell.
+  - Danh sách công cụ cho phép (`MENTOR_CHAT_TOOLS`): `kernel_state`, `read_output`, `run_code`, `wait_for_code`, `interrupt_kernel`, cùng `mentor_read_cells`, `mentor_stage`, `mentor_probe_result`, `mentor_recall`, `mentor_misconception`. `/mcp/list` trả theo từng chat. Settings cố định (`MENTOR_SETTINGS`); khung chat ẩn bộ chọn Mode, Review, Notebook only và nút chèn code thành cell.
   - Danh sách này không phải hộp cát: `run_code` vẫn ghi được file, và agent không phải Claude giữ shell riêng.
 - **Giao diện**:
   - Khung chat (`ui/src/mentor-bar.tsx`): thanh ba chặng, nút Chấm bài, Xin gợi ý n/4 (mức 4 hỏi xác nhận vì không được cộng rating), thẻ kết quả chấm và thẻ rating.
-  - Trang chủ (`ui/src/mentor/home.tsx`, `constellation.ts`, `ui/mentor.css`): bản đồ chòm sao SVG trên nền trời đêm riêng, bài hôm nay, kỹ năng, chuỗi ngày và lịch nhiệt, tủ paper, kiểm tra máy (Python, numpy, matplotlib, ipykernel, PyTorch, extension Jupyter) kèm lệnh cài.
+  - Trang chủ (`ui/src/mentor/home.tsx`, `constellation.ts`, `ui/mentor.css`): bản đồ chòm sao SVG trên nền trời đêm riêng, thẻ Khởi động (bài ôn), bài hôm nay kèm lịch ôn sắp tới, kỹ năng, chuỗi ngày và lịch nhiệt, sổ lỗi sai, tủ paper, kiểm tra máy (Python, numpy, matplotlib, ipykernel, PyTorch, extension Jupyter) kèm lệnh cài.
+  - Chuyển động: sao nhấp nháy, số rating chạy từ giá trị cũ, sao vừa vững (hoặc vừa ôn xong) bùng sáng một lần. Những sao đã thấy được nhớ trong `localStorage` của webview. Mọi chuyển động tắt khi máy bật giảm chuyển động.
   - Host (`vscode/src/mentor-host.ts`): tab "Mentor" (lệnh `ainb.mentor.open`, nút ngôi sao trên tiêu đề khung chat), mục thanh trạng thái; bắt đầu bài thì mở notebook ở giữa và focus khung chat.
-- **Giao thức**: `WIRE_VERSION = 5`. Phương thức `mentor.home/start/judge/hint/stage/env/settings`; sự kiện `chat.mentor` và `mentor.updated`.
+- **Giao thức**: `WIRE_VERSION = 5`. Phương thức `mentor.home/start/judge/hint/stage/codeReview/env/settings`; sự kiện `chat.mentor` và `mentor.updated`.
 
 ## Luồng một tool call
 

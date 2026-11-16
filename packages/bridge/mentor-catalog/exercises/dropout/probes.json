@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Bài báo dropout gốc không phóng 1/(1−p) khi train mà nhân trọng số với (1−p) khi test. Hai cách có tương đương không? Vì sao các thư viện chọn cách 'inverted'?",
+    "tag": "inverted-vs-test-scaling",
+    "answer": "Tương đương về kỳ vọng của đầu vào lớp sau. Inverted đặt toàn bộ xử lý vào lúc train nên lúc inference là identity: không cần biết p, không cần sửa trọng số, đổi p giữa chừng không phải sửa code eval."
+  },
+  {
+    "q": "Inverted dropout giữ kỳ vọng. Nó có giữ phương sai không? Hệ quả gì khi chuyển từ train sang eval, nhất là khi ngay sau dropout là BatchNorm?",
+    "tag": "dropout-variance-shift",
+    "answer": "Không: phương sai khi train lớn hơn (thêm nhiễu Bernoulli, tăng theo p/(1−p)). Khi eval phương sai nhỏ đi, nên thống kê chạy (running var) của BatchNorm học lúc train không khớp lúc eval (variance shift), làm giảm độ chính xác."
+  },
+  {
+    "q": "Vì sao backward phải dùng đúng mask của forward chứ không lấy mask mới? Gradient của một phần tử bị bỏ là bao nhiêu?",
+    "tag": "same-mask-backward",
+    "answer": "Hàm forward cụ thể của lần đó là out = x·m/(1−p) với m cố định; đạo hàm là m/(1−p). Lấy mask mới là lấy đạo hàm của một hàm khác. Phần tử bị bỏ có gradient 0 (không ảnh hưởng loss)."
+  },
+  {
+    "q": "Quên gọi model.eval() khi đánh giá thì triệu chứng là gì? Còn cố ý giữ dropout khi inference (MC dropout) để làm gì?",
+    "tag": "eval-mode",
+    "answer": "Dự đoán ngẫu nhiên, chạy hai lần ra hai kết quả, độ chính xác thường thấp hơn và dao động. MC dropout lấy nhiều lần forward có dropout rồi lấy trung bình/phương sai để ước lượng độ bất định của mô hình."
+  },
+  {
+    "q": "Với p = 0.5, giải thích ý 'dropout là trung bình của rất nhiều mạng con'. Phép chia 1/(1−p) xấp xỉ việc lấy trung bình đó chính xác khi nào?",
+    "tag": "ensemble-view",
+    "answer": "Mỗi mask chọn một mạng con trong 2^n mạng chia sẻ trọng số; train là train ngẫu nhiên các mạng con. Eval với mạng đầy đủ (weight scaling) bằng đúng trung bình các mạng con nếu mạng tuyến tính; với phi tuyến chỉ là xấp xỉ."
+  }
+]

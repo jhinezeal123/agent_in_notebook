@@ -6,6 +6,9 @@ import { useState } from "preact/hooks";
 import { MENTOR_HINT_LABEL, MENTOR_HINT_MAX, MENTOR_SKILL_LABEL, MENTOR_STAGE_LABEL, mentorRank, type MentorCardBody, type MentorChat, type MentorStage } from "@ainb/protocol";
 
 const STEPS: MentorStage[] = ["lab", "build", "defend"];
+const VARIANT_HINT = "Viết dự đoán vào cell Dự đoán và gửi mentor, trước khi code";
+const REVIEW_HINT = "Cài lại từ trí nhớ, rồi bấm Chấm bài: qua máy chấm là xong buổi ôn";
+
 const STEP_HINT: Record<MentorStage, string> = {
   lab: "Chạy các cell công thức, rồi kể lại công thức bằng lời của bạn",
   build: "Phác thảo, rồi tự code trong cell bài làm và bấm Chấm bài",
@@ -13,7 +16,7 @@ const STEP_HINT: Record<MentorStage, string> = {
   done: "Bài đã xong",
 };
 
-export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome }: {
+export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome, onCodeReview }: {
   mentor: MentorChat;
   /** The agent is answering, or the judge is running: the buttons wait. */
   busy: boolean;
@@ -21,10 +24,16 @@ export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome }: {
   onHint: () => void;
   onStage: (stage: MentorStage) => void;
   onHome: () => void;
+  onCodeReview: () => void;
 }) {
   const [confirmReveal, setConfirmReveal] = useState(false);
   const done = mentor.stage === "done";
-  const at = STEPS.indexOf(mentor.stage);
+  const review = mentor.kind === "review";
+  const steps: MentorStage[] = review ? ["build"] : STEPS;
+  const variant = !!mentor.variantOf;
+  const stepLabel = (s: MentorStage) => (review ? "Cài lại từ cell trống" : variant && s === "lab" ? "Dự đoán" : MENTOR_STAGE_LABEL[s]);
+  const stepHint = (s: MentorStage) => (review ? REVIEW_HINT : variant && s === "lab" ? VARIANT_HINT : STEP_HINT[s]);
+  const at = steps.indexOf(mentor.stage);
   const next = Math.min(MENTOR_HINT_MAX, mentor.hintLevel + 1);
   const v = mentor.verdict;
   const hint = () => {
@@ -39,20 +48,26 @@ export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome }: {
     <section class="mentor-bar" aria-label="Bài Mentor">
       <div class="mentor-bar-body chat-width">
         <div class="mentor-head">
-          <span class="mentor-mark" aria-hidden="true">✦</span>
-          <span class="mentor-title" title={mentor.title}>{mentor.title}</span>
+          <span class="mentor-mark" aria-hidden="true">{review ? "🔁" : "✦"}</span>
+          <span class="mentor-title" title={variant ? `Biến thể của: ${mentor.variantOf}` : mentor.title}>{review ? `Ôn lại: ${mentor.title}` : variant ? `Biến thể: ${mentor.title}` : mentor.title}</span>
           <button class="linkish mentor-home-link" onClick={onHome} title="Mở trang Mentor (bản đồ, rating, chuỗi ngày)">Trang Mentor</button>
         </div>
         <ol class="mentor-steps">
-          {STEPS.map((s, i) => (
-            <li key={s} class={done || i < at ? "done" : i === at ? "current" : ""} title={STEP_HINT[s]}>
+          {steps.map((s, i) => (
+            <li key={s} class={done || i < at ? "done" : i === at ? "current" : ""} title={stepHint(s)}>
               <span class="mentor-step-dot" aria-hidden="true">{done || i < at ? "✓" : i + 1}</span>
-              <span>{MENTOR_STAGE_LABEL[s]}</span>
+              <span>{stepLabel(s)}</span>
               {s === "defend" && (mentor.stage === "defend" || done) && <span class="mentor-step-count">{mentor.probes.done}/{mentor.probes.needed}</span>}
             </li>
           ))}
         </ol>
-        {!done && <div class="mentor-now">{STEP_HINT[mentor.stage]}</div>}
+        {!done && <div class="mentor-now">{stepHint(mentor.stage)}</div>}
+        {done && (
+          <div class="mentor-actions">
+            <button class="secondary small" disabled={busy} onClick={onCodeReview} title="Mentor nhận xét code của bạn như một đàn anh review; không ảnh hưởng rating">Nhận xét code</button>
+            {mentor.result && !mentor.result.revealed && <span class="mentor-score ok">{Math.round(mentor.result.score * 100)} điểm</span>}
+          </div>
+        )}
         {!done && (
           <div class="mentor-actions">
             <button class="primary small" disabled={busy} onClick={onJudge} title="Chạy bộ test ẩn trên cell bài làm của bạn">Chấm bài</button>
@@ -65,7 +80,7 @@ export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome }: {
               Xin gợi ý <span class="mentor-hint-level">{mentor.hintLevel}/{MENTOR_HINT_MAX}</span>
             </button>
             {mentor.stage === "lab" && (
-              <button class="linkish" disabled={busy} onClick={() => onStage("build")} title="Bỏ qua phần kể lại công thức (được ghi lại)">Sang Dựng</button>
+              <button class="linkish" disabled={busy} onClick={() => onStage("build")} title={variant ? "Bỏ qua phần dự đoán (được ghi lại)" : "Bỏ qua phần kể lại công thức (được ghi lại)"}>Sang Dựng</button>
             )}
             {v && (
               <span class={`mentor-score ${v.ok ? "ok" : "fail"}`} title={`${mentor.judges} lần chấm`}>
@@ -129,7 +144,10 @@ export function MentorCardBody({ body }: { body: MentorCardBody }) {
           );
         })}
       </ul>
-      <div class="card-status">Chuỗi ngày học: {body.streak} ngày{r.revealed ? " · bài sẽ quay lại sau 3 ngày" : ""}</div>
+      <div class="card-status">
+        Chuỗi ngày học: {body.streak} ngày
+        {r.nextReview === null ? " · bài này đã thuộc, không cần ôn nữa" : r.nextReview ? ` · ôn lại sau ${r.nextReview} ngày` : r.revealed ? " · bài sẽ quay lại sau 3 ngày" : ""}
+      </div>
     </div>
   );
 }

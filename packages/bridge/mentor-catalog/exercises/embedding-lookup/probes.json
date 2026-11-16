@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Viết `dW[ids] += grad_out` (với ids 1 chiều) thì sai ở đâu khi ids có phần tử trùng? Giải thích bằng cách NumPy thực thi phép đó, và nói cách sửa.",
+    "tag": "fancy-index-accumulate",
+    "answer": "`a[idx] += v` được dịch thành `a[idx] = a[idx] + v`: đọc một lần, cộng, rồi ghi; với chỉ số trùng, lần ghi sau đè lần trước nên chỉ còn một đóng góp. Cần phép cộng không buffer: np.add.at (hoặc np.bincount theo từng cột, hoặc onehot.T @ G)."
+  },
+  {
+    "q": "Embedding tương đương onehot @ W. Vậy vì sao không cài đặt nó bằng phép nhân đó? So sánh chi phí forward và backward, và nói ∂L/∂W có dạng gì.",
+    "tag": "embedding-as-matmul",
+    "answer": "onehot @ W tốn O(N·V·d) tính toán và O(N·V) bộ nhớ; tra bảng chỉ O(N·d). Backward onehot.T @ G chính là scatter-add. ∂L/∂W thưa: chỉ các hàng của token có xuất hiện mới khác 0."
+  },
+  {
+    "q": "Gradient của embedding thưa (đa số hàng bằng 0). Với SGD thuần thì sao, còn với Adam (có momentum, weight decay) thì những hàng không xuất hiện trong batch có bị cập nhật không?",
+    "tag": "sparse-grad-optimizer",
+    "answer": "SGD: hàng có gradient 0 không đổi. Adam: m và v vẫn mang giá trị cũ nên hàng vẫn bị cập nhật dù gradient bằng 0, weight decay cũng kéo nó về 0; vì vậy mới có SparseAdam / lazy Adam chỉ cập nhật các hàng có xuất hiện."
+  },
+  {
+    "q": "NumPy chấp nhận W[-1]. Trong một mô hình ngôn ngữ, id âm hay id ≥ V có thể đến từ đâu, và vì sao để nó lặng lẽ chạy là nguy hiểm?",
+    "tag": "negative-index-wrap",
+    "answer": "Từ giá trị padding/ignore (vd -100) bị đưa nhầm vào embedding, tokenizer và model lệch vocab, cộng thêm token đặc biệt mà quên mở rộng bảng. Id âm lặng lẽ lấy hàng cuối nên model vẫn train nhưng học sai, rất khó phát hiện; phải kiểm và báo lỗi."
+  },
+  {
+    "q": "Khi dùng weight tying (lớp output dùng chung W với embedding: logits = h @ W.T), gradient của W gồm những phần nào?",
+    "tag": "weight-tying-grad",
+    "answer": "Tổng của hai đường: scatter-add từ embedding ở đầu vào, và gradient từ lớp output G_logits.T @ h (dày đặc trên mọi hàng). Tham số dùng chung ở nhiều chỗ thì gradient các chỗ cộng lại."
+  }
+]

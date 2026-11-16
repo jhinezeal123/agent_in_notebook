@@ -27,6 +27,8 @@ export interface MapLink {
   lit: boolean;
   /** One end started: the line shows faintly. */
   near: boolean;
+  /** The dimmer end's fade (an overdue review). */
+  fade: number;
 }
 
 export interface MapLabel {
@@ -72,6 +74,7 @@ export function layout(home: Pick<MentorHome, "stars" | "constellations" | "toda
         from: a, to: s.id, x1: from.cx, y1: from.cy, x2: s.cx, y2: s.cy,
         lit: from.state === "mastered" && s.state === "mastered",
         near: from.state !== "locked" || s.state !== "locked",
+        fade: Math.max(from.fade, s.fade),
       });
     }
   }

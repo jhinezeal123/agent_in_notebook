@@ -174,6 +174,32 @@ code { font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, 
 .mh-shelf-paper { font-size: 12px; color: var(--mh-gold-soft); }
 .mh-shelf p { margin: 0 0 6px; font-size: 12px; }
 .mh-recent li { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 8px; padding: 4px 0; }
+/* spaced review: a star dims as its review goes overdue */
+.mh-star.fading .mh-core { opacity: calc(1 - 0.6 * var(--fade, 0)); stroke: #9aa6d8; stroke-dasharray: 2 2; }
+.mh-star.fading .mh-halo { fill-opacity: calc(1 - 0.9 * var(--fade, 0)); }
+.mh-star.fading .mh-star-label { fill: #c9b98a; }
+.lg.fading { background: #b8ad8a; opacity: 0.6; box-shadow: none; }
+.mh-chip.fading, .mh-chip.reason-review { background: rgba(196, 161, 255, 0.16); color: #dccbff; }
+.mh-warmup { background: linear-gradient(160deg, rgba(196, 161, 255, 0.14), transparent 55%), var(--mh-card); border-color: rgba(196, 161, 255, 0.32); }
+.mh-warmup p { font-size: 12px; margin: 10px 0 0; }
+.mh-warmup .mh-btn { margin-top: 10px; }
+.mh-upcoming { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--mh-card-line); font-size: 12px; }
+.mh-upcoming li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.mh-upcoming li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* misconception book */
+.mh-mistakes p { font-size: 12px; margin: 0 0 6px; }
+.mh-mistakes li { padding: 7px 0; border-bottom: 1px dashed var(--mh-card-line); }
+.mh-mistakes li:last-child { border-bottom: 0; }
+.mh-mistakes .mh-row { justify-content: space-between; gap: 8px; }
+.mh-mistakes li.solid { opacity: 0.6; }
+.mh-tag { font-size: 11px; color: var(--mh-gold-soft); background: rgba(0, 0, 0, 0.3); padding: 1px 6px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mh-mistake-note { font-size: 13px; margin: 4px 0 2px; overflow-wrap: anywhere; }
+.mh-mistakes .mh-muted { font-size: 11px; }
+.mh-chip.mistake-due { background: rgba(255, 122, 133, 0.16); color: #ffc2c8; }
+.mh-chip.mistake-waiting { background: rgba(124, 140, 255, 0.16); color: #cdd5ff; }
+.mh-chip.mistake-solid { background: rgba(74, 222, 128, 0.14); color: #a7f3c0; }
+
 .mh-path { display: block; font-size: 12px; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 8px; }
 
 /* ranks */
@@ -190,3 +216,12 @@ code { font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, 
   .mh-legend { position: static; padding: 6px 12px 10px; }
   .mh-star-card { position: static; width: auto; margin: 0 10px 10px; }
 }
+.mh-chip.reason-variant { background: rgba(110, 231, 255, 0.14); color: var(--mh-cyan); }
+/* a star that just became bright flares once (only when motion is allowed: the class is not set otherwise) */
+.mh-burst { fill: none; stroke: var(--mh-gold-soft); stroke-width: 2; opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .mh-star.just-lit .mh-burst { animation: mh-burst 1.4s ease-out 2; transform-box: fill-box; transform-origin: center; }
+  .mh-star.just-lit .mh-core { animation: mh-ignite 1.4s ease-out; transform-box: fill-box; transform-origin: center; }
+}
+@keyframes mh-burst { 0% { opacity: 0.9; transform: scale(0.2); } 100% { opacity: 0; transform: scale(1.3); } }
+@keyframes mh-ignite { 0% { transform: scale(0.4); fill: #ffffff; } 40% { transform: scale(1.8); } 100% { transform: scale(1); } }

@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Trong vòng lặp, bạn lưu h vào danh sách rồi stack lại. Nếu cập nhật bằng `h[:] = ...` thay vì `h = ...` thì hs ra sao? Vì sao?",
+    "tag": "aliasing-buffer",
+    "answer": "Mọi phần tử của danh sách cùng trỏ tới một mảng; ghi tại chỗ làm tất cả đổi theo, nên mọi bước trong hs đều bằng trạng thái cuối. `h = ...` tạo mảng mới mỗi bước (hoặc phải copy trước khi lưu)."
+  },
+  {
+    "q": "∂h_T/∂h_0 bằng gì (viết dạng tích)? Từ đó giải thích vanishing/exploding gradient, và vai trò của giá trị riêng (spectral radius) của W_h và của tanh.",
+    "tag": "bptt-vanishing",
+    "answer": "Tích theo t của diag(1 − h_t²) · W_h^T (theo quy ước vector hàng). Chuẩn của nó cỡ (ρ(W_h) · tanh')^T: nhỏ hơn 1 thì tắt theo cấp số nhân, lớn hơn 1 thì có thể nổ; tanh' ≤ 1 và bão hoà làm tắt thêm. Đó là lý do có LSTM/GRU, gradient clipping, khởi tạo trực giao."
+  },
+  {
+    "q": "Phần nào của RNN tính song song được trên cả T bước, phần nào buộc phải tuần tự? So với attention thì sao?",
+    "tag": "rnn-parallelism",
+    "answer": "x @ Wx cho cả chuỗi tính một lần (B·T, d_in) @ (d_in, d_h); phần h_{t-1} @ Wh và tanh phải đi tuần tự vì phụ thuộc bước trước. Attention tính mọi vị trí song song khi train, đổi lại chi phí O(T²)."
+  },
+  {
+    "q": "Số tham số của RNN phụ thuộc T thế nào? Vì sao dùng chung Wx, Wh, b ở mọi bước lại hợp lý, và gradient của Wh trong BPTT được ghép từ các bước ra sao?",
+    "tag": "weight-sharing-time",
+    "answer": "Không phụ thuộc T: d_in·d_h + d_h² + d_h. Dùng chung trọng số giả định quy luật chuyển trạng thái giống nhau ở mọi thời điểm, cho phép xử lý chuỗi độ dài bất kỳ. Gradient của Wh là tổng đóng góp của mọi bước (tham số dùng chung thì gradient cộng lại)."
+  },
+  {
+    "q": "Batch có chuỗi độ dài khác nhau, được pad ở cuối. Lấy hs[:, -1] làm biểu diễn của câu thì sai ở đâu? Sửa thế nào?",
+    "tag": "padding-last-state",
+    "answer": "Với câu ngắn, các bước cuối là padding nên trạng thái đã bị cập nhật bởi token rác. Cần lấy hs[i, len_i − 1] theo độ dài từng câu (gather), hoặc dùng mask để giữ nguyên h khi gặp padding."
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "id": "attention-temperature",
+  "title": "Attention có nhiệt độ τ",
+  "star": "sdpa",
+  "skills": ["formula", "theory"],
+  "difficulty": 1700,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["attention_temp"],
+  "probes": 2,
+  "variantOf": "scaled-dot-attention",
+  "predict": "Giữ nguyên `Q`, `K` và một **causal mask**. Xét hàng $t$ của `weights` (chỉ được nhìn $t + 1$ vị trí đầu): khi $\\tau \\to 0$ hàng đó tiến tới vector gì, khi $\\tau \\to \\infty$ tiến tới vector gì? Ở $\\tau$ rất lớn, các vị trí bị che có nhận được chút trọng số nào không?"
+}

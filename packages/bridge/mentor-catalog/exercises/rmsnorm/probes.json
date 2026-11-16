@@ -1,0 +1,22 @@
+[
+  {
+    "q": "So dự đoán của bạn với kết quả thật: token hằng số c qua LayerNorm và qua RMSNorm ra gì? Nếu khác điều bạn đoán, chỗ nào trong công thức làm bạn đoán lệch?",
+    "tag": "predict-vs-reality",
+    "answer": "LayerNorm: x − μ = 0 nên ra 0 (chỉ còn β). RMSNorm: c / √(c² + ε) ≈ sign(c), nhân γ ra ≈ sign(c)·γ. RMSNorm giữ hướng (kể cả dấu) của vector, chỉ chuẩn hoá độ dài; LayerNorm xoá thành phần song song với vector toàn 1."
+  },
+  {
+    "q": "Nhìn hình học: LayerNorm (γ = 1, β = 0) chiếu x lên mặt phẳng nào rồi đưa về độ dài bao nhiêu? RMSNorm thì sao?",
+    "tag": "rms-geometry",
+    "answer": "LayerNorm: chiếu lên mặt phẳng vuông góc với vector toàn 1 (bỏ trung bình) rồi scale về độ dài √d. RMSNorm: không chiếu, chỉ scale x về mặt cầu bán kính √d (bỏ qua ε)."
+  },
+  {
+    "q": "Vì sao các LLM như LLaMA chọn RMSNorm? Bỏ trung bình và β có làm mất gì quan trọng không?",
+    "tag": "rms-why",
+    "answer": "Rẻ hơn (một phép rút gọn thay vì hai, không cần β) và thực nghiệm cho chất lượng tương đương: phần quan trọng của LayerNorm là bất biến với scale (re-scaling invariance), không phải re-centering. Mất bất biến với phép dịch, nhưng các lớp tuyến tính và residual phía sau bù được."
+  },
+  {
+    "q": "Nếu nhân cả token x với 10 thì output RMSNorm đổi thế nào? Còn nếu cộng thêm 10 vào mọi feature?",
+    "tag": "rms-invariance",
+    "answer": "Nhân 10: gần như không đổi (bất biến với scale dương, trừ ảnh hưởng của ε). Cộng 10: đổi, vì RMSNorm không trừ trung bình; khi hằng số áp đảo, output tiến tới ≈ γ (giống token hằng số)."
+  }
+]

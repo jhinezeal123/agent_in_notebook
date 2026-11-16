@@ -267,6 +267,7 @@ export function App() {
           onJudge={() => mentorCall("mentor.judge")}
           onHint={() => mentorCall("mentor.hint")}
           onStage={(stage: MentorStage) => mentorCall("mentor.stage", { stage })}
+          onCodeReview={() => mentorCall("mentor.codeReview")}
           onHome={() => void run(client.request("mentor.open"))}
         />
       )}
@@ -275,7 +276,7 @@ export function App() {
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
         </Welcome>
       ) : (
-        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} mentor={!!mentor} />
+        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} mentor={!!mentor} review={mentor?.kind === "review"} />
       )}
 
       {live?.error && <div class="banner error">{live.error}</div>}
@@ -644,12 +645,16 @@ const SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
   { icon: "chart", label: "Plot the training loss", text: "Add a section that plots the training loss" },
 ];
 
+const REVIEW_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
+  { icon: "sparkle", label: "Bắt đầu ôn", text: "Chào mentor, mình bắt đầu ôn bài này từ cell trống." },
+];
+
 const MENTOR_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
   { icon: "sparkle", label: "Bắt đầu buổi học", text: "Chào mentor, mình bắt đầu bài này. Mình đã chạy các cell Phòng công thức." },
   { icon: "notebook", label: "Kể lại công thức", text: "Mình hiểu công thức này như sau: " },
 ];
 
-function Transcript({ chat, actions, onSuggest, mentor = false }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void; mentor?: boolean }) {
+function Transcript({ chat, actions, onSuggest, mentor = false, review = false }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void; mentor?: boolean; review?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -672,9 +677,14 @@ function Transcript({ chat, actions, onSuggest, mentor = false }: { chat: ChatSn
 
   if (mentor && (!chat || !hasMessages)) {
     return (
-      <Welcome title="Bắt đầu thôi" text={<p>Chạy các cell <b>Phòng công thức</b> trong notebook, nhìn kỹ hình, rồi kể lại công thức bằng lời của bạn. Mentor sẽ hỏi lại, không code hộ.</p>}>
+      <Welcome
+        title={review ? "Ôn lại từ trang trắng" : "Bắt đầu thôi"}
+        text={review
+          ? <p>Cài lại bài này từ cell trống, theo trí nhớ, khoảng 8 phút. Bấm <b>Chấm bài</b> khi xong: qua máy chấm là xong buổi ôn.</p>
+          : <p>Chạy các cell <b>Phòng công thức</b> trong notebook, nhìn kỹ hình, rồi kể lại công thức bằng lời của bạn. Mentor sẽ hỏi lại, không code hộ.</p>}
+      >
         <div class="suggestions">
-          {MENTOR_SUGGESTIONS.map((s) => (
+          {(review ? REVIEW_SUGGESTIONS : MENTOR_SUGGESTIONS).map((s) => (
             <button key={s.text} class="suggestion" onClick={() => onSuggest(s.text)}>
               <Icon name={s.icon} /><span>{s.label}</span><Icon name="chev-r" />
             </button>

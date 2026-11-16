@@ -1,0 +1,14 @@
+{
+  "id": "adamw-step",
+  "title": "AdamW: weight decay tách rời",
+  "star": "optim",
+  "skills": ["formula", "theory"],
+  "difficulty": 1600,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["adamw_init", "adamw_step"],
+  "probes": 2,
+  "variantOf": "adam-step",
+  "predict": "Hai tham số cùng bắt đầu ở $\\theta = 1$: tham số A có gradient nhiễu lớn ($g \\sim \\mathcal N(0, 100^2)$), tham số B có gradient rất nhỏ ($g \\sim \\mathcal N(0, 0.01^2)$). Chạy 1000 bước với $\\eta = 10^{-3}$, $\\lambda = 0.1$: với **Adam + L2** (cộng $\\lambda\\theta$ vào gradient) và với **AdamW**, tham số nào bị kéo về 0 nhiều hơn, và mỗi cái còn khoảng bao nhiêu? Ghi dạng *Adam+L2: A ≈ …, B ≈ …; AdamW: A ≈ …, B ≈ …*."
+}

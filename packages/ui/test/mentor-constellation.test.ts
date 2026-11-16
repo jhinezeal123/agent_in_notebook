@@ -3,14 +3,14 @@ import type { MentorConstellation, MentorStarState, MentorStarView } from "@ainb
 import { MAP_H, MAP_W, heatWeeks, layout, ratingShare } from "../src/mentor/constellation.js";
 
 function star(id: string, x: number, y: number, state: MentorStarState, after: string[] = []): MentorStarView {
-  return { id, name: id, constellation: "foundation", x, y, after, state, exercises: [] };
+  return { id, name: id, constellation: "foundation", x, y, after, state, fade: 0, exercises: [] };
 }
 
 const constellations: MentorConstellation[] = [{ id: "foundation", name: "Nền móng", stars: ["a", "b", "c"], mastered: 2 }];
 
 describe("layout", () => {
   const stars = [star("a", 0, 0, "mastered"), star("b", 100, 100, "mastered", ["a"]), star("c", 50, 50, "locked", ["b"])];
-  const map = layout({ stars, constellations, today: { exerciseId: "x", title: "X", star: "c", minutes: 20, difficulty: 1000, reason: "next" } });
+  const map = layout({ stars, constellations, today: { exerciseId: "x", title: "X", star: "c", minutes: 20, difficulty: 1000, reason: "next", kind: "learn" } });
 
   it("keeps every star inside the map, corners included", () => {
     for (const s of map.stars) {

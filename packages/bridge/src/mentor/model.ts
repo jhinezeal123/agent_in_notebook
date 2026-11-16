@@ -4,10 +4,14 @@
 // Nothing here reads files or the clock; callers pass `now`.
 
 import {
+  MENTOR_REVIEW_DAYS,
   MENTOR_SKILL_LABEL,
   MENTOR_SKILLS,
   type MentorConstellation,
   type MentorHome,
+  type MentorKind,
+  type MentorMistake,
+  type MentorScaffold,
   type MentorResult,
   type MentorSkill,
   type MentorStage,
@@ -25,18 +29,22 @@ interface Base {
 }
 
 export type MentorEvent =
-  | (Base & { t: "start"; exerciseId: string; file: string })
+  | (Base & { t: "start"; exerciseId: string; file: string; kind?: MentorKind; scaffold?: MentorScaffold })
   | (Base & { t: "stage"; stage: MentorStage; by: "agent" | "user" | "judge" })
   | (Base & { t: "judge"; ok: boolean; passed: number; total: number; error?: string })
   | (Base & { t: "hint"; level: number })
   | (Base & { t: "probe"; grade: 0 | 1 | 2; question: string; tag?: string })
   | (Base & { t: "misconception"; tag: string; note: string })
+  /** A misconception from the book, asked again at the start of a session. */
+  | (Base & { t: "recall"; tag: string; grade: 0 | 1 | 2 })
   | (Base & { t: "done" });
 
 export interface AttemptState {
   attemptId: string;
   exerciseId: string;
   file: string;
+  kind: MentorKind;
+  scaffold: MentorScaffold;
   startedAt: number;
   stage: MentorStage;
   hintLevel: number;
@@ -48,6 +56,7 @@ export interface AttemptState {
   lastJudge?: { ok: boolean; passed: number; total: number; error?: string; at: number };
   probes: { grade: 0 | 1 | 2; question: string; tag?: string }[];
   misconceptions: { tag: string; note: string; at: number }[];
+  recalls: { tag: string; grade: 0 | 1 | 2 }[];
   doneAt?: number;
   result?: MentorResult;
 }
@@ -65,6 +74,30 @@ export interface MentorState {
   history: { at: number; overall: number }[];
   /** Steps finished per day. */
   days: Map<string, number>;
+  /** Spaced reviews per exercise learnt on the learner's own. */
+  reviews: Map<string, ReviewState>;
+  /** The misconception book, by tag. */
+  mistakes: Map<string, MistakeState>;
+}
+
+export interface ReviewState {
+  /** Reviews passed in a row (an index into MENTOR_REVIEW_DAYS). */
+  step: number;
+  /** The day the next review is due; null once learnt. */
+  due: string | null;
+}
+
+export interface MistakeState {
+  tag: string;
+  note: string;
+  exerciseId: string;
+  firstAt: number;
+  seen: number;
+  streak: number;
+  /** null once solid. */
+  due: string | null;
+  /** Attempts it was recorded or asked in (not asked again there). */
+  attempts: Set<string>;
 }
 
 export const START_RATING = 1000;
@@ -79,6 +112,19 @@ const HINT_COST = [0, 0.1, 0.25, 0.45, 0.8];
 export const REDO_AFTER_DAYS = 3;
 /** An attempt left unfinished this long is no longer offered to continue. */
 const CONTINUE_DAYS = 7;
+/** A review counts as remembered with at most this hint level (a direction in words). */
+const REVIEW_HINT_OK = 1;
+/** A review moves the rating half as much as learning the exercise. */
+const REVIEW_K = 0.5;
+/** Days before a misconception is asked again, and after a right answer. */
+const MISTAKE_AGAIN_DAYS = 2;
+const MISTAKE_RIGHT_DAYS = 7;
+/** Right answers in a row that make a misconception solid. */
+const MISTAKE_SOLID = 2;
+/** Days overdue at which a star is fully dimmed. */
+const FADE_DAYS = 14;
+/** Misconceptions asked at the start of one session at most. */
+export const RECALLS_PER_SESSION = 3;
 
 /** The learner's day for a time: local date, shifted so it starts at 4 a.m. */
 export function dayOf(ms: number): string {
@@ -86,13 +132,13 @@ export function dayOf(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function addDays(day: string, n: number): string {
+export function addDays(day: string, n: number): string {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
 
-function daysBetween(a: string, b: string): number {
+export function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 }
 
@@ -106,11 +152,13 @@ export function kFactor(games: number): number {
 }
 
 /** How well an attempt went for one skill, 0..1. */
-export function attemptScore(a: Pick<AttemptState, "passed" | "hintLevel" | "revealed" | "failedBeforePass" | "probes">, skill: MentorSkill): number {
+export function attemptScore(a: Pick<AttemptState, "kind" | "passed" | "hintLevel" | "revealed" | "failedBeforePass" | "probes">, skill: MentorSkill): number {
   let code = a.revealed ? 0.2 : a.passed ? 1 : 0;
   if (!a.revealed) code -= HINT_COST[Math.min(a.hintLevel, HINT_COST.length - 1)]!;
   code -= Math.min(0.2, 0.05 * a.failedBeforePass);
   code = Math.max(0, Math.min(1, code));
+  // A review is the code from memory, nothing else; leaning on more than a direction means it was forgotten.
+  if (a.kind === "review") return a.hintLevel > REVIEW_HINT_OK ? Math.min(code, 0.3) : code;
   const probe = a.probes.length ? a.probes.reduce((s, p) => s + p.grade / 2, 0) / a.probes.length : 0.5;
   return skill === "theory" ? 0.3 * code + 0.7 * probe : 0.75 * code + 0.25 * probe;
 }
@@ -122,14 +170,16 @@ export function overallOf(ratings: Map<MentorSkill, Rating>): number | null {
 
 /** Fold the log into the current state. Events of unknown exercises still count for the streak. */
 export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exercise">): MentorState {
-  const state: MentorState = { attempts: new Map(), order: [], ratings: new Map(), history: [], days: new Map() };
+  const state: MentorState = { attempts: new Map(), order: [], ratings: new Map(), history: [], days: new Map(), reviews: new Map(), mistakes: new Map() };
   const active = (day: string) => state.days.set(day, (state.days.get(day) ?? 0) + 1);
   for (const e of events) {
     if (e.t === "start") {
       if (state.attempts.has(e.attemptId)) continue;
+      const kind = e.kind ?? "learn";
       state.attempts.set(e.attemptId, {
-        attemptId: e.attemptId, exerciseId: e.exerciseId, file: e.file, startedAt: e.at, stage: "lab", hintLevel: 0, revealed: false,
-        judges: 0, failedBeforePass: 0, passed: false, probes: [], misconceptions: [],
+        attemptId: e.attemptId, exerciseId: e.exerciseId, file: e.file, kind, scaffold: e.scaffold ?? (kind === "review" ? "blank" : "full"),
+        startedAt: e.at, stage: kind === "review" ? "build" : "lab", hintLevel: 0, revealed: false,
+        judges: 0, failedBeforePass: 0, passed: false, probes: [], misconceptions: [], recalls: [],
       });
       state.order.push(e.attemptId);
       continue;
@@ -158,6 +208,11 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
         break;
       case "misconception":
         a.misconceptions.push({ tag: e.tag, note: e.note, at: e.at });
+        noteMistake(state, a, e.tag, e.note, e.at, e.day);
+        break;
+      case "recall":
+        a.recalls.push({ tag: e.tag, grade: e.grade });
+        recallMistake(state, a, e.tag, e.grade, e.day);
         break;
       case "done": {
         a.doneAt = e.at;
@@ -169,7 +224,7 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
         for (const skill of ex.skills) {
           const now = state.ratings.get(skill) ?? { r: START_RATING, n: 0 };
           const score = attemptScore(a, skill);
-          let delta = kFactor(now.n) * (score - expected(now.r, ex.difficulty));
+          let delta = kFactor(now.n) * (a.kind === "review" ? REVIEW_K : 1) * (score - expected(now.r, ex.difficulty));
           // Seeing the solution can only cost rating.
           if (a.revealed) delta = Math.min(0, delta);
           const after = Math.round(now.r + delta);
@@ -178,6 +233,8 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
         }
         const mean = ex.skills.reduce((s, k) => s + attemptScore(a, k), 0) / ex.skills.length;
         a.result = { score: Math.round(mean * 100) / 100, deltas, revealed: a.revealed };
+        const next = scheduleReview(state, a, e.day);
+        if (next !== undefined) a.result.nextReview = next;
         const overall = overallOf(state.ratings);
         if (overall !== null) state.history.push({ at: e.at, overall });
         break;
@@ -185,6 +242,101 @@ export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exe
     }
   }
   return state;
+}
+
+/**
+ * The next review of the attempt's exercise, once the attempt is done: three
+ * days after learning it on one's own; after a review, the next interval when
+ * it was remembered (passed, at most a direction as a hint), else three days
+ * again. Returns the days to the next review (null once learnt, undefined
+ * when none is scheduled).
+ */
+function scheduleReview(state: MentorState, a: AttemptState, day: string): number | null | undefined {
+  const own = a.passed && !a.revealed;
+  if (a.kind === "learn") {
+    if (!own) return undefined;
+    state.reviews.set(a.exerciseId, { step: 0, due: addDays(day, MENTOR_REVIEW_DAYS[0]!) });
+    return MENTOR_REVIEW_DAYS[0]!;
+  }
+  const prev = state.reviews.get(a.exerciseId) ?? { step: 0, due: null };
+  if (own && a.hintLevel <= REVIEW_HINT_OK) {
+    const step = prev.step + 1;
+    if (step >= MENTOR_REVIEW_DAYS.length) {
+      state.reviews.set(a.exerciseId, { step, due: null });
+      return null;
+    }
+    state.reviews.set(a.exerciseId, { step, due: addDays(day, MENTOR_REVIEW_DAYS[step]!) });
+    return MENTOR_REVIEW_DAYS[step]!;
+  }
+  state.reviews.set(a.exerciseId, { step: 0, due: addDays(day, MENTOR_REVIEW_DAYS[0]!) });
+  return MENTOR_REVIEW_DAYS[0]!;
+}
+
+function mistakeKey(tag: string): string {
+  return tag.trim().toLowerCase();
+}
+
+/** A misconception showed: in the book, asked again in two days (and it is no longer solid). */
+function noteMistake(state: MentorState, a: AttemptState, tag: string, note: string, at: number, day: string): void {
+  const key = mistakeKey(tag);
+  const m = state.mistakes.get(key);
+  if (!m) {
+    state.mistakes.set(key, { tag: tag.trim(), note, exerciseId: a.exerciseId, firstAt: at, seen: 1, streak: 0, due: addDays(day, MISTAKE_AGAIN_DAYS), attempts: new Set([a.attemptId]) });
+    return;
+  }
+  m.note = note;
+  m.seen++;
+  m.streak = 0;
+  m.due = addDays(day, MISTAKE_AGAIN_DAYS);
+  m.attempts.add(a.attemptId);
+}
+
+/** A misconception asked again: two right answers in a row make it solid; a wrong one starts over. */
+function recallMistake(state: MentorState, a: AttemptState, tag: string, grade: 0 | 1 | 2, day: string): void {
+  const m = state.mistakes.get(mistakeKey(tag));
+  if (!m) return;
+  m.attempts.add(a.attemptId);
+  if (grade === 2) {
+    m.streak++;
+    m.due = m.streak >= MISTAKE_SOLID ? null : addDays(day, MISTAKE_RIGHT_DAYS);
+  } else {
+    if (grade === 0) m.seen++;
+    m.streak = 0;
+    m.due = addDays(day, MISTAKE_AGAIN_DAYS);
+  }
+}
+
+/** Misconceptions to ask again in this attempt: due, not from it, oldest due first. */
+export function dueMistakes(state: MentorState, attemptId: string, today: string): MistakeState[] {
+  const a = state.attempts.get(attemptId);
+  const left = RECALLS_PER_SESSION - (a ? a.recalls.length : 0);
+  if (left <= 0) return [];
+  return [...state.mistakes.values()]
+    .filter((m) => m.due !== null && m.due <= today && !m.attempts.has(attemptId))
+    .sort((x, y) => x.due!.localeCompare(y.due!) || x.firstAt - y.firstAt)
+    .slice(0, left);
+}
+
+/** The book as the home page shows it: due first, then waiting, then solid. */
+export function mistakeBook(state: MentorState, catalog: Pick<Catalog, "exercise">, today: string): MentorMistake[] {
+  const rank = { due: 0, waiting: 1, solid: 2 } as const;
+  return [...state.mistakes.values()]
+    .map((m): MentorMistake => {
+      const status = m.due === null ? "solid" : m.due <= today ? "due" : "waiting";
+      return {
+        tag: m.tag, note: m.note, exerciseId: m.exerciseId, title: catalog.exercise(m.exerciseId)?.title ?? m.exerciseId,
+        seen: m.seen, streak: m.streak, status, ...(m.due ? { due: m.due } : {}),
+      };
+    })
+    .sort((x, y) => rank[x.status] - rank[y.status] || (x.due ?? "").localeCompare(y.due ?? "") || y.seen - x.seen);
+}
+
+/** Exercises whose review is due by today, most overdue first. */
+export function dueReviews(state: MentorState, today: string): { exerciseId: string; due: string; overdue: number }[] {
+  return [...state.reviews]
+    .filter(([, r]) => r.due !== null && r.due <= today)
+    .map(([exerciseId, r]) => ({ exerciseId, due: r.due!, overdue: daysBetween(r.due!, today) }))
+    .sort((x, y) => y.overdue - x.overdue || x.exerciseId.localeCompare(y.exerciseId));
 }
 
 function stageIndex(s: MentorStage): number {
@@ -263,37 +415,95 @@ export function starStates(state: MentorState, catalog: Catalog): Map<string, Me
   return out;
 }
 
+/**
+ * How much code a new attempt starts with: a review starts blank; the
+ * diagnostic gives the full starter; afterwards the starter thins out as the
+ * learner's rating on the exercise's skills grows.
+ */
+export function scaffoldFor(state: MentorState, ex: Exercise, kind: MentorKind): MentorScaffold {
+  if (kind === "review") return "blank";
+  if (ex.diagnostic) return "full";
+  const rated = ex.skills.map((s) => state.ratings.get(s)).filter((r): r is Rating => !!r && r.n > 0);
+  if (!rated.length) return "full";
+  const low = Math.min(...rated.map((r) => r.r));
+  return low < 1250 ? "full" : low < 1500 ? "signature" : "blank";
+}
+
 /** Diagnostic exercises in the order they are taken. */
 export function diagnosticExercises(catalog: Catalog): Exercise[] {
   return catalog.exercises.filter((e) => e.diagnostic).sort((a, b) => a.diagnostic! - b.diagnostic! || a.order - b.order);
 }
 
 export function pickToday(state: MentorState, catalog: Catalog, now: number): MentorToday | null {
-  const view = (e: Exercise, reason: MentorToday["reason"], attemptId?: string): MentorToday => ({
-    exerciseId: e.id, title: e.title, star: e.star, minutes: e.minutes, difficulty: e.difficulty, reason, ...(attemptId ? { attemptId } : {}),
-  });
+  const view = (e: Exercise, reason: MentorToday["reason"], attemptId?: string): MentorToday => todayView(e, reason, "learn", attemptId);
   const today = dayOf(now);
-  // An exercise left half way, recently.
+  // An exercise left half way, recently (reviews are the warm-up).
   for (const id of [...state.order].reverse()) {
     const a = state.attempts.get(id)!;
     const ex = catalog.exercise(a.exerciseId);
-    if (!a.doneAt && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) return view(ex, "continue", a.attemptId);
+    if (a.kind === "learn" && !a.doneAt && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) return view(ex, "continue", a.attemptId);
   }
   const finished = new Set([...state.attempts.values()].filter((a) => a.doneAt).map((a) => a.exerciseId));
   const diagnostic = diagnosticExercises(catalog).find((e) => !finished.has(e.id));
   if (diagnostic) return view(diagnostic, "diagnostic");
   const mastered = masteredExercises(state);
   for (const a of state.attempts.values()) {
-    if (!a.revealed || !a.doneAt || mastered.has(a.exerciseId)) continue;
+    if (a.kind !== "learn" || !a.revealed || !a.doneAt || mastered.has(a.exerciseId)) continue;
     const ex = catalog.exercise(a.exerciseId);
     if (ex && daysBetween(dayOf(a.doneAt), today) >= REDO_AFTER_DAYS) return view(ex, "redo");
   }
+  // A variation of an exercise just learnt comes next, while it is fresh.
+  for (const id of [...state.order].reverse()) {
+    const a = state.attempts.get(id)!;
+    if (a.kind !== "learn" || !a.doneAt || !mastered.has(a.exerciseId)) continue;
+    const variant = catalog.exercises.find((e) => e.variantOf === a.exerciseId && !mastered.has(e.id) && !state.order.some((o) => state.attempts.get(o)!.exerciseId === e.id));
+    if (variant) return view(variant, "variant");
+    break;
+  }
   const stars = starStates(state, catalog);
   const overall = overallOf(state.ratings) ?? START_RATING;
-  const candidates = catalog.exercises.filter((e) => !mastered.has(e.id) && stars.get(e.star) !== "locked");
+  // A variation waits for its exercise.
+  const candidates = catalog.exercises.filter((e) => !mastered.has(e.id) && stars.get(e.star) !== "locked" && (!e.variantOf || mastered.has(e.variantOf)));
   const fitting = candidates.filter((e) => e.difficulty >= overall - 200);
   const pick = (fitting.length ? fitting : candidates)[0];
   return pick ? view(pick, "next") : null;
+}
+
+/** How far a star has dimmed: its most overdue review, over two weeks (a due review already dims it a little). */
+export function starFade(state: MentorState, catalog: Catalog, star: string, today: string): number {
+  let fade = 0;
+  for (const e of catalog.exercises) {
+    if (e.star !== star) continue;
+    const r = state.reviews.get(e.id);
+    if (!r?.due || r.due > today) continue;
+    fade = Math.max(fade, Math.min(1, (daysBetween(r.due, today) + 1) / FADE_DAYS));
+  }
+  return Math.round(fade * 100) / 100;
+}
+
+/** The warm-up: a review left half way, else the most overdue one. */
+export function pickWarmup(state: MentorState, catalog: Catalog, now: number): MentorToday | null {
+  const today = dayOf(now);
+  for (const id of [...state.order].reverse()) {
+    const a = state.attempts.get(id)!;
+    const ex = catalog.exercise(a.exerciseId);
+    if (a.kind === "review" && !a.doneAt && ex && daysBetween(dayOf(a.startedAt), today) <= CONTINUE_DAYS) {
+      const r = state.reviews.get(ex.id);
+      return { ...todayView(ex, "continue", "review", a.attemptId), overdue: r?.due ? Math.max(0, daysBetween(r.due, today)) : 0 };
+    }
+  }
+  for (const r of dueReviews(state, today)) {
+    const ex = catalog.exercise(r.exerciseId);
+    if (ex) return { ...todayView(ex, "review", "review"), overdue: r.overdue };
+  }
+  return null;
+}
+
+function todayView(e: Exercise, reason: MentorToday["reason"], kind: MentorKind, attemptId?: string): MentorToday {
+  return {
+    exerciseId: e.id, title: e.title, star: e.star, minutes: kind === "review" ? Math.min(10, Math.ceil(e.minutes / 2)) : e.minutes,
+    difficulty: e.difficulty, reason, kind, ...(attemptId ? { attemptId } : {}),
+  };
 }
 
 export function home(state: MentorState, catalog: Catalog, now: number, workDir: string): MentorHome {
@@ -308,9 +518,10 @@ export function home(state: MentorState, catalog: Catalog, now: number, workDir:
     y: s.y,
     after: s.after,
     state: states.get(s.id) ?? "locked",
+    fade: starFade(state, catalog, s.id, today),
     exercises: catalog.exercises
       .filter((e) => e.star === s.id)
-      .map((e) => ({ id: e.id, title: e.title, difficulty: e.difficulty, minutes: e.minutes, done: mastered.has(e.id) })),
+      .map((e) => ({ id: e.id, title: e.title, difficulty: e.difficulty, minutes: e.minutes, done: mastered.has(e.id), ...(e.variantOf ? { variant: true } : {}) })),
   }));
   const constellations: MentorConstellation[] = catalog.constellations.map((c) => {
     const own = catalog.stars.filter((s) => s.constellation === c.id).map((s) => s.id);
@@ -332,6 +543,7 @@ export function home(state: MentorState, catalog: Catalog, now: number, workDir:
       attemptId: a.attemptId,
       exerciseId: a.exerciseId,
       title: catalog.exercise(a.exerciseId)?.title ?? a.exerciseId,
+      kind: a.kind,
       at: a.doneAt ?? a.startedAt,
       stage: a.stage,
       ...(a.result ? { score: a.result.score } : {}),
@@ -341,6 +553,16 @@ export function home(state: MentorState, catalog: Catalog, now: number, workDir:
   return {
     workDir,
     today: pickToday(state, catalog, now),
+    warmup: pickWarmup(state, catalog, now),
+    reviews: {
+      due: dueReviews(state, today).length,
+      upcoming: [...state.reviews]
+        .filter(([, r]) => r.due !== null && r.due > today)
+        .sort(([, x], [, y]) => x.due!.localeCompare(y.due!))
+        .slice(0, 5)
+        .map(([exerciseId, r]) => ({ exerciseId, title: catalog.exercise(exerciseId)?.title ?? exerciseId, day: r.due! })),
+    },
+    mistakes: mistakeBook(state, catalog, today),
     streak: streakOf(state.days, today),
     heatmap: heatmap(state.days, today),
     skills,

@@ -1,0 +1,32 @@
+[
+  {
+    "q": "Vì sao tách head bằng reshape (B, T, H, d_h) rồi transpose, chứ không reshape thẳng về (B, H, T, d_h)? Hai cách cho cùng shape, khác nhau ở đâu?",
+    "tag": "reshape-vs-transpose",
+    "answer": "reshape chỉ cắt lại dãy số theo thứ tự bộ nhớ (row-major), không di chuyển dữ liệu. Tách D thành (H, d_h) giữ nguyên trục token, rồi transpose mới đổi vai trò trục. Reshape thẳng về (B, H, T, d_h) cắt ngang qua các token: một 'token' của head 0 chứa feature của các token khác nhau, phá vỡ cấu trúc."
+  },
+  {
+    "q": "Trong mỗi head, điểm attention chia cho √d_h hay √d_model? Lập luận bằng phương sai của q·k, và nói chuyện gì xảy ra nếu chọn sai khi H lớn.",
+    "tag": "scale-dhead",
+    "answer": "√d_h: q·k của một head là tổng d_h số hạng, phương sai d_h. Chia √d_model làm điểm nhỏ đi √H lần, softmax gần đều, các head không tập trung được, càng nhiều head càng tệ."
+  },
+  {
+    "q": "So với một head duy nhất với d = D, multi-head (H head, d_h = D/H) tốn thêm bao nhiêu tham số và FLOP cho các phép chiếu? Vậy được lợi gì?",
+    "tag": "mha-cost",
+    "answer": "Không thêm: Wq, Wk, Wv, Wo vẫn là D×D, FLOP chiếu như nhau; ma trận điểm thì có H bản T×T (bộ nhớ T² tăng H lần) nhưng tính trên vector ngắn hơn. Lợi: mỗi head có một softmax riêng nên có thể chú ý tới các vị trí khác nhau cùng lúc (cú pháp, vị trí gần, đồng tham chiếu…) thay vì một phân phối duy nhất bị trung bình hoá."
+  },
+  {
+    "q": "Ghép các head rồi nhân Wo có thể viết lại thành tổng theo head. Viết công thức đó. Nó nói gì về vai trò của Wo?",
+    "tag": "concat-then-project",
+    "answer": "[O_0 ‖ … ‖ O_{H−1}] W_o = Σ_h O_h W_o[h·d_h:(h+1)·d_h, :]. Mỗi head có một khối hàng riêng của Wo chiếu output của nó về không gian D, rồi cộng lại; Wo là nơi trộn thông tin giữa các head."
+  },
+  {
+    "q": "Trong PyTorch, sau q.transpose(1, 2) mà gọi .view(B, T, D) để ghép head thì lỗi, còn .reshape thì chạy. Vì sao?",
+    "tag": "contiguous-view",
+    "answer": "transpose chỉ đổi strides, tensor không còn contiguous; view yêu cầu bố cục bộ nhớ tương thích nên báo lỗi. reshape (hoặc .contiguous().view) chép dữ liệu ra bố cục mới khi cần."
+  },
+  {
+    "q": "Bỏ causal mask và không có positional encoding: nếu hoán vị các token của x thì out thay đổi thế nào? Hệ quả là gì?",
+    "tag": "permutation-equivariance",
+    "answer": "out bị hoán vị theo đúng hoán vị đó (equivariant), giá trị từng token không đổi. Self-attention không biết thứ tự, nên cần positional encoding (hoặc mask nhân quả, vốn phá đối xứng) để mô hình phân biệt vị trí."
+  }
+]

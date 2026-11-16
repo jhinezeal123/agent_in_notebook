@@ -424,7 +424,7 @@ export class Bridge {
       return runSetup((op, timeoutMs) => this.notebookOp(target, op, timeoutMs), `${target.kind}:${target.tabId}`, String(p.script ?? ""), waitMs);
     }));
     rpc.handle("mentor.home", guard<"mentor.home">(() => this.mentor.home()));
-    rpc.handle("mentor.start", guard<"mentor.start">((p) => this.mentor.start(typeof p?.exerciseId === "string" && p.exerciseId ? p.exerciseId : undefined)));
+    rpc.handle("mentor.start", guard<"mentor.start">((p) => this.mentor.start(typeof p?.exerciseId === "string" && p.exerciseId ? p.exerciseId : undefined, p?.kind === "review" ? "review" : "learn")));
     rpc.handle("mentor.judge", guard<"mentor.judge">(async (p) => {
       // The verdict arrives in the chat; the request only says it started.
       const chat = this.chatById(p.chatId);
@@ -434,6 +434,10 @@ export class Bridge {
       return { started: true };
     }));
     rpc.handle("mentor.hint", guard<"mentor.hint">((p) => ({ level: this.chatById(p.chatId).hint() })));
+    rpc.handle("mentor.codeReview", guard<"mentor.codeReview">((p) => {
+      this.chatById(p.chatId).codeReview();
+      return { started: true };
+    }));
     rpc.handle("mentor.stage", guard<"mentor.stage">((p) => {
       const chat = this.chatById(p.chatId);
       chat.mentorStage(p.stage);

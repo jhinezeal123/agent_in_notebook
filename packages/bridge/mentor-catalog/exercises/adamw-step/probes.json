@@ -1,0 +1,22 @@
+[
+  {
+    "q": "So dự đoán với thực tế (chạy thử nếu cần): sau 1000 bước, A và B còn bao nhiêu với Adam + L2 và với AdamW? Phần nào bạn đoán lệch, và vì sao?",
+    "tag": "predict-vs-reality",
+    "answer": "AdamW: A và B co như nhau, θ ≈ (1 − 10⁻⁴)¹⁰⁰⁰ ≈ e^{−0.1} ≈ 0.90 (± vài phần trăm nhiễu từ phần Adam). Adam + L2: với A, λθ = 0.1 chìm trong nhiễu √v̂ ≈ 100 nên gần như không decay (A ≈ 1.0 ± 0.05); với B, λθ áp đảo gradient nhiễu 0.01 nên bước chuẩn hoá ≈ lr·sign(θ), θ giảm gần tuyến tính, còn ≈ 0.26. L2 trong Adam decay mạnh tham số có gradient nhỏ, gần như bỏ qua tham số có gradient lớn; AdamW decay đều."
+  },
+  {
+    "q": "Với SGD thuần, cộng λθ vào gradient và decay tách rời có khác nhau không? Vì sao chỉ với Adam chúng mới khác?",
+    "tag": "l2-vs-decay-sgd",
+    "answer": "Với SGD chúng trùng nhau (θ − η(g + λθ) = θ(1 − ηλ) − ηg). Với Adam, gradient bị chia cho √v̂ theo từng tham số, nên λθ trong gradient cũng bị chia, còn decay tách rời thì không: hai cách khác nhau."
+  },
+  {
+    "q": "Trong PyTorch AdamW, decay là lr·wd·θ. Nếu bạn dùng lr schedule (cosine giảm lr về 0), decay hiệu dụng thay đổi theo thời gian thế nào? Paper gốc làm khác ra sao?",
+    "tag": "decay-schedule",
+    "answer": "Decay hiệu dụng = lr_t · wd, nên giảm theo schedule. Paper gốc tách α (lr của Adam) khỏi λ nhưng nhân cả hai với hệ số schedule η_t; PyTorch gộp α vào nên wd thường phải chọn lớn hơn (ví dụ 0.01–0.1) so với λ trong L2."
+  },
+  {
+    "q": "Vì sao người ta thường không decay bias và tham số của LayerNorm (γ, β)?",
+    "tag": "decay-exclusion",
+    "answer": "Decay kéo tham số về 0; với γ của LayerNorm điểm hợp lý là 1, còn bias/β không ảnh hưởng độ phức tạp hàm theo cách decay nhắm tới (giảm norm trọng số). Decay chúng chỉ làm hại mà không regularize gì đáng kể."
+  }
+]

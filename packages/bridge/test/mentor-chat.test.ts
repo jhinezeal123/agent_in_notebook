@@ -149,6 +149,50 @@ describe("a Mentor exercise", () => {
     expect(after.stars.find((s) => s.id === "broadcasting")?.state).toBe("mastered");
     expect(after.today).toMatchObject({ reason: "diagnostic", exerciseId: "gather-mask-nll" });
     expect(after.recent[0]).toMatchObject({ attemptId: started.attemptId, stage: "done" });
+    expect(after.reviews.upcoming[0]).toMatchObject({ exerciseId: "broadcast-pairwise" });
+    expect(after.mistakes[0]).toMatchObject({ tag: "broadcast-memory", status: "waiting" });
+
+    // Once done, a code review: the mentor gets the request (with the reference to compare).
+    await ext.waitFor(() => ext.statuses.at(-1) === "idle", 30_000, "wrap-up turn end");
+    await ext.request("mentor.codeReview", { chatId });
+    await ext.waitFor(() => ext.agentText().includes("[saw code review with reference]"), 30_000, "code review turn");
+    ext.close();
+  });
+
+  it("runs a spaced review: a blank cell, no lab, done when the judge passes", async () => {
+    const ext = new FakeExtension(new FakeNotebook([]), 320);
+    await ext.connect(port, TOKEN);
+    const started = await ext.request<{ attemptId: string; file: string }>("mentor.start", { exerciseId: "broadcast-pairwise", kind: "review" });
+    expect(started.file).toMatch(/-on-tap\.ipynb$/);
+    const { cells } = parseIpynb(readFileSync(started.file, "utf8"));
+    expect(cells[0]!.source).toMatch(/^# Ôn lại:/);
+    expect(cells.some((c) => c.id === "mentor-lab" || c.id === "mentor-sketch")).toBe(false);
+    const solution = cells.find((c) => c.source.startsWith("#| mentor: solution"))!;
+    expect(solution.source).toContain("# Viết pairwise_sqdist(...) ở đây.");
+    expect(solution.source).not.toContain("def ");
+    const nb = new FakeNotebook(cells.map((c) => ({ type: c.type, source: c.source })));
+    nb.platform = "vscode";
+    ext.attachNotebook(321, nb);
+    const snap = await ext.request<ChatSnapshot>("chat.open", {
+      tabId: 321, agentId: "fake", platform: "vscode", notebookKey: vscodeKey(started.file),
+      settings: { scope: "auto", review: false, targetCellIds: [], notebookOnly: true },
+    });
+    expect(snap.mentor).toMatchObject({ kind: "review", stage: "build", probes: { needed: 0 } });
+    await ext.waitFor(() => ext.statuses.includes("idle"), 30_000, "agent start");
+    const out = await turn(ext, snap.chatId, "ECHO_MENTOR");
+    expect(out).toContain("[saw mentor playbook]");
+    expect(out).toContain("Kind: spaced review");
+
+    nb.execResult = verdictFor([{ name: "Đúng giá trị", ok: true }]);
+    await ext.request("mentor.judge", { chatId: snap.chatId });
+    await ext.waitFor(() => cards(ext).some((c) => c.mentor?.type === "result"), 30_000, "review result");
+    const result = cards(ext).find((c) => c.mentor?.type === "result")!;
+    expect(result.title).toMatch(/^Ôn xong/);
+    expect(result.mentor).toMatchObject({ type: "result", result: { nextReview: 10 } });
+    const home = await ext.request<MentorHome>("mentor.home", {});
+    expect(home.recent[0]).toMatchObject({ attemptId: started.attemptId, kind: "review", stage: "done" });
+    expect(home.reviews.upcoming.find((r) => r.exerciseId === "broadcast-pairwise")).toBeDefined();
+    await ext.waitFor(() => ext.statuses.at(-1) === "idle", 30_000, "verdict turn end");
     ext.close();
   });
 

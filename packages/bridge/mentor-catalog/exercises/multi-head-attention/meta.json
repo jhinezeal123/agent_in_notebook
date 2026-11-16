@@ -1,0 +1,12 @@
+{
+  "id": "multi-head-attention",
+  "title": "Multi-head self-attention (forward)",
+  "star": "mha",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1700,
+  "minutes": 30,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["multi_head_attention"],
+  "probes": 3
+}

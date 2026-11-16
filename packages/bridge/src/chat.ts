@@ -57,7 +57,7 @@ import { describeFailure, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
 import { judgeCode, newNonce, parseVerdict } from "./mentor/judge.js";
 import { isSolutionCell } from "./mentor/notebook.js";
-import { hintBlock, hintText, learnerCells, mentorPlaybook, mentorState, verdictBlock } from "./mentor/prompt.js";
+import { codeReviewBlock, hintBlock, hintText, learnerCells, mentorPlaybook, mentorState, verdictBlock } from "./mentor/prompt.js";
 import { StageRefused, type MentorSession } from "./mentor/session.js";
 import { MENTOR_CHAT_TOOLS } from "./mentor/tools.js";
 
@@ -557,7 +557,7 @@ export class Chat {
       this.notebook = null;
     }
     const blocks: string[] = [];
-    if (rules) blocks.push(mentorPlaybook(s.exercise, s.attempt.file));
+    if (rules) blocks.push(mentorPlaybook(s.exercise, s.attempt.file, s.attempt.kind, s.view().variantOf));
     this.rulesDue = false;
     const full = rules || !!this.pendingRecap;
     if (this.pendingRecap) blocks.push(this.pendingRecap);
@@ -601,11 +601,12 @@ export class Chat {
       return;
     }
     if (this.closed) return;
-    s.judged(verdict);
+    const result = s.judged(verdict);
     card.title = verdict.missing ? "Thiếu thư viện" : verdict.error ? "Bài làm chưa chạy được" : `Đạt ${verdict.passed}/${verdict.total} test`;
     card.tone = verdict.ok ? "ok" : "error";
     card.mentor = { type: "verdict", verdict };
     this.closeCard(card.cardId, "done");
+    if (result) this.showResult(result);
     this.send("Chấm bài", { context: verdictBlock(verdict, s.stage) });
   }
 
@@ -616,6 +617,14 @@ export class Chat {
     const level = s.raiseHint();
     this.send(hintText(level), { context: hintBlock(s.exercise, level) });
     return level;
+  }
+
+  /** "Nhận xét code": once the exercise is done, the mentor reviews the solution (no effect on the rating). */
+  codeReview(): void {
+    const s = this.requireMentor();
+    if (s.stage !== "done") throw new Error("Nhận xét code mở ra sau khi xong bài.");
+    if (this.current || this.busyJob) throw new Error("Đợi mentor trả lời xong rồi hãy xin nhận xét.");
+    this.send("Nhận xét code giúp mình", { context: codeReviewBlock(s.exercise) });
   }
 
   /** The learner moved the exercise on themself (skipping the lab, say). */
@@ -642,7 +651,7 @@ export class Chat {
     const card = this.addCard({
       kind: "mentor",
       tone: "ok",
-      title: result.revealed ? "Xong bài (đã xem lời giải mẫu)" : `Xong bài · ${gained >= 0 ? "+" : ""}${gained} rating`,
+      title: `${this.mentor!.attempt.kind === "review" ? "Ôn xong" : "Xong bài"}${result.revealed ? " (đã xem lời giải mẫu)" : ` · ${gained >= 0 ? "+" : ""}${gained} rating`}`,
       actions: [],
       mentor: { type: "result", result, streak },
     }, () => {});

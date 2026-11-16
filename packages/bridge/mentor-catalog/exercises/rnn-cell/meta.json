@@ -1,0 +1,12 @@
+{
+  "id": "rnn-cell",
+  "title": "RNN tanh chạy trên cả chuỗi",
+  "star": "rnn",
+  "skills": ["tensor", "blank"],
+  "difficulty": 1450,
+  "minutes": 25,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["rnn_step", "rnn_forward"],
+  "probes": 3
+}

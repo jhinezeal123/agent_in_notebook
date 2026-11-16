@@ -1,0 +1,22 @@
+[
+  {
+    "q": "So dự đoán với thực tế: chạy hàm của bạn với τ = 1e-4 và τ = 1e6 trên cùng Q, K và causal mask. Hàng t trông thế nào ở hai đầu? Vị trí bị che có nhận trọng số không? Chỗ nào khác điều bạn đoán?",
+    "tag": "predict-vs-reality",
+    "answer": "τ → 0: one-hot tại argmax của điểm trong t + 1 vị trí được nhìn (hoà thì chia đều cho các vị trí hoà), giống hard attention. τ → ∞: đều 1/(t + 1) trên các vị trí được nhìn, out là trung bình cộng của các V được nhìn. Vị trí bị che luôn 0, vì −∞/τ vẫn là −∞ (che trước khi chia cũng vậy)."
+  },
+  {
+    "q": "Chia cho τ có làm đổi thứ tự (argmax) của các trọng số trong một hàng không? Vậy τ thay đổi điều gì?",
+    "tag": "temperature-order",
+    "answer": "Không: chia cho số dương giữ nguyên thứ tự điểm nên argmax không đổi. τ chỉ đổi độ nhọn: entropy của hàng giảm đơn điệu khi τ giảm (từ log(t+1) về 0)."
+  },
+  {
+    "q": "Gradient của weights theo điểm khi τ rất nhỏ và khi τ rất lớn ra sao? Điều đó liên quan gì đến lý do chia √d_k ở bài trước?",
+    "tag": "temperature-gradient",
+    "answer": "Jacobian của softmax(s/τ) là (diag(p) − ppᵀ)/τ. τ nhỏ: p gần one-hot nên diag(p) − ppᵀ ≈ 0, gradient gần biến mất (bão hoà) dù có hệ số 1/τ. τ lớn: p đều nhưng hệ số 1/τ làm gradient nhỏ. √d_k chính là một nhiệt độ cố định đưa điểm về phương sai 1, tránh vùng bão hoà."
+  },
+  {
+    "q": "Trong thực tế τ xuất hiện ở đâu (gợi ý: sinh văn bản, distillation, contrastive learning)? Nó được học hay đặt tay?",
+    "tag": "temperature-uses",
+    "answer": "Sampling của LLM (τ < 1 bớt ngẫu nhiên, τ > 1 đa dạng hơn), knowledge distillation (τ lớn làm mềm phân phối của teacher), CLIP/InfoNCE (τ ≈ 0.07, trong CLIP được học dưới dạng log). Thường đặt tay, có khi học như một tham số vô hướng."
+  }
+]

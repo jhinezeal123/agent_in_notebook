@@ -1,0 +1,12 @@
+{
+  "id": "weight-init",
+  "title": "Khởi tạo trọng số: Xavier và Kaiming",
+  "star": "init",
+  "skills": ["theory", "formula"],
+  "difficulty": 1350,
+  "minutes": 25,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["xavier_normal", "xavier_uniform", "kaiming_normal", "kaiming_uniform"],
+  "probes": 3
+}

@@ -1,0 +1,12 @@
+{
+  "id": "transformer-block",
+  "title": "Transformer block pre-LN (forward)",
+  "star": "block",
+  "skills": ["blank", "formula"],
+  "difficulty": 1850,
+  "minutes": 35,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["gelu", "transformer_block"],
+  "probes": 3
+}

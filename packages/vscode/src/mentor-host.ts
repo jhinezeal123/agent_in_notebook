@@ -115,7 +115,10 @@ export class MentorHost implements vscode.Disposable {
       const tip = new vscode.MarkdownString(undefined, true);
       tip.appendMarkdown("**Mentor**\n\n");
       tip.appendMarkdown(`Chuỗi ngày học: ${streak}${home.streak.doneToday ? " (hôm nay đã học)" : " — hôm nay chưa học"}\n\n`);
+      if (home.warmup) tip.appendMarkdown(`Khởi động: ôn lại ${home.warmup.title} (~${home.warmup.minutes} phút)\n\n`);
       if (home.today) tip.appendMarkdown(`Bài hôm nay: ${home.today.title} (~${home.today.minutes} phút)\n\n`);
+      const due = home.mistakes.filter((m) => m.status === "due").length;
+      if (due) tip.appendMarkdown(`Sổ lỗi sai: ${due} câu hỏi lại hôm nay\n\n`);
       tip.appendMarkdown("Bấm để mở trang Mentor.");
       this.status.tooltip = tip;
       this.status.backgroundColor = home.streak.doneToday || streak === 0 ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");

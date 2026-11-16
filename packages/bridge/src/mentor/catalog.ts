@@ -30,6 +30,10 @@ const Meta = z.object({
   prelude: z.string().default("import numpy as np"),
   /** How many probing questions finish the defence. */
   probes: z.number().int().min(1).max(5).default(2),
+  /** A variation of another exercise: offered once that one is learnt. */
+  variantOf: z.string().optional(),
+  /** For a variation: what the learner predicts (in writing) before coding it. */
+  predict: z.string().min(1).optional(),
 });
 
 const Probe = z.object({
@@ -159,6 +163,13 @@ export function loadCatalog(dir = catalogDir()): Catalog {
     });
   }
   exercises.sort((a, b) => a.difficulty - b.difficulty || a.order - b.order || a.id.localeCompare(b.id));
+  for (const e of exercises) {
+    if (!e.variantOf) continue;
+    const parent = exercises.find((p) => p.id === e.variantOf);
+    if (!parent) throw new Error(`Exercise ${e.id} is a variation of an unknown exercise ${e.variantOf}.`);
+    if (parent.variantOf) throw new Error(`Exercise ${e.id} is a variation of a variation (${e.variantOf}).`);
+    if (!e.predict) throw new Error(`Variation ${e.id} has no "predict" question.`);
+  }
   const byId = new Map(exercises.map((e) => [e.id, e]));
   return { dir, constellations: map.constellations, stars: map.stars, exercises, exercise: (id) => byId.get(id) };
 }

@@ -1,0 +1,14 @@
+{
+  "id": "cosine-sim-matrix",
+  "title": "Ma trận cosine similarity bằng broadcasting",
+  "star": "broadcasting",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1150,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["cosine_sim"],
+  "probes": 2,
+  "variantOf": "broadcast-pairwise",
+  "predict": "Với các vector **đơn vị** ($\\lVert x \\rVert = \\lVert y \\rVert = 1$), $\\lVert x - y \\rVert^2$ liên hệ với $\\cos(x, y)$ bằng công thức nào? Nếu chuẩn hoá mọi hàng của `X`, `Y` về độ dài 1 rồi chạy lại `pairwise_sqdist`, thì với mỗi $x_i$, láng giềng gần nhất theo khoảng cách có trùng với $y_j$ có cosine lớn nhất không?"
+}

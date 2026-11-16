@@ -1,0 +1,32 @@
+[
+  {
+    "q": "Pre-LN và post-LN khác nhau ở đâu trong công thức? Vì sao pre-LN train ổn định hơn ở mạng sâu và thường không cần warmup learning rate dài?",
+    "tag": "pre-vs-post-ln",
+    "answer": "Post-LN: x ← LN(x + F(x)), LN nằm trên đường residual. Pre-LN: x ← x + F(LN(x)), đường residual là hàm đồng nhất từ đầu vào tới đầu ra. Với pre-LN gradient đi thẳng qua các phép cộng nên độ lớn ổn định theo độ sâu; post-LN có gradient ở các lớp gần output lớn bất thường lúc khởi tạo nên cần warmup."
+  },
+  {
+    "q": "Trong một block, phần nào trộn thông tin giữa các token, phần nào xử lý từng token riêng? Nếu LayerNorm lỡ lấy trung bình theo trục T thì hỏng gì?",
+    "tag": "token-mixing",
+    "answer": "Chỉ attention trộn giữa các token; LayerNorm và FFN xử lý từng token độc lập. LN theo trục T làm token phụ thuộc lẫn nhau ngoài attention: rò rỉ thông tin tương lai khi causal, phụ thuộc độ dài chuỗi và padding, không còn khớp mô hình chuẩn."
+  },
+  {
+    "q": "Với pre-LN, độ lớn của residual stream thay đổi thế nào qua nhiều block? Vì sao GPT-2 thêm một LayerNorm cuối (ln_f) trước lớp output?",
+    "tag": "final-ln",
+    "answer": "Mỗi block cộng thêm vào dòng chảy và không có gì chuẩn hoá lại nó, nên chuẩn tăng dần theo độ sâu. Lớp output cần đầu vào có thang đo ổn định, nên chuẩn hoá một lần cuối (ln_f) trước khi chiếu ra logits."
+  },
+  {
+    "q": "Một block với D = 768, F = 4D có bao nhiêu tham số ở attention và ở FFN (bỏ qua bias và LN)? Phần nào chiếm nhiều hơn?",
+    "tag": "param-count",
+    "answer": "Attention: 4·D² ≈ 2.36M (Wq, Wk, Wv, Wo). FFN: 2·D·4D = 8D² ≈ 4.72M. FFN chiếm khoảng 2/3 tham số của block."
+  },
+  {
+    "q": "Vì sao residual cộng x (chưa chuẩn hoá) mà không cộng LN(x)? Viết lại block theo kiểu sai đó và nói khi các sublayer gần 0 lúc khởi tạo thì block làm gì.",
+    "tag": "residual-input",
+    "answer": "Cộng LN(x) làm block thành LN(x) + F(LN(x)): khi F ≈ 0, block không còn là hàm đồng nhất mà chuẩn hoá lại dòng chảy ở mọi block, mất đường đi thẳng của gradient và thông tin về độ lớn, thực chất quay về hành vi kiểu post-LN."
+  },
+  {
+    "q": "GELU khác ReLU ở đâu, và vì sao có bản xấp xỉ tanh? Nạp trọng số GPT-2 mà dùng bản erf thì có sao không?",
+    "tag": "gelu-variant",
+    "answer": "GELU = x·Φ(x): trơn, âm nhẹ khi x < 0 nên có gradient khác 0 ở đó, không gãy tại 0. Bản tanh ra đời vì erf từng chậm/không có sẵn. Hai bản lệch nhau cỡ 1e-3 trở xuống; dùng lệch bản khiến output không khớp chính xác (sai số nhỏ tích luỹ qua các lớp), thường vẫn chạy được nhưng không tái lập đúng."
+  }
+]

@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Vì sao mỗi tần số cần cả sin lẫn cos? Nếu chỉ dùng sin(pos·ω_i) thì mất tính chất gì?",
+    "tag": "why-sin-and-cos",
+    "answer": "Có cặp (sin, cos) thì PE[pos + k] = R_k · PE[pos] với R_k là ma trận quay khối 2×2 chỉ phụ thuộc k, nên dịch vị trí là một phép tuyến tính cố định mà attention học được. Chỉ có sin thì sin(a + b) cần cả cos a, không có ánh xạ tuyến tính cố định; thêm nữa sin một mình không phân biệt được các góc đối xứng."
+  },
+  {
+    "q": "Tích vô hướng PE[p]·PE[q] phụ thuộc vào gì? Nó có phân biệt được q nằm trước hay sau p không? Điều đó có nghĩa gì cho attention?",
+    "tag": "relative-symmetric",
+    "answer": "Bằng Σ cos((p − q)ω_i): chỉ phụ thuộc khoảng cách p − q, và đối xứng (cos là hàm chẵn) nên không phân biệt trước hay sau. Thông tin hướng vẫn có trong PE (qua phần sin) nhưng phải được lấy ra qua W_Q, W_K học được, không có sẵn trong tích vô hướng thô."
+  },
+  {
+    "q": "Vì sao các tần số trải theo cấp số nhân (từ bước sóng 2π tới 10000·2π) chứ không đều nhau? So với cách biểu diễn số nguyên ở hệ nhị phân.",
+    "tag": "geometric-frequencies",
+    "answer": "Giống các bit của bộ đếm nhị phân: bit thấp đổi nhanh, bit cao đổi chậm. Tần số cấp số nhân cho các thang khoảng cách từ 1 tới hàng chục nghìn token cùng được phân biệt; tần số đều sẽ chỉ có một thang và lặp lại (aliasing) sau một chu kỳ."
+  },
+  {
+    "q": "PE được cộng vào embedding chứ không nối (concatenate). Vì sao cộng vẫn ổn, và vì sao bài báo nhân embedding với √d_model trước khi cộng?",
+    "tag": "add-not-concat",
+    "answer": "Trong không gian nhiều chiều, mạng có thể học để embedding và PE dùng các hướng gần trực giao, nên cộng ít khi làm lẫn thông tin, lại không tăng số chiều. Embedding khởi tạo nhỏ (cỡ 1/√d) còn PE có giá trị cỡ 1, nhân √d_model để embedding không bị PE lấn át."
+  },
+  {
+    "q": "PE hình sin định nghĩa được cho mọi vị trí. Vậy mô hình train với chuỗi dài 512 có chạy tốt với chuỗi dài 4096 không? Người ta làm gì thay thế?",
+    "tag": "length-extrapolation",
+    "answer": "Thường không: mô hình chưa gặp các tổ hợp góc ở vị trí lớn nên chất lượng giảm. Các cách thay thế: positional encoding tương đối, RoPE (quay Q, K thay vì cộng vào embedding) kèm nội suy vị trí / NTK scaling, ALiBi (cộng bias tuyến tính theo khoảng cách vào điểm attention)."
+  }
+]

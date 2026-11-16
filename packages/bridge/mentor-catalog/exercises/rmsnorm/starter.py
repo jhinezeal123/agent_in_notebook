@@ -1,0 +1,3 @@
+def rms_norm(x, gamma, eps=1e-6):
+    """x: (..., d), gamma: (d,) -> cùng shape với x. Không trừ trung bình, không có beta."""
+    ...
