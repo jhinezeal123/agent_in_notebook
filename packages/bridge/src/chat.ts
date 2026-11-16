@@ -55,7 +55,7 @@ import type { NotebookMeta, ProjectCache } from "./store.js";
 import { ensureWorktree } from "./project/worktree.js";
 import { describeFailure, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
-import { judgeCode, newNonce, parseVerdict } from "./mentor/judge.js";
+import { judgeCode, kernelProblem, newNonce, parseVerdict } from "./mentor/judge.js";
 import { isSolutionCell } from "./mentor/notebook.js";
 import { codeReviewBlock, hintBlock, hintText, learnerCells, mentorPlaybook, mentorState, verdictBlock } from "./mentor/prompt.js";
 import { StageRefused, type MentorSession } from "./mentor/session.js";
@@ -2022,18 +2022,6 @@ function toolDetail(rawInput?: unknown, content?: ToolCallContent[] | null, rawO
   if (!parts.length) return undefined;
   // Image results echo back as long base64 strings; they mean nothing as text.
   return capText(parts.join("\n\n").replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]"), TOOL_DETAIL_MAX);
-}
-
-/** The judge could not run: why, for the learner. */
-function kernelProblem(message: string): string {
-  if (/busy/i.test(message)) return "Kernel đang bận chạy một cell. Đợi cell chạy xong (hoặc dừng nó) rồi bấm Chấm bài lại.";
-  if (/session is not running|power button/i.test(message)) {
-    return "Máy Kaggle chưa bật. Trong tab Kaggle, bấm nút nguồn (Start session) và đợi máy chạy, rồi bấm Chấm bài lại.";
-  }
-  if (/not reachable|reloaded|not connected/i.test(message)) {
-    return "Không tới được notebook trên Chrome (trang vừa tải lại, hoặc tab đã đóng). Mở lại tab Kaggle, đợi nó nối lại rồi bấm Chấm bài.";
-  }
-  return `Chưa chấm được: ${message}`;
 }
 
 /** A tool's result with the GitHub token hidden (it is on the notebook's machine for git). */

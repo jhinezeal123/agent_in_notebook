@@ -219,3 +219,22 @@ export function verdictText(v: MentorVerdict): string {
   const metrics = v.metrics?.length ? `\nMeasured: ${v.metrics.map((m) => `${m.name} = ${m.value}`).join(", ")}.` : "";
   return `${v.passed}/${v.total} tests passed.\n${lines.join("\n")}${metrics}`;
 }
+
+/**
+ * The judge could not run: why, for the learner. It reads the core's own
+ * error sentences (the adapters', the extension's, the bridge's), so a
+ * reworded one must still land here: `test/mentor-contract.test.ts` holds them.
+ */
+export function kernelProblem(message: string): string {
+  if (/busy/i.test(message)) return "Kernel đang bận chạy một cell. Đợi cell chạy xong (hoặc dừng nó) rồi bấm Chấm bài lại.";
+  if (/session is not running|power button/i.test(message)) {
+    return "Máy Kaggle chưa bật. Trong tab Kaggle, bấm nút nguồn (Start session) và đợi máy chạy, rồi bấm Chấm bài lại.";
+  }
+  if (/not connected to a runtime|connect button/i.test(message)) {
+    return "Colab chưa nối máy. Trong tab Colab, bấm Connect và đợi máy chạy, rồi bấm Chấm bài lại.";
+  }
+  if (/not reachable|reloaded|not connected/i.test(message)) {
+    return "Không tới được notebook trên Chrome (trang vừa tải lại, hoặc tab đã đóng). Mở lại tab notebook, đợi nó nối lại rồi bấm Chấm bài.";
+  }
+  return `Chưa chấm được: ${message}`;
+}

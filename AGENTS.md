@@ -5,6 +5,14 @@ Chỉ dẫn cho mọi coding agent làm việc trong repo này (Claude Code, Cod
 - Kiến trúc và cách các gói nối với nhau: `docs/architecture.md`.
 - Kiểm tra trước khi báo xong: `pnpm typecheck`, `pnpm test`.
 
+## Sửa phần lõi hoặc cập nhật OpenResearch
+
+Mentor được đan vào các file của lõi (`chat.ts`, `server.ts`, `notebook/tools.ts`, `protocol`, adapter trong `extension/src/page/`). Khi sửa các file đó, đổi tên tool, đổi câu báo lỗi, hay nâng submodule `openresearch`:
+
+- Chạy `pnpm --filter @ainb/bridge test mentor` trước khi báo xong.
+- `mentor-contract.test.ts` trượt nghĩa là một thứ Mentor dựa vào đã đổi: sửa phía Mentor theo lời nhắn của test, không xóa hay nới test.
+- Danh sách chỗ nối: `docs/architecture.md`, mục "Mentor bám vào phần còn lại ở đâu".
+
 ## Thêm hoặc sửa nội dung Mentor
 
 Khi được nhờ thêm chủ đề, bài tập, câu hỏi hay hint cho Mentor (ML tutor), **đọc `packages/bridge/mentor-catalog/PROTOCOL.md` trước và làm đúng theo nó**. Tóm tắt:

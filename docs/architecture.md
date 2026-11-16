@@ -170,6 +170,22 @@ VS Code                                   bridge (bridge/src/mentor)            
   - `AGENTS.md` ở gốc repo trỏ mọi coding agent (Codex, Claude Code…) tới giao thức khi được nhờ thêm nội dung.
 - **Giao thức**: `WIRE_VERSION = 5`. Phương thức `mentor.home/places/start/judge/hint/stage/codeReview/report/focus`, `mentor.paper.add/open/get/approve/author/stopAuthoring/notes/archive`; sự kiện `chat.mentor`, `chat.workshop` và `mentor.updated`.
 
+### Mentor bám vào phần còn lại ở đâu
+
+Code riêng của Mentor (`bridge/src/mentor/`, `ui/src/mentor/`, `vscode/src/mentor-*`) gần như đứng một mình: từ lõi nó chỉ lấy kiểu của `@ainb/protocol`, danh sách tool (`notebook/tools.ts`), `toIpynb`, `loadConfig`, kiểu `ChatStore`. Chiều ngược lại mới là chỗ dễ vỡ: Mentor được **đan vào file của lõi**, nên ai sửa lõi cũng có thể đụng nó.
+
+- **Chỗ đan** (sửa các file này thì chạy lại test Mentor: `pnpm --filter @ainb/bridge test mentor`):
+  - `bridge/src/chat.ts`: `opts.mentor`/`workshop`, `tools()`, playbook và các khối prompt, `judge()`, `hint()`, thẻ chạy cell ("Hỏi mentor", "Chấm bài"), `isNotebookTool`. Mentor dùng nội bộ của `Chat`: `withBusyJob`, `exclusive`, `call`, `addCard`/`closeCard`, `send(text, {context})`.
+  - `bridge/src/server.ts`: `mentorSession` trong `chat.open`, các handler `mentor.*`, `/mentor/reload`, `adoptRenamed`, lọc chat Mentor khỏi danh sách chat (`isMentorNotebook`).
+  - `protocol/src/wire.ts`, `ui/src/app.tsx`, `vscode/src/extension.ts`, `panel-core.ts`, `bridge.ts`.
+- **Thứ Mentor đọc theo tên hoặc theo câu chữ** (đổi bên lõi thì vẫn biên dịch được, chỉ có Mentor lặng lẽ kém đi), được ghim trong `bridge/test/mentor-contract.test.ts`:
+  - Năm tool của lõi mà chat Mentor giữ lại (`KEPT` trong `mentor/tools.ts` và `mentor/workshop.ts`): `kernel_state`, `read_output`, `run_code`, `wait_for_code`, `interrupt_kernel`. Tool đổi tên là rơi khỏi danh sách.
+  - Các câu báo lỗi của lõi mà Mentor giải thích cho người học (`mentor/judge.ts: kernelProblem`): kernel bận, máy Kaggle chưa bật, Colab chưa nối máy, trang không tới được, extension chưa nối.
+  - Lệnh `orx paper --full -- <id>` (xem dưới).
+- **Thứ trình biên dịch và test sẵn có đã canh**: năm op notebook (`get_cells`, `insert_cell`, `delete_cell`, `execute`, `interrupt`) qua kiểu `NotebookOp`; dạng khóa notebook (`protocol/test/identity.test.ts`; nhật ký Mentor lưu khóa này, đổi dạng khóa là các bài đang làm dở mất chỗ); chat thường không đổi vì Mentor (`mentor-chat.test.ts`: "leaves other notebooks' chats as they were").
+- **OpenResearch**: Mentor chỉ gọi nó ở một chỗ, và chỗ đó tùy chọn: khi arXiv không có mã LaTeX thì thử `orx paper --full` (`mentor/fetch.ts: fetchArxiv`, gọi từ `server.ts`). Hỏng thì người học được bảo thêm paper bằng PDF. Chat Mentor không có project, không khởi động `orx up` (`mentor-chat.test.ts`: "never looks for OpenResearch").
+- **Dữ liệu** của Mentor ở `~/.agent-in-notebook/mentor/`, lõi không dọn thư mục này.
+
 ## Luồng một tool call
 
 ```

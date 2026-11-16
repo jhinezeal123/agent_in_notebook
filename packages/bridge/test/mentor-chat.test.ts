@@ -17,7 +17,9 @@ import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
 const TOKEN = "test-token-0123456789abcdef";
 const CLI = resolve(__dirname, "../dist/cli.js");
 const FAKE_AGENT = resolve(__dirname, "fixtures/fake-agent.mjs");
-const NO_ORX = { knownPorts: [], locate: () => ({ missing: "OpenResearch is not used in these tests." }) };
+/** How many times the bridge went looking for OpenResearch. */
+let orxAsked = 0;
+const NO_ORX = { knownPorts: [], locate: () => (orxAsked++, { missing: "OpenResearch is not used in these tests." }) };
 const SETTINGS = { scope: "write", review: true, targetCellIds: [], notebookOnly: false };
 
 const TAB_A = 11;
@@ -298,6 +300,10 @@ describe("a Mentor exercise in a Kaggle notebook", () => {
     browser.rpc.emit("notebook.detached", { tabId: TAB_B });
     await editor.waitFor(() => updates > before, 10_000, "mentor.updated");
     expect(await place(TAB_B)).toBeUndefined();
+  });
+
+  it("never looks for OpenResearch: Mentor chats have no research project", () => {
+    expect(orxAsked).toBe(0);
   });
 
   it("leaves other notebooks' chats as they were", async () => {
