@@ -1,0 +1,3 @@
+def layer_norm(x, gamma, beta, eps=1e-5):
+    """x: (..., d), gamma/beta: (d,) -> cùng shape với x, chuẩn hoá theo trục cuối."""
+    ...

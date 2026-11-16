@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Vì sao chia cho tổng mask chứ không chia cho B·T? Nếu chia B·T thì loss và gradient thay đổi thế nào giữa batch nhiều padding và batch ít padding?",
+    "tag": "mask-denominator",
+    "answer": "Chia B·T làm loss (và gradient) nhỏ đi theo tỉ lệ padding, nên mỗi token được tính trọng số khác nhau tuỳ batch; chia số token thật cho trung bình đúng trên token."
+  },
+  {
+    "q": "log_probs[:, :, targets] khác np.take_along_axis(log_probs, targets[..., None], axis=-1) thế nào? Shape của mỗi cái?",
+    "tag": "fancy-index",
+    "answer": "Cái đầu dùng cả mảng targets làm chỉ số cho trục cuối ở mọi vị trí → shape (B, T, B, T). take_along_axis chọn theo từng vị trí → (B, T, 1)."
+  },
+  {
+    "q": "Trong PyTorch, hàm tương đương take_along_axis là gì? Còn F.cross_entropy dùng tham số nào để bỏ qua padding?",
+    "tag": "torch-gather",
+    "answer": "torch.gather(log_probs, -1, targets.unsqueeze(-1)). F.cross_entropy(..., ignore_index=pad_id) (mặc định reduction='mean' chia cho số token không bị bỏ qua)."
+  },
+  {
+    "q": "Vì sao đặt log_probs ở vị trí padding thành số rất lớn vẫn không được làm đổi kết quả, trong khi nhân với mask = 0 thì đôi khi vẫn hỏng? (gợi ý: inf · 0)",
+    "tag": "mask-multiply-inf",
+    "answer": "Nhân 0 với số hữu hạn ra 0, nhưng 0 · inf = nan; nếu padding có -inf (log 0) thì phép nhân mask lan nan. An toàn hơn là chọn bằng np.where/indexing thay vì nhân."
+  }
+]

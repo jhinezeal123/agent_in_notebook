@@ -1,0 +1,13 @@
+{
+  "id": "scaled-dot-attention",
+  "title": "Scaled dot-product attention có mask",
+  "star": "sdpa",
+  "skills": ["formula", "theory"],
+  "difficulty": 1550,
+  "minutes": 25,
+  "requires": ["numpy"],
+  "diagnostic": 2,
+  "order": 3,
+  "functions": ["attention"],
+  "probes": 3
+}

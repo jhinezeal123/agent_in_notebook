@@ -1,0 +1,3 @@
+def masked_nll(log_probs, targets, mask):
+    """log_probs: (B, T, V), targets: (B, T) int, mask: (B, T) -> số thực (trung bình trên token thật)."""
+    ...

@@ -1,0 +1,13 @@
+{
+  "id": "layernorm",
+  "title": "LayerNorm (forward)",
+  "star": "norm",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1350,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "diagnostic": 2,
+  "order": 2,
+  "functions": ["layer_norm"],
+  "probes": 2
+}

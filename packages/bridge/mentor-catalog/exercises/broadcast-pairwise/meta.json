@@ -1,0 +1,13 @@
+{
+  "id": "broadcast-pairwise",
+  "title": "Khoảng cách từng cặp bằng broadcasting",
+  "star": "broadcasting",
+  "skills": ["tensor"],
+  "difficulty": 1000,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "diagnostic": 1,
+  "order": 1,
+  "functions": ["pairwise_sqdist"],
+  "probes": 2
+}

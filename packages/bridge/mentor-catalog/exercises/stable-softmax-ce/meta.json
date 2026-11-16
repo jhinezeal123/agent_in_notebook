@@ -1,0 +1,13 @@
+{
+  "id": "stable-softmax-ce",
+  "title": "Log-softmax ổn định số và cross-entropy",
+  "star": "softmax",
+  "skills": ["formula", "theory"],
+  "difficulty": 1300,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "diagnostic": 2,
+  "order": 1,
+  "functions": ["log_softmax", "cross_entropy"],
+  "probes": 2
+}

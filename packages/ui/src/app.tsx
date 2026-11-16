@@ -5,6 +5,8 @@ import { DEFAULT_PREFS, type AttachedCell, type BridgeState, type NotebookChoice
 import { usePanelHost } from "./host.js";
 import { AttachedChip, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { Icon, type IconName } from "./icons.js";
+import { MentorBar } from "./mentor-bar.js";
+import type { MentorStage } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -67,6 +69,8 @@ export function App() {
           });
         } else if (method === "chat.usage") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, usage: params.usage } : c));
+        } else if (method === "chat.mentor") {
+          setChat((c) => (c && c.chatId === params.chatId ? { ...c, mentor: params.mentor } : c));
         } else if (method === "chat.machine") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, machine: params.machine } : c));
         } else if (method === "chat.status") {
@@ -204,14 +208,18 @@ export function App() {
       review: (reviewId, accept) => live && void run(client.request("chat.review", { chatId: live.chatId, reviewId, accept })),
       cardAction: (cardId, actionId) => live && void run(client.request("chat.cardAction", { chatId: live.chatId, cardId, actionId })),
       focusCell: (cellId) => tabId !== null && void run(client.request("notebook.focus", { tabId, cellId })),
-      insertCell: (source, cellType) => tabId !== null && void run(client.request("notebook.insert", { tabId, source, cellType })),
+      // In a Mentor exercise the learner types every line themself.
+      insertCell: (source, cellType) => tabId !== null && !live?.mentor && void run(client.request("notebook.insert", { tabId, source, cellType })),
       // The transcript shows the outcome (a notice on the message); errors show in the banner.
       undo: async (messageId) => {
         if (live) await run(client.request("chat.undo", { chatId: live.chatId, messageId }));
       },
     }),
-    [live?.chatId, tabId],
+    [live?.chatId, tabId, !!live?.mentor],
   );
+
+  const mentor = live?.mentor;
+  const mentorCall = (method: string, extra: Record<string, unknown> = {}) => live && void run(client.request(method, { chatId: live.chatId, ...extra }));
 
   if (!bridge) return <div class="center muted">{error ?? "Loading…"}</div>;
   if (!connected) return <Setup bridge={bridge} />;
@@ -239,7 +247,7 @@ export function App() {
   };
 
   return (
-    <div class="app">
+    <div class={mentor ? "app mentor-chat" : "app"}>
       {notebook && (
         <NotebookHeader
           notebook={notebook}
@@ -252,12 +260,22 @@ export function App() {
           onPushCode={() => live && void run(client.request("chat.pushCode", { chatId: live.chatId }))}
         />
       )}
+      {mentor && (
+        <MentorBar
+          mentor={mentor}
+          busy={running || live?.status === "starting"}
+          onJudge={() => mentorCall("mentor.judge")}
+          onHint={() => mentorCall("mentor.hint")}
+          onStage={(stage: MentorStage) => mentorCall("mentor.stage", { stage })}
+          onHome={() => void run(client.request("mentor.open"))}
+        />
+      )}
       {!notebook ? (
         <Welcome mark>
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
         </Welcome>
       ) : (
-        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} />
+        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} mentor={!!mentor} />
       )}
 
       {live?.error && <div class="banner error">{live.error}</div>}
@@ -289,7 +307,7 @@ export function App() {
             running={running}
             draft={draft}
             focusAt={attachedAt}
-            placeholder={attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}…`}
+            placeholder={mentor ? "Trao đổi với mentor…" : attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}…`}
             disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agentReady}
             onSend={send}
             onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
@@ -312,14 +330,14 @@ export function App() {
             }
             tools={
               <>
-                <Picker
+                {!mentor && <Picker
                   label="Mode"
                   class={`scope scope-${settings.scope}`}
                   value={settings.scope}
                   title={SCOPE_HINT[settings.scope]}
                   options={SCOPES.map((s) => ({ value: s, label: SCOPE_LABEL[s], title: SCOPE_HINT[s] }))}
                   onChange={(s) => updateSettings({ ...settings, scope: s as Scope })}
-                />
+                />}
                 {modelOptions.map((o) => <OptionPicker key={o.id} option={o} disabled={optionsLocked} onSet={setOption} />)}
                 <OptionsMenu label={agentName}>
                   <div class="option-row">
@@ -354,6 +372,7 @@ export function App() {
             }
           />
           <div class="input-status">
+            {!mentor && <>
             <label class="toggle" title="Show each change as a diff to apply or reject">
               <input type="checkbox" class="switch" checked={settings.review} onChange={(e) => updateSettings({ ...settings, review: e.currentTarget.checked })} />
               Review
@@ -362,6 +381,7 @@ export function App() {
               <input type="checkbox" class="switch" checked={settings.notebookOnly} onChange={(e) => updateSettings({ ...settings, notebookOnly: e.currentTarget.checked })} />
               Notebook only
             </label>
+            </>}
             {live?.status === "starting" && <span role="status">Starting {live.agentName}…</span>}
             {live?.usage && live.agentId === prefs.agentId && <ContextMeter usage={live.usage} />}
           </div>
@@ -624,7 +644,12 @@ const SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
   { icon: "chart", label: "Plot the training loss", text: "Add a section that plots the training loss" },
 ];
 
-function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void }) {
+const MENTOR_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
+  { icon: "sparkle", label: "Bắt đầu buổi học", text: "Chào mentor, mình bắt đầu bài này. Mình đã chạy các cell Phòng công thức." },
+  { icon: "notebook", label: "Kể lại công thức", text: "Mình hiểu công thức này như sau: " },
+];
+
+function Transcript({ chat, actions, onSuggest, mentor = false }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void; mentor?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -645,6 +670,19 @@ function Transcript({ chat, actions, onSuggest }: { chat: ChatSnapshot | null; a
     return () => observer.disconnect();
   }, [hasMessages]);
 
+  if (mentor && (!chat || !hasMessages)) {
+    return (
+      <Welcome title="Bắt đầu thôi" text={<p>Chạy các cell <b>Phòng công thức</b> trong notebook, nhìn kỹ hình, rồi kể lại công thức bằng lời của bạn. Mentor sẽ hỏi lại, không code hộ.</p>}>
+        <div class="suggestions">
+          {MENTOR_SUGGESTIONS.map((s) => (
+            <button key={s.text} class="suggestion" onClick={() => onSuggest(s.text)}>
+              <Icon name={s.icon} /><span>{s.label}</span><Icon name="chev-r" />
+            </button>
+          ))}
+        </div>
+      </Welcome>
+    );
+  }
   if (!chat || !hasMessages) {
     return (
       <Welcome title="What are you working on?" text={<p>Ask about your notebook, or get help editing and running cells.</p>}>

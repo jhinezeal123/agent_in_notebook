@@ -1,0 +1,13 @@
+{
+  "id": "einsum-scores",
+  "title": "einsum: điểm attention theo batch và dạng song tuyến",
+  "star": "einsum",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1250,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "diagnostic": 1,
+  "order": 3,
+  "functions": ["batched_scores", "bilinear"],
+  "probes": 2
+}

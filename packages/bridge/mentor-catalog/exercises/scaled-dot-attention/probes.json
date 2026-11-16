@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Vì sao chia cho √d_k mà không phải d_k? (gợi ý: phương sai của q·k khi các thành phần độc lập, trung bình 0, phương sai 1)",
+    "tag": "sqrt-dk",
+    "answer": "q·k là tổng d_k số hạng độc lập phương sai 1 → phương sai d_k, độ lệch chuẩn √d_k. Chia √d_k đưa về phương sai 1. Chia d_k làm điểm quá nhỏ (std 1/√d_k), softmax gần đều, mất khả năng tập trung."
+  },
+  {
+    "q": "Không scale thì khi d_k lớn, gradient đi qua softmax ra sao? Dùng Jacobian của softmax để giải thích.",
+    "tag": "softmax-saturation",
+    "answer": "Softmax bão hoà gần one-hot; Jacobian diag(p) − ppᵀ gần 0 ở mọi phần tử, nên gradient gần như biến mất, học chậm."
+  },
+  {
+    "q": "Che bằng −∞ trước softmax khác gì nhân mask (0/1) vào weights sau softmax?",
+    "tag": "mask-before-softmax",
+    "answer": "Nhân sau softmax làm hàng không còn cộng thành 1 và các vị trí bị che vẫn nằm trong mẫu số; −∞ trước softmax loại hẳn chúng và softmax tự chuẩn hoá lại."
+  },
+  {
+    "q": "Một hàng bị che toàn bộ (mọi vị trí −∞) thì softmax cho ra gì? Thực tế người ta xử lý thế nào?",
+    "tag": "fully-masked-row",
+    "answer": "−∞ − (−∞) = nan, nan lan ra cả output và gradient. Dùng số âm lớn hữu hạn (−1e9 hoặc giá trị min của dtype), hoặc xử lý riêng hàng đó (đặt output 0)."
+  },
+  {
+    "q": "Thời gian và bộ nhớ của attention tăng thế nào theo độ dài chuỗi T? Phần nào chiếm bộ nhớ?",
+    "tag": "attention-complexity",
+    "answer": "Thời gian O(T²·d), bộ nhớ O(T²) cho ma trận điểm/weights mỗi head; đó là lý do có FlashAttention (không lưu toàn bộ ma trận)."
+  }
+]

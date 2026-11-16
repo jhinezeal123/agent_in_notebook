@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Vì sao trừ max không làm thay đổi softmax? Chứng minh trong một dòng.",
+    "tag": "shift-invariance",
+    "answer": "e^{z_i − m} / Σ_j e^{z_j − m} = e^{−m} e^{z_i} / (e^{−m} Σ_j e^{z_j}): hệ số e^{−m} triệt tiêu."
+  },
+  {
+    "q": "Trừ max chống overflow. Còn underflow: số hạng e^{z_j − m} có thể thành 0 không, và có hại cho log không?",
+    "tag": "underflow",
+    "answer": "Có thể thành 0 với z_j rất nhỏ, nhưng vô hại: số hạng của phần tử max bằng 1 nên tổng ≥ 1, log không bao giờ gặp 0; log_softmax của phần tử nhỏ vẫn hữu hạn = z_j − m − log(tổng)."
+  },
+  {
+    "q": "Gradient của cross-entropy (trung bình) theo logits là gì? Vì sao người ta nói nó 'đẹp' hơn MSE trên xác suất?",
+    "tag": "ce-grad",
+    "answer": "(softmax(z) − onehot(y)) / B. Bị chặn trong [−1, 1] và không bão hoà khi dự đoán sai nặng, khác MSE qua sigmoid/softmax có gradient nhỏ dần."
+  },
+  {
+    "q": "Vì sao F.cross_entropy của PyTorch nhận logits chứ không nhận xác suất đã softmax?",
+    "tag": "logits-vs-probs",
+    "answer": "Để gộp log_softmax và NLL trong một phép ổn định số; lấy log của xác suất đã tính có thể gặp log(0) = −inf và mất độ chính xác."
+  }
+]

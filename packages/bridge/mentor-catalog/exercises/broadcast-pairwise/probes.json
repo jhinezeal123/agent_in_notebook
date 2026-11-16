@@ -1,0 +1,22 @@
+[
+  {
+    "q": "X[:, None, :] - Y[None, :, :] tạo ra một mảng trung gian bao nhiêu phần tử? Với n = m = 50 000 và d = 512 thì chuyện gì xảy ra, và cách khai triển ||x||² + ||y||² − 2xᵀy tránh nó thế nào?",
+    "tag": "broadcast-memory",
+    "answer": "n·m·d phần tử (50k·50k·512 ≈ 1.3·10¹² số, hết bộ nhớ). Khai triển chỉ cần ma trận n×m qua phép nhân ma trận X @ Y.T cùng hai vector chuẩn, bộ nhớ O(nm + nd + md)."
+  },
+  {
+    "q": "Cách khai triển có thể cho giá trị âm rất nhỏ trên đường chéo của D(X, X). Vì sao, và xử lý thế nào?",
+    "tag": "float-cancellation",
+    "answer": "Trừ hai số lớn gần bằng nhau (catastrophic cancellation) trong số thực dấu phẩy động. Kẹp về 0 bằng np.maximum(D, 0) (rồi mới lấy căn nếu cần khoảng cách)."
+  },
+  {
+    "q": "Broadcasting căn các chiều từ phía nào? Mảng (3, 1, 4) trừ mảng (5, 4) cho shape gì? Còn (3, 2) trừ (3,) thì sao?",
+    "tag": "broadcast-rule",
+    "answer": "Từ phải sang trái; chiều bằng 1 (hoặc thiếu) được kéo giãn. (3,1,4) − (5,4) → (3,5,4). (3,2) − (3,) lỗi vì chiều cuối 2 ≠ 3."
+  },
+  {
+    "q": "Nếu chỉ viết X[:, None] - Y (không thêm None cho Y) thì có chạy không, ra shape gì?",
+    "tag": "broadcast-implicit",
+    "answer": "Chạy: Y (m, d) được coi như (1, m, d), kết quả (n, m, d). Thêm None cho Y chỉ làm ý rõ hơn."
+  }
+]

@@ -39,6 +39,9 @@ import { ProjectLinks } from "./research/links.js";
 import { describeFailure, ResearchProjects } from "./research/projects.js";
 import { forgetSetup, runSetup } from "./notebook/setup.js";
 import { ChatStore, pruneDir } from "./store.js";
+import { Mentor } from "./mentor/index.js";
+import { checkEnv } from "./mentor/env.js";
+import { MentorSession } from "./mentor/session.js";
 
 /** Saved transcripts and agent working directories untouched this long are deleted at startup. */
 const KEEP_MS = 30 * 24 * 3600_000;
@@ -98,6 +101,8 @@ export class Bridge {
   readonly orx: Orx;
   /** The OpenResearch projects notebooks belong to. */
   readonly links: ProjectLinks;
+  /** Mentor: exercises, the learner's log and ratings. */
+  readonly mentor: Mentor;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
@@ -110,6 +115,7 @@ export class Bridge {
       onRun: (run) => this.toEditor("research.run", run),
     });
     this.links = new ProjectLinks(this.store, new ResearchProjects(this.orx, (m) => this.log(m)), (m) => this.log(m));
+    this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.toEditor("mentor.updated", {}) });
     try {
       this.store.prune(KEEP_MS, META_KEEP_MS);
       const workspaces = join(dataDir(), "workspaces");
@@ -329,16 +335,19 @@ export class Bridge {
           }
         }
         const info = target.kind === "browser" ? this.browserNotebooks.get(target.tabId) : undefined;
+        // A Mentor exercise's notebook: the agent coaches; it belongs to no project.
+        const mentor = this.mentorSession(target, key);
         // The bridge decides the notebook's project (its meta file); the editor only overrides it.
-        const project = key ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key), { notebookKey: key, carried, note, journal, project });
+        const project = key && !mentor ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, !!mentor), { notebookKey: key, carried, note, journal, project, mentor });
         this.chats.set(p.tabId, chat);
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
         this.byToken.set(chat.mcpToken, chat);
-        void chat.refreshMachine();
+        // A Mentor notebook runs on this computer: its kernel is left free for the learner and the judge.
+        if (!mentor) void chat.refreshMachine();
         chat.ensureStarted().catch((e) => this.log(`${spec.name} failed to start: ${(e as Error).message.split("\n")[0]}`));
-        if (key) void this.refreshProject(chat);
+        if (key && !mentor) void this.refreshProject(chat);
         return chat.snapshot();
       }),
     );
@@ -355,7 +364,9 @@ export class Bridge {
       "chats.list",
       guard<"chats.list">((p) => {
         const open = new Map([...this.chats.values()].filter((c) => c.notebookKey).map((c) => [c.notebookKey!, c.tabId]));
-        const chats = this.links.list(String(p.projectId)).map((c) => (open.has(c.notebookKey) ? { ...c, tabId: open.get(c.notebookKey) } : c));
+        const chats = this.links.list(String(p.projectId))
+          .filter((c) => !this.isMentorNotebook(c.notebookKey))
+          .map((c) => (open.has(c.notebookKey) ? { ...c, tabId: open.get(c.notebookKey) } : c));
         return { chats };
       }),
     );
@@ -412,6 +423,27 @@ export class Bridge {
       const waitMs = Math.min(110, Math.max(5, Number(p.waitSeconds) || 90)) * 1000;
       return runSetup((op, timeoutMs) => this.notebookOp(target, op, timeoutMs), `${target.kind}:${target.tabId}`, String(p.script ?? ""), waitMs);
     }));
+    rpc.handle("mentor.home", guard<"mentor.home">(() => this.mentor.home()));
+    rpc.handle("mentor.start", guard<"mentor.start">((p) => this.mentor.start(typeof p?.exerciseId === "string" && p.exerciseId ? p.exerciseId : undefined)));
+    rpc.handle("mentor.judge", guard<"mentor.judge">(async (p) => {
+      // The verdict arrives in the chat; the request only says it started.
+      const chat = this.chatById(p.chatId);
+      const running = chat.judge();
+      running.catch(() => {});
+      await Promise.race([running, new Promise((r) => setTimeout(r, 50))]);
+      return { started: true };
+    }));
+    rpc.handle("mentor.hint", guard<"mentor.hint">((p) => ({ level: this.chatById(p.chatId).hint() })));
+    rpc.handle("mentor.stage", guard<"mentor.stage">((p) => {
+      const chat = this.chatById(p.chatId);
+      chat.mentorStage(p.stage);
+      return chat.mentor!.view();
+    }));
+    rpc.handle("mentor.env", guard<"mentor.env">((p) => checkEnv(!!p?.refresh)));
+    rpc.handle("mentor.settings", guard<"mentor.settings">((p) => {
+      if (typeof p?.workDir === "string" && p.workDir.trim()) this.mentor.setWorkDir(p.workDir.trim());
+      return this.mentor.home();
+    }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
       if (p?.orxPath !== undefined) {
@@ -466,7 +498,7 @@ export class Bridge {
           continue;
         }
         chat.notebook = p.info;
-        if (chat.notebookKey && p.info?.key === chat.notebookKey) {
+        if (chat.notebookKey && p.info?.key === chat.notebookKey && !chat.mentor) {
           try {
             this.store.saveMeta(chat.notebookKey, { title: p.info.title, url: p.info.url, platform: p.info.platform });
           } catch (e) {
@@ -571,8 +603,28 @@ export class Bridge {
     return res.project;
   }
 
-  private chatHost(target: Target, key?: string): ChatHost {
-    const project: ChatProjectHost | undefined = key
+  /** The Mentor attempt a VS Code notebook is, for its chat. */
+  private mentorSession(target: Target, key: string | undefined): MentorSession | undefined {
+    if (!key || target.kind !== "vscode" || !key.startsWith("vscode:")) return undefined;
+    try {
+      const attempt = this.mentor.attemptForFile(key);
+      return attempt ? new MentorSession(this.mentor, attempt.attemptId) : undefined;
+    } catch (e) {
+      this.log(`Mentor: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
+  private isMentorNotebook(key: string): boolean {
+    try {
+      return key.startsWith("vscode:") && !!this.mentor.attemptForFile(key);
+    } catch {
+      return false;
+    }
+  }
+
+  private chatHost(target: Target, key?: string, mentor = false): ChatHost {
+    const project: ChatProjectHost | undefined = key && !mentor
       ? {
           links: this.links,
           research: this.links.projects,
@@ -653,7 +705,7 @@ export class Bridge {
     } catch {
       return json(res, 400, { error: "bad json" });
     }
-    if (url.pathname === "/mcp/list") return json(res, 200, { tools: listTools() });
+    if (url.pathname === "/mcp/list") return json(res, 200, { tools: listTools(chat.tools()) });
     if (url.pathname === "/mcp/call") {
       const result = await chat.runTool(String(body.name), body.arguments ?? {});
       return json(res, 200, result);

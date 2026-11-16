@@ -1,0 +1,13 @@
+{
+  "id": "gather-mask-nll",
+  "title": "Negative log-likelihood có mask (gather theo nhãn)",
+  "star": "indexing",
+  "skills": ["tensor"],
+  "difficulty": 1150,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "diagnostic": 1,
+  "order": 2,
+  "functions": ["masked_nll"],
+  "probes": 2
+}

@@ -1,0 +1,13 @@
+{
+  "id": "mlp-backprop",
+  "title": "MLP hai lớp: forward và backward bằng tay",
+  "star": "autograd",
+  "skills": ["formula", "blank"],
+  "difficulty": 1600,
+  "minutes": 30,
+  "requires": ["numpy"],
+  "diagnostic": 3,
+  "order": 1,
+  "functions": ["mlp_forward", "mlp_backward"],
+  "probes": 3
+}

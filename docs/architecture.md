@@ -81,6 +81,47 @@ VS Code                                     bridge                     orx up --
   - Bridge chờ tối đa khoảng 90 giây; script lâu hơn vẫn chạy tiếp trên máy.
   - Extension tự chạy script khi một notebook Colab/Kaggle trong Chrome có kernel đang chạy, nếu user đã bật tùy chọn này. Mỗi tab và notebook chỉ chạy một lần.
 
+## Mentor: tự cài đặt ML, có người kèm
+
+Mentor là người hướng dẫn **không code hộ**: bạn tự viết từng hàm, máy chấm quyết định đúng sai, AI chỉ hỏi dẫn, đưa gợi ý theo mức và hỏi vặn. Spec đầy đủ nằm trong kế hoạch "Spec: Mentor"; mục này tả cách nó được cài.
+
+```
+VS Code                                   bridge (bridge/src/mentor)                 kernel của notebook
+ tab "Mentor" (mentor.js, Preact)  ─WS─►  Mentor: catalog, store, model     
+ thanh trạng thái 🔥 chuỗi · ★ rating      events.jsonl → fold → rating, chuỗi ngày
+ notebook bài làm + khung chat     ─WS─►  Chat (mentor = MentorSession)  ──execute──► harness chấm bài
+   thanh 3 chặng, Chấm bài, Xin gợi ý     playbook <mentor>, tool mentor_*
+```
+
+- **Mentor là một thuộc tính của chat notebook**, không phải loại chat mới.
+  - `chat.open` với khóa `vscode:file:///…` tra file đó trong kho Mentor (`Mentor.attemptForFile`). Nếu là notebook của một lượt làm bài thì chat mang `MentorSession`.
+  - Chat mentor không có project: bỏ `refreshProject`, `refreshMachine`, không lưu `NotebookMeta`, không hiện trong `chats.list`. OpenResearch không bị khởi động.
+- **Kho** ở `~/.agent-in-notebook/mentor/`:
+  - `events.jsonl` chỉ ghi thêm, là nguồn sự thật: `start`, `stage`, `judge`, `hint`, `probe`, `misconception`, `done`. Mỗi sự kiện mang ngày địa phương (ngày đổi lúc 4 giờ sáng).
+  - `profile.json`: thư mục bài làm (mặc định `Documents\ml-mentor`).
+  - Mọi con số đều tính lại bằng phép gộp thuần `model.ts: fold/home`: Elo theo từng kỹ năng (bắt đầu 1000, K = 120/80/40 theo số bài đã làm), chuỗi ngày có ngày nghỉ phép, lịch nhiệt 16 tuần, trạng thái các sao, `pickToday` (làm tiếp → chẩn đoán → làm lại sau khi xem lời giải 3 ngày → bài kế trên bản đồ).
+- **Bài soạn sẵn** ở `bridge/mentor-catalog/`:
+  - `map.json`: các chòm sao, sao, vị trí và quan hệ "học trước".
+  - `exercises/<id>/`: `meta.json` (kiểm bằng zod trong `catalog.ts`), `brief.md`, `lab.py` (Phòng công thức), `starter.py`, `reference.py`, `tests.py`, `probes.json` (câu hiểm kèm đáp án cho mentor), `mutants/*.py` (bản cố tình sai).
+  - `notebook.ts` dựng `.ipynb`: đề → Phòng công thức → Phác thảo → Bài làm (cell có dòng `#| mentor: solution`) → Thử nhanh. Lời giải và test không bao giờ nằm trong notebook.
+  - `test/mentor-catalog.test.ts` chạy Python thật: lời giải chuẩn qua hết test, starter và mọi mutant đều trượt, không dòng nào của lời giải lọt vào notebook.
+- **Chấm bài** (`judge.ts`, `Chat.judge`):
+  - Lấy nguồn các cell lời giải, `exec` trong một dict mới (không dùng biến của kernel), chạy `test_*(user, ref)`, in một dòng `<<MENTOR {json} MENTOR>>` có nonce.
+  - Chạy bằng op `execute` trong `withBusyJob`; quá 60 giây thì ngắt kernel.
+  - Kết quả thành thẻ (đạt x/y, lỗi chạy, thiếu thư viện) và một lượt chat kèm khối `<mentor-verdict>` để mentor hỏi dẫn tiếp. Chấm đạt thì tự sang chặng Bảo vệ.
+- **Ba chặng** (`session.ts`): `lab → build → defend → done`. Bridge từ chối sang Bảo vệ khi chưa chấm đạt, và từ chối Xong khi chưa đủ số câu hỏi vặn đã chấm. Xong thì ghi `done`, tính rating và hiện thẻ kết quả.
+- **Agent** (`prompt.ts`, `tools.ts`):
+  - Playbook `<mentor>` thay playbook gốc: không sửa cell của bạn, gợi ý đúng mức cho phép, hỏi câu hiểm từ ngân hàng câu hỏi.
+  - Mỗi lượt có `<mentor-state>`: chặng, mức gợi ý, kết quả chấm, các cell bài làm nếu đã đổi.
+  - Lời giải mẫu chỉ có trong khối `<hint-request level="4">`.
+  - Danh sách công cụ cho phép (`MENTOR_CHAT_TOOLS`): `kernel_state`, `read_output`, `run_code`, `wait_for_code`, `interrupt_kernel`, cùng `mentor_read_cells`, `mentor_stage`, `mentor_probe_result`, `mentor_misconception`. `/mcp/list` trả theo từng chat. Settings cố định (`MENTOR_SETTINGS`); khung chat ẩn bộ chọn Mode, Review, Notebook only và nút chèn code thành cell.
+  - Danh sách này không phải hộp cát: `run_code` vẫn ghi được file, và agent không phải Claude giữ shell riêng.
+- **Giao diện**:
+  - Khung chat (`ui/src/mentor-bar.tsx`): thanh ba chặng, nút Chấm bài, Xin gợi ý n/4 (mức 4 hỏi xác nhận vì không được cộng rating), thẻ kết quả chấm và thẻ rating.
+  - Trang chủ (`ui/src/mentor/home.tsx`, `constellation.ts`, `ui/mentor.css`): bản đồ chòm sao SVG trên nền trời đêm riêng, bài hôm nay, kỹ năng, chuỗi ngày và lịch nhiệt, tủ paper, kiểm tra máy (Python, numpy, matplotlib, ipykernel, PyTorch, extension Jupyter) kèm lệnh cài.
+  - Host (`vscode/src/mentor-host.ts`): tab "Mentor" (lệnh `ainb.mentor.open`, nút ngôi sao trên tiêu đề khung chat), mục thanh trạng thái; bắt đầu bài thì mở notebook ở giữa và focus khung chat.
+- **Giao thức**: `WIRE_VERSION = 5`. Phương thức `mentor.home/start/judge/hint/stage/env/settings`; sự kiện `chat.mentor` và `mentor.updated`.
+
 ## Luồng một tool call
 
 ```

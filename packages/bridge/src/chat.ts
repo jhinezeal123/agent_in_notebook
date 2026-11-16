@@ -31,6 +31,8 @@ import {
   type NotebookOpOf,
   type NotebookOpResults,
   type OutputImage,
+  type MentorResult,
+  type MentorVerdict,
   type Part,
   type PartOp,
   type ReviewInfo,
@@ -44,7 +46,7 @@ import { NotebookMirror, notebookPath } from "./notebook/nbfile.js";
 import { ShellSessions } from "./notebook/shell.js";
 import { stats } from "./notebook/vmfs.js";
 import type { KernelExec } from "./notebook/kernel.js";
-import { callTool, Denied, renderCell, type ReviewOutcome, type ToolContext, type ToolResult } from "./notebook/tools.js";
+import { callTool, Denied, renderCell, TOOLS, type ReviewOutcome, type ToolContext, type ToolDef, type ToolResult } from "./notebook/tools.js";
 import { PROJECT_TOOLS, saveNotebook, type ProjectToolContext } from "./project/tools.js";
 import { redactTokens, remoteOf } from "./project/github.js";
 import { CodeSync, type CodePlace, type CodeState } from "./project/vmrepo.js";
@@ -53,6 +55,11 @@ import type { NotebookMeta, ProjectCache } from "./store.js";
 import { ensureWorktree } from "./project/worktree.js";
 import { describeFailure, type ResearchProjects } from "./research/projects.js";
 import { keyHash } from "./store.js";
+import { judgeCode, newNonce, parseVerdict } from "./mentor/judge.js";
+import { isSolutionCell } from "./mentor/notebook.js";
+import { hintBlock, hintText, learnerCells, mentorPlaybook, mentorState, verdictBlock } from "./mentor/prompt.js";
+import { StageRefused, type MentorSession } from "./mentor/session.js";
+import { MENTOR_CHAT_TOOLS } from "./mentor/tools.js";
 
 /** How the chat reaches its notebook and the chat UI. */
 export interface ChatHost {
@@ -96,7 +103,14 @@ export interface ChatOptions {
   journal?: Record<string, AppliedChange[]>;
   /** The notebook's project as known when the chat opens. */
   project?: ChatProject;
+  /** The Mentor exercise the notebook is: the agent coaches instead of editing. */
+  mentor?: MentorSession;
 }
+
+/** A Mentor chat's fixed mode: the agent may run scratch code; it has no tool that edits the notebook. */
+const MENTOR_SETTINGS: ChatSettings = { scope: "auto", review: false, targetCellIds: [], notebookOnly: true };
+/** Longest the judge waits for the tests before stopping them. */
+const JUDGE_WAIT_MS = 60_000;
 
 const TOOL_DETAIL_MAX = 4000;
 /** Bound the image data included in full chat snapshots and persisted transcripts. */
@@ -225,6 +239,11 @@ export class Chat {
   private lastCodeShown = "";
   /** Parts of each message as last sent to the extension, to send only what changed. */
   private sent = new Map<string, SentPart[]>();
+  /** The Mentor exercise this chat coaches, if it is one. */
+  readonly mentor: MentorSession | undefined;
+  /** The learner's cells as the agent last saw them. */
+  private lastLearnerCells = "";
+  private unsubscribeMentor: (() => void) | undefined;
 
   constructor(
     readonly tabId: number,
@@ -235,6 +254,14 @@ export class Chat {
   ) {
     this.notebookKey = opts.notebookKey;
     this.project = opts.project;
+    this.mentor = opts.mentor;
+    if (this.mentor) {
+      this.settings = MENTOR_SETTINGS;
+      const attemptId = this.mentor.attemptId;
+      this.unsubscribeMentor = this.mentor.mentor.subscribe((id) => {
+        if (id === attemptId && !this.closed) this.host.emit("chat.mentor", { chatId: this.id, tabId: this.tabId, mentor: this.mentor!.view() });
+      });
+    }
     this.code = host.project && opts.notebookKey ? new CodeSync((op, ms) => this.call(op as never, ms) as Promise<unknown>, opts.notebookKey) : null;
     this.codeState = this.code ? { state: "missing", why: "Not put on the notebook's machine since the chat opened." } : undefined;
     for (const [id, changes] of Object.entries(opts.journal ?? {})) if (Array.isArray(changes) && changes.length) this.journal.set(id, changes);
@@ -274,6 +301,7 @@ export class Chat {
       machine: this.machine,
       ...(this.project ? { project: this.project } : {}),
       ...(this.codeState ? { code: this.codeState } : {}),
+      ...(this.mentor ? { mentor: this.mentor.view() } : {}),
     };
   }
 
@@ -362,6 +390,7 @@ export class Chat {
     for (const r of this.reviews.values()) r.waiters.forEach((w) => w("pending"));
     this.agent?.dispose();
     this.agent = null;
+    this.unsubscribeMentor?.();
     this.setStatus("closed");
     this.persistNow();
   }
@@ -447,6 +476,7 @@ export class Chat {
   }
 
   private async buildPrompt(input: TurnInput): Promise<string> {
+    if (this.mentor) return this.buildMentorPrompt(input, this.mentor);
     let machineTimer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       this.refreshMachine(),
@@ -490,25 +520,138 @@ export class Chat {
     if (code) blocks.push(code);
     const lit = this.host.project ? litReview(input.text) : null;
     if (lit) blocks.push(lit);
-    if (this.activity.length || this.kernelNotes.length) {
-      const runs = this.activity.map((run) => {
-        const status = `${run.status}${run.durationMs === undefined ? "" : ` (${runDuration(run.durationMs)})`}`;
-        const error = run.ename ? ` ${run.ename}${run.evalue ? `: ${firstLine(run.evalue, 100)}` : ""}` : "";
-        return `[${run.index}] ${run.cellId} ${status}${error}`;
-      });
-      const activity = [
-        this.activity.length ? `Since your last turn the user ran these cells themselves, oldest first:\n${runs.join(" · ")}` : "",
-        ...this.kernelNotes,
-      ].filter(Boolean).join("\n");
-      blocks.push(`<notebook-activity>\n${activity}\n</notebook-activity>`);
-      this.activity = [];
-      this.kernelNotes = [];
-    }
+    const activity = this.activityBlock();
+    if (activity) blocks.push(activity);
     if (input.context) blocks.push(input.context);
     if (input.cells?.length) blocks.push(await this.attachedBlock(input.cells));
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file, runLines, this.machine ? machineLine(this.machine, Date.now()) : null));
     blocks.push(input.text);
     return blocks.join("\n\n");
+  }
+
+  /** Cells the user ran and kernel restarts since the agent's last turn. */
+  private activityBlock(): string | null {
+    if (!this.activity.length && !this.kernelNotes.length) return null;
+    const runs = this.activity.map((run) => {
+      const status = `${run.status}${run.durationMs === undefined ? "" : ` (${runDuration(run.durationMs)})`}`;
+      const error = run.ename ? ` ${run.ename}${run.evalue ? `: ${firstLine(run.evalue, 100)}` : ""}` : "";
+      return `[${run.index}] ${run.cellId} ${status}${error}`;
+    });
+    const activity = [
+      this.activity.length ? `Since your last turn the user ran these cells themselves, oldest first:\n${runs.join(" · ")}` : "",
+      ...this.kernelNotes,
+    ].filter(Boolean).join("\n");
+    this.activity = [];
+    this.kernelNotes = [];
+    return `<notebook-activity>\n${activity}\n</notebook-activity>`;
+  }
+
+  /** A Mentor chat's prompt: its own rules, the exercise's state, and the learner's cells when they changed. */
+  private async buildMentorPrompt(input: TurnInput, s: MentorSession): Promise<string> {
+    const rules = this.sessionFresh || this.rulesDue;
+    let cells: CellInfo[] | null = null;
+    try {
+      this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
+      cells = (await this.call({ op: "get_cells" })).cells;
+    } catch {
+      this.notebook = null;
+    }
+    const blocks: string[] = [];
+    if (rules) blocks.push(mentorPlaybook(s.exercise, s.attempt.file));
+    this.rulesDue = false;
+    const full = rules || !!this.pendingRecap;
+    if (this.pendingRecap) blocks.push(this.pendingRecap);
+    const activity = this.activityBlock();
+    if (activity) blocks.push(activity);
+    if (input.context) blocks.push(input.context);
+    if (input.cells?.length) blocks.push(await this.attachedBlock(input.cells));
+    const seen = cells ? learnerCells(cells) : null;
+    const shown = seen === null
+      ? "The notebook could not be read this turn."
+      : full || seen !== this.lastLearnerCells ? seen : "The learner's sketch and solution cells are unchanged since your last turn.";
+    if (seen !== null) this.lastLearnerCells = seen;
+    blocks.push(mentorState(s, shown, full ? s.mentor.learnerSummary(s.attemptId) : ""));
+    blocks.push(input.text);
+    return blocks.join("\n\n");
+  }
+
+  // ------------------------------------------------------------ mentor
+
+  /** "Chấm bài": run the exercise's hidden tests on the learner's cells, show the verdict, and let the mentor react. */
+  async judge(): Promise<void> {
+    const s = this.requireMentor();
+    if (this.current || this.busyJob) throw new Error("Đợi mentor trả lời xong (hoặc bấm dừng) rồi hãy chấm bài.");
+    const card = this.addCard({ kind: "mentor", tone: "info", title: "Đang chấm bài…", actions: [] }, () => {});
+    let verdict: MentorVerdict;
+    try {
+      verdict = await this.withBusyJob(async () => {
+        const { cells } = await this.call({ op: "get_cells" });
+        const source = cells.filter((c) => isSolutionCell(c)).map((c) => c.source).join("\n\n");
+        if (!source.trim()) {
+          return { at: Date.now(), ok: false, passed: 0, total: 0, tests: [], error: "Không thấy cell bài làm (cell bắt đầu bằng dòng `#| mentor: solution`)." };
+        }
+        const nonce = newNonce();
+        const res = await this.exclusive("run", () => this.call({ op: "execute", code: judgeCode(s.exercise, source, nonce), waitMs: JUDGE_WAIT_MS }, JUDGE_WAIT_MS + 30_000));
+        if (res.status === "running") await this.call({ op: "interrupt" }).catch(() => {});
+        return parseVerdict(res, nonce);
+      });
+    } catch (e) {
+      card.title = "Chưa chấm được";
+      this.closeCard(card.cardId, "done", kernelProblem((e as Error).message), "error");
+      return;
+    }
+    if (this.closed) return;
+    s.judged(verdict);
+    card.title = verdict.missing ? "Thiếu thư viện" : verdict.error ? "Bài làm chưa chạy được" : `Đạt ${verdict.passed}/${verdict.total} test`;
+    card.tone = verdict.ok ? "ok" : "error";
+    card.mentor = { type: "verdict", verdict };
+    this.closeCard(card.cardId, "done");
+    this.send("Chấm bài", { context: verdictBlock(verdict, s.stage) });
+  }
+
+  /** "Xin gợi ý": one hint level up, and the mentor gives a hint at it. */
+  hint(): number {
+    const s = this.requireMentor();
+    if (s.stage === "done") throw new Error("Bài đã xong.");
+    const level = s.raiseHint();
+    this.send(hintText(level), { context: hintBlock(s.exercise, level) });
+    return level;
+  }
+
+  /** The learner moved the exercise on themself (skipping the lab, say). */
+  mentorStage(stage: Parameters<MentorSession["setStage"]>[0]): void {
+    const s = this.requireMentor();
+    try {
+      const result = s.setStage(stage, "user");
+      if (result) this.showResult(result);
+    } catch (e) {
+      if (e instanceof StageRefused) throw new Error(e.message);
+      throw e;
+    }
+  }
+
+  private requireMentor(): MentorSession {
+    if (!this.mentor) throw new Error("Chat này không phải một bài Mentor.");
+    return this.mentor;
+  }
+
+  /** The attempt is done: its rating change and the streak, as a card. */
+  private showResult(result: MentorResult): void {
+    const streak = this.mentor!.mentor.home().streak.current;
+    const gained = result.deltas.reduce((sum, d) => sum + d.after - d.before, 0);
+    const card = this.addCard({
+      kind: "mentor",
+      tone: "ok",
+      title: result.revealed ? "Xong bài (đã xem lời giải mẫu)" : `Xong bài · ${gained >= 0 ? "+" : ""}${gained} rating`,
+      actions: [],
+      mentor: { type: "result", result, streak },
+    }, () => {});
+    this.closeCard(card.cardId, "done");
+  }
+
+  /** The tools this chat's agent gets. */
+  tools(): readonly ToolDef<any, any>[] {
+    return this.mentor ? MENTOR_CHAT_TOOLS : TOOLS;
   }
 
   /** The cells the user attached, read now with their outputs. */
@@ -904,7 +1047,7 @@ ${st.place.branch}`);
   // ------------------------------------------------------------ settings
 
   updateSettings(settings: ChatSettings): void {
-    this.settings = settings;
+    this.settings = this.mentor ? MENTOR_SETTINGS : settings;
     this.host.emit("chat.snapshot", this.snapshot());
   }
 
@@ -1293,6 +1436,14 @@ ${st.place.branch}`);
 
   runTool(name: string, args: unknown): Promise<ToolResult> {
     this.markNotebookCall(name, args, "notebook");
+    if (this.mentor) {
+      const before = this.mentor.attempt.result;
+      return callTool(Object.assign(this.toolContext(), { mentor: this.mentor }), name, args, MENTOR_CHAT_TOOLS).then((r) => {
+        const after = this.mentor!.attempt.result;
+        if (after && !before) this.showResult(after);
+        return r;
+      });
+    }
     // The GitHub token is on the machine (for git): what the agent reads never shows it.
     return callTool(this.toolContext(), name, args).then(hideTokens);
   }
@@ -1409,7 +1560,7 @@ ${st.place.branch}`);
     const long = (run.durationMs ?? 0) >= LONG_RUN_MS;
     let card: ChatCard;
     if (run.status === "error") card = this.addRunCard(run);
-    else if (run.status === "ok" && long && !this.busyJob) card = this.addFinishedCard(run);
+    else if (run.status === "ok" && long && !this.busyJob && !this.mentor) card = this.addFinishedCard(run);
     else return;
     if (long) this.host.emit("chat.run", { chatId: this.id, tabId: this.tabId, cardId: card.cardId, run, title: this.notebook?.title ?? "" });
   }
@@ -1430,11 +1581,14 @@ ${st.place.branch}`);
       title,
       detail,
       cellId: run.cellId,
-      actions: [
-        { id: "fix", label: "Fix", primary: true },
-        { id: "explain", label: "Explain" },
-        { id: "dismiss", label: "Dismiss" },
-      ],
+      // A Mentor chat never fixes the learner's code: the mentor helps them find the bug.
+      actions: this.mentor
+        ? [{ id: "explain", label: "Hỏi mentor", primary: true }, { id: "dismiss", label: "Bỏ qua" }]
+        : [
+            { id: "fix", label: "Fix", primary: true },
+            { id: "explain", label: "Explain" },
+            { id: "dismiss", label: "Dismiss" },
+          ],
     }, (id) => void this.runCardAction(cardId, run, id as "fix" | "explain"));
     cardId = card.cardId;
     this.limitRunCards();
@@ -1473,7 +1627,9 @@ ${st.place.branch}`);
     }
     if (this.closed) return;
     const context = cellRunBlock(action, run, rendered);
-    const text = action === "fix" ? `Fix the error in cell [${run.index}]` : action === "explain" ? `Explain the error in cell [${run.index}]` : `Summarize the result of cell [${run.index}]`;
+    const text = this.mentor
+      ? `Cell [${run.index}] bị lỗi. Gợi ý giúp mình tìm ra lỗi (đừng sửa hộ).`
+      : action === "fix" ? `Fix the error in cell [${run.index}]` : action === "explain" ? `Explain the error in cell [${run.index}]` : `Summarize the result of cell [${run.index}]`;
     this.send(text, { context, targets: [run.cellId] });
   }
 
@@ -1760,7 +1916,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP servers are registered as "notebook" and "project"; agents spell the tool name differently. */
 export function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|kernel_state|await_review|artifact_\w+|paper_search|paper_read|save_notebook)\b/i.test(t)) return true;
+  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|kernel_state|await_review|artifact_\w+|mentor_\w+|paper_search|paper_read|save_notebook)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }
@@ -1781,6 +1937,15 @@ function toolDetail(rawInput?: unknown, content?: ToolCallContent[] | null, rawO
   if (!parts.length) return undefined;
   // Image results echo back as long base64 strings; they mean nothing as text.
   return capText(parts.join("\n\n").replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]"), TOOL_DETAIL_MAX);
+}
+
+/** The judge could not run: why, for the learner. */
+function kernelProblem(message: string): string {
+  if (/busy/i.test(message)) return "Kernel đang bận chạy một cell. Đợi cell chạy xong (hoặc dừng nó) rồi bấm Chấm bài lại.";
+  if (/Start the Jupyter kernel|not connected|requires the Microsoft Jupyter/i.test(message)) {
+    return "Kernel chưa chạy. Chạy một cell bất kỳ trong notebook (chọn Python có numpy), cho phép truy cập kernel nếu VS Code hỏi, rồi bấm Chấm bài lại.";
+  }
+  return `Chưa chấm được: ${message}`;
 }
 
 /** A tool's result with the GitHub token hidden (it is on the notebook's machine for git). */

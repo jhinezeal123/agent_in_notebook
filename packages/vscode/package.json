@@ -10,7 +10,8 @@
   },
   "main": "./dist/extension.cjs",
   "activationEvents": [
-    "onFileSystem:ainb-chrome"
+    "onFileSystem:ainb-chrome",
+    "onStartupFinished"
   ],
   "extensionKind": [
     "workspace"
@@ -362,6 +363,12 @@
         "title": "Attach to Chat",
         "category": "Agent in Notebook",
         "icon": "$(attach)"
+      },
+      {
+        "command": "ainb.mentor.open",
+        "title": "Open Mentor",
+        "category": "Agent in Notebook",
+        "icon": "$(star-empty)"
       }
     ],
     "keybindings": [
@@ -473,6 +480,11 @@
         {
           "command": "ainb.code.showFiles",
           "when": "view == ainb.code && ainb.code.mode == changes",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ainb.mentor.open",
+          "when": "view == ainb.research || view == ainb.chat",
           "group": "navigation@0"
         }
       ],

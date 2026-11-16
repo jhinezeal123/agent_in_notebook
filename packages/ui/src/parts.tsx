@@ -8,6 +8,7 @@ import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcri
 
 import { usePanelHost, type PanelHost } from "./host.js";
 import { Icon } from "./icons.js";
+import { MentorCardBody } from "./mentor-bar.js";
 
 export interface PartActions {
   answer(promptId: string, optionId: string): void;
@@ -345,6 +346,7 @@ function Card({ card, actions }: { card: ChatCard; actions: PartActions }) {
         )}
       </div>
       {card.detail && <div class="card-status">{card.detail}</div>}
+      {card.mentor && <MentorCardBody body={card.mentor} />}
       {card.progress && (
         <div class="card-status card-progress">
           <progress max={card.progress.total} value={card.progress.done} />

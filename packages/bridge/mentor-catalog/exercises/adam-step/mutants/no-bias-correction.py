@@ -1,0 +1,12 @@
+def adam_init(params):
+    return {"t": 0, "m": {k: np.zeros_like(v, dtype=float) for k, v in params.items()}, "v": {k: np.zeros_like(v, dtype=float) for k, v in params.items()}}
+
+
+def adam_step(params, grads, state, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8):
+    m, v, out = {}, {}, {}
+    for k, p in params.items():
+        g = np.asarray(grads[k], dtype=float)
+        m[k] = b1 * state["m"][k] + (1 - b1) * g
+        v[k] = b2 * state["v"][k] + (1 - b2) * g * g
+        out[k] = p - lr * m[k] / (np.sqrt(v[k]) + eps)
+    return out, {"t": state["t"] + 1, "m": m, "v": v}

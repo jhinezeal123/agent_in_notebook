@@ -78,6 +78,11 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<earlier-conversation>")) await say("[saw recap]");
     if (text.includes("<undo-note>")) await say("[saw undo note]");
     if (text.includes("<lit-review>\n")) await say(text.includes("They named no topic") ? "[saw lit-review, no topic]" : "[saw lit-review]");
+    if (text.includes("<mentor>\n")) await say("[saw mentor playbook]");
+    if (text.includes("<hint-request level=")) await say(`[saw hint ${text.match(/<hint-request level="(\d)"/)?.[1]}${text.includes("Reference solution:") ? " with solution" : ""}]`);
+    if (text.includes("<mentor-verdict>\n")) await say("[saw verdict]");
+    const mentorState = text.match(/<mentor-state>[\s\S]*?<\/mentor-state>/);
+    if (mentorState && text.includes("ECHO_MENTOR")) await say(mentorState[0]);
     if (text.includes("ECHO_MODEL")) await say(`[model ${model}]`);
     const ctx = text.match(/<notebook-context>[\s\S]*?<\/notebook-context>/);
     if (ctx && text.includes("ECHO_CONTEXT")) await say(ctx[0]);

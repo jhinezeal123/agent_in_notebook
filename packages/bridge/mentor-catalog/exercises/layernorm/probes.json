@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Với tensor (B, T, d), LayerNorm và BatchNorm tính trung bình theo những trục nào? Vì sao Transformer dùng LayerNorm?",
+    "tag": "ln-vs-bn",
+    "answer": "LayerNorm: theo d của từng token. BatchNorm: theo B (và T) cho từng feature. LayerNorm không phụ thuộc batch size và padding, train và inference như nhau, hợp với chuỗi độ dài thay đổi."
+  },
+  {
+    "q": "Vì sao ε nằm trong căn? Nếu viết (x − μ) / (σ + ε) thì gradient theo x khi σ² → 0 ra sao?",
+    "tag": "eps-placement",
+    "answer": "Đạo hàm của sqrt(σ²) là 1/(2σ), tiến tới vô cùng khi σ² → 0; ε trong căn giữ mọi thứ hữu hạn và khớp cách PyTorch định nghĩa."
+  },
+  {
+    "q": "gamma và beta để làm gì, khi chuẩn hoá xong mọi token đều có trung bình 0 phương sai 1?",
+    "tag": "affine-params",
+    "answer": "Để mạng học lại scale và shift phù hợp (có thể khôi phục biểu diễn ban đầu nếu cần); không có chúng, lớp chuẩn hoá ép buộc một phân phối cố định."
+  },
+  {
+    "q": "Phương sai dùng ddof = 0 hay 1? Khác biệt là bao nhiêu và khi nào nó quan trọng?",
+    "tag": "ddof",
+    "answer": "ddof = 0 (như PyTorch). Khác nhau hệ số d/(d − 1); quan trọng khi cần khớp chính xác với cài đặt chuẩn, ví dụ nạp trọng số đã train hoặc so sánh output."
+  }
+]

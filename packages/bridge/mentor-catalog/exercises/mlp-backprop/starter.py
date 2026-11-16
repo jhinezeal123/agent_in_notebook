@@ -1,0 +1,6 @@
+def mlp_forward(X, params):
+    ...
+
+
+def mlp_backward(dout, cache, params):
+    ...

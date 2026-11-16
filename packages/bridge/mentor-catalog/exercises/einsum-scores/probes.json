@@ -1,0 +1,17 @@
+[
+  {
+    "q": "Trong \"bhtd,bhsd->bhts\", chữ nào bị cộng dồn và vì sao? Nếu viết đầu ra là \"bhst\" thì ma trận có nghĩa gì, và softmax theo trục cuối khi đó sai ở đâu?",
+    "tag": "einsum-sum-index",
+    "answer": "d bị cộng vì không có ở đầu ra. \"bhst\" là ma trận chuyển vị: hàng là key, cột là query; softmax theo trục cuối khi đó chuẩn hoá theo query thay vì theo key."
+  },
+  {
+    "q": "einsum(\"bn,nm,bm->b\") với n = m = 4096 và B = 64: nếu NumPy tạo mảng trung gian (B, n, m) thì tốn bao nhiêu? Thứ tự tính nào rẻ, và optimize=True làm gì?",
+    "tag": "einsum-cost",
+    "answer": "B·n·m ≈ 10⁹ phần tử. Rẻ hơn: tính x @ W (B, m) rồi nhân từng phần tử với y và cộng theo m. optimize=True để einsum tự chọn thứ tự rút gọn (dùng BLAS)."
+  },
+  {
+    "q": "Viết lại batched_scores bằng @ thì chuyển vị K thế nào? Vì sao không dùng K.T?",
+    "tag": "transpose-axes",
+    "answer": "Q @ np.swapaxes(K, -1, -2) (PyTorch: K.transpose(-2, -1)). K.T đảo ngược mọi trục → (d, S, H, B), sai."
+  }
+]

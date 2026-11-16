@@ -1,0 +1,3 @@
+def pairwise_sqdist(X, Y):
+    """X: (n, d), Y: (m, d) -> D: (n, m), D[i, j] = ||X[i] - Y[j]||^2. Không dùng vòng lặp."""
+    ...

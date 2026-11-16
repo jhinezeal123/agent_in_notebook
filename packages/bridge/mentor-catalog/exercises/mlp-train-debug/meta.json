@@ -1,0 +1,13 @@
+{
+  "id": "mlp-train-debug",
+  "title": "Vòng lặp train có lỗi: tìm và sửa",
+  "star": "trainloop",
+  "skills": ["train", "blank"],
+  "difficulty": 1700,
+  "minutes": 30,
+  "requires": ["numpy"],
+  "diagnostic": 3,
+  "order": 2,
+  "functions": ["train", "predict"],
+  "probes": 2
+}

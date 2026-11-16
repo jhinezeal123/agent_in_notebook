@@ -11,6 +11,7 @@ import { PanelCore, chromeTab, isChrome, type LocalNotebooks } from "./panel-cor
 import { Studio } from "./studio-host.js";
 import { ARTIFACTS, CODE, FolderTree } from "./folder-tree.js";
 import { registerChangeProviders } from "./changes.js";
+import { MentorHost } from "./mentor-host.js";
 
 const secret = "bridge.config";
 
@@ -39,6 +40,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ainb.clearChat", () => panel.clearChat()),
     vscode.commands.registerCommand("ainb.stopBridge", () => panel.stopBridge()),
     vscode.commands.registerCommand("ainb.attachCell", (arg?: unknown) => panel.attachCells(arg)),
+    vscode.commands.registerCommand("ainb.mentor.open", () => panel.mentor.open()),
   );
 }
 
@@ -99,6 +101,8 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly chatProjects = new Map<number, { chatId: string; project: ChatProject }>();
   /** Chrome notebooks already seen, so only a newly opened one joins a project (Kaggle launcher). */
   private readonly seenNotebooks = new Set<string>();
+  /** Mentor: its home page and status bar item. */
+  readonly mentor: MentorHost;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.bridge = new BridgeLink(context.extension.packageJSON.version, (event) => {
@@ -114,6 +118,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         }
       }
       this.core.connectionChanged(connected);
+      if (connected) this.mentor.connected();
       if (!connected) this.studio.setResearchStatus({ state: "off" });
     }, ({ tabId, op }) => this.runOp(tabId, op), (event) => {
       this.core.onBrowser(event);
@@ -145,6 +150,14 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       stopBridge: () => this.bridge.stop(),
     });
     this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event), (tab, info) => this.mirrors.open(tab, info));
+    this.mentor = new MentorHost(context, {
+      request: async (method, params) => {
+        await this.ensureBridge(false);
+        return this.bridge.request(method, params);
+      },
+      connected: () => this.bridge.snapshot().conn === "connected",
+      openNotebook: (file) => this.openMentorNotebook(file),
+    });
     this.subscriptions = [
       vscode.window.onDidChangeActiveNotebookEditor(() => this.activeChanged()),
       vscode.workspace.onDidChangeNotebookDocument(({ notebook, cellChanges }) => {
@@ -364,6 +377,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     if (event.event === "bridge" && event.params.method === "chat.snapshot") this.followProject(event.params.params as ChatSnapshot);
     if (event.event === "bridge" && event.params.method === "chat.run") void this.notifyRun(event.params.params as BridgeEvents["chat.run"]);
     if (event.event === "bridge" && event.params.method === "chat.machineReplaced") void this.machineReplaced(event.params.params as BridgeEvents["chat.machineReplaced"]);
+    if (event.event === "bridge" && event.params.method === "mentor.updated") this.mentor.updated();
     if (event.event === "notebooks") this.studio.broadcast("notebooks", event.params);
     // The chat follows the notebook in front, unless a research chat is shown.
     else if (event.event === "activeTab" && this.selected?.kind !== "research") {
@@ -494,6 +508,13 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
   }
 
+  /** A Mentor exercise's notebook: in the editor, with its chat (the mentor) in the side bar. */
+  private async openMentorNotebook(file: string): Promise<void> {
+    const document = await vscode.workspace.openNotebookDocument(vscode.Uri.file(file));
+    await vscode.window.showNotebookDocument(document, { preview: false, viewColumn: vscode.ViewColumn.One });
+    await vscode.commands.executeCommand("ainb.chat.focus");
+  }
+
   /** Show a notebook in the editor: the file itself, or a Chrome tab's live copy (its mirror). */
   private async showNotebook(tabId: number): Promise<void> {
     if (isChrome(tabId)) {
@@ -579,6 +600,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       case "prefs.get": return this.context.globalState.get<Prefs>("prefs");
       case "chat.selected": return this.selected;
       case "studio.open": return this.studio.open(params as StudioView);
+      case "mentor.open": return this.mentor.open();
       case "prefs.set": return this.context.globalState.update("prefs", params);
       case "config.auto": return this.connect();
       case "bridge.stop": return this.bridge.stop();
@@ -624,6 +646,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   dispose(): void {
+    this.mentor.dispose();
     this.setupLog?.dispose();
     this.mirrors.dispose();
     this.bridge.dispose();

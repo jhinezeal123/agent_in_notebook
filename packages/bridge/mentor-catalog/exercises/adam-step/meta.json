@@ -1,0 +1,12 @@
+{
+  "id": "adam-step",
+  "title": "Adam từ công thức",
+  "star": "optim",
+  "skills": ["formula", "theory"],
+  "difficulty": 1450,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["adam_init", "adam_step"],
+  "probes": 2
+}

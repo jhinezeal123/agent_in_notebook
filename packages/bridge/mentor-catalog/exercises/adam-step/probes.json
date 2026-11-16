@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Bỏ hiệu chỉnh bias thì bước đầu tiên to hơn hay nhỏ hơn lr? Khoảng bao nhiêu lần (β1 = 0.9, β2 = 0.999)?",
+    "tag": "adam-bias",
+    "answer": "To hơn: m1 = 0.1g, v1 = 0.001g², bước = lr · 0.1|g| / (0.0316|g|) ≈ 3.16 · lr. (Nhiều người đoán nhầm là nhỏ hơn.)"
+  },
+  {
+    "q": "Cộng λw vào gradient (L2) trong Adam khác AdamW thế nào?",
+    "tag": "adamw",
+    "answer": "Với L2, λw bị chia cho √v̂ như mọi gradient, nên mức decay khác nhau giữa các tham số; AdamW trừ trực tiếp lr·λ·w, tách decay khỏi phần thích nghi."
+  },
+  {
+    "q": "Nhân mọi gradient với 1000 thì bước của Adam thay đổi thế nào? Còn SGD?",
+    "tag": "adam-scale-invariance",
+    "answer": "Adam gần như không đổi (m̂/√v̂ không phụ thuộc scale, trừ ảnh hưởng của ε); SGD bước to gấp 1000. Vì vậy lr của Adam gần như là độ lớn bước tuyệt đối."
+  },
+  {
+    "q": "ε trong mẫu số để làm gì, và đặt nó trong hay ngoài căn có khác không?",
+    "tag": "adam-eps",
+    "answer": "Tránh chia cho 0 khi v̂ ≈ 0 và giới hạn bước với tham số ít gradient. Paper đặt ngoài căn (√v̂ + ε); đặt trong căn (√(v̂ + ε)) cho mức chặn khác (√ε), kết quả lệch nhẹ."
+  }
+]

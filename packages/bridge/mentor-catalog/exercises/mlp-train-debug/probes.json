@@ -1,0 +1,22 @@
+[
+  {
+    "q": "Lỗi xáo X mà không xáo y: vì sao loss vẫn có thể giảm một chút? Dấu hiệu nào giúp phát hiện sớm loại lỗi 'dữ liệu lệch nhãn' này?",
+    "tag": "shuffle-labels",
+    "answer": "Mô hình vẫn học được phân phối nhãn chung (và ghi nhớ một phần) nên loss giảm nhẹ về mức entropy của nhãn; dấu hiệu: độ chính xác kẹt quanh mức đoán ngẫu nhiên, không overfit nổi một batch nhỏ; kiểm bằng cách in vài cặp (x, y) sau khi xáo."
+  },
+  {
+    "q": "Loss lấy trung bình theo batch nhưng gradient quên chia cho B: tương đương với việc gì? Đổi batch size từ 32 lên 256 thì sao?",
+    "tag": "grad-batch-scale",
+    "answer": "Tương đương nhân lr lên B lần; tăng batch size làm bước to hơn tương ứng nên dễ phân kỳ. Loss và gradient phải cùng một phép rút gọn (mean với mean)."
+  },
+  {
+    "q": "Mẹo 'overfit một batch nhỏ' kiểm tra được gì và không kiểm tra được gì?",
+    "tag": "overfit-one-batch",
+    "answer": "Kiểm forward/backward/update và nhãn khớp dữ liệu (loss phải về gần 0). Không nói gì về generalization, lỗi ở tập validation, augmentation hay khác biệt train/eval."
+  },
+  {
+    "q": "Dấu của bước cập nhật sai (params += lr · grad) thì đường loss trông thế nào?",
+    "tag": "update-sign",
+    "answer": "Gradient ascent: loss tăng đều và có thể bùng lên rất lớn; khác với lr quá lớn (dao động/nhảy loạn) hay lỗi dữ liệu (loss giảm chậm rồi kẹt)."
+  }
+]

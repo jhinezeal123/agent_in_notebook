@@ -1,0 +1,27 @@
+[
+  {
+    "q": "Vì sao db = dout.sum(axis=0)? Nối nó với chuyện b được broadcast ở forward.",
+    "tag": "bias-grad-sum",
+    "answer": "b được broadcast (sao chép) cho mọi mẫu trong batch; mỗi bản sao nhận gradient riêng và gradient của tham số là tổng của chúng. Quy tắc chung: broadcast ở forward ↔ sum ở backward."
+  },
+  {
+    "q": "dW1 = X.T @ dz1. Kiểm bằng shape, và giải thích vì sao không phải dz1 @ X.T hay X @ dz1.T.",
+    "tag": "matmul-grad-shape",
+    "answer": "∂L/∂W1 phải cùng shape W1 (D, H). X.T (D, B) @ dz1 (B, H) = (D, H); các cách khác ra (B, B) hoặc không khớp chiều. Tổng theo batch nằm trong phép nhân ma trận."
+  },
+  {
+    "q": "Đạo hàm của ReLU tại 0 là bao nhiêu, và có quan trọng không?",
+    "tag": "relu-at-zero",
+    "answer": "Không xác định (subgradient trong [0, 1]); quy ước thường là 0. Thực tế xác suất z đúng bằng 0 gần như bằng 0 nên không ảnh hưởng."
+  },
+  {
+    "q": "Khi kiểm gradient bằng sai phân: vì sao dùng sai phân trung tâm, float64, và eps cỡ 1e-5–1e-6 chứ không phải 1e-12?",
+    "tag": "gradcheck",
+    "answer": "Sai phân trung tâm có sai số O(eps²) thay vì O(eps). float64 giảm sai số làm tròn. eps quá nhỏ thì sai số làm tròn (cỡ 1e-16/eps) lấn át; eps quá lớn thì sai số cắt cụt lớn."
+  },
+  {
+    "q": "Nếu dùng h > 0 thay vì z1 > 0 làm mask trong backward thì có khác gì không?",
+    "tag": "relu-mask",
+    "answer": "Không khác: h = max(z1, 0) > 0 đúng khi z1 > 0. Khác chỉ xuất hiện với activation khác (vd leaky ReLU, hay dùng nhầm h thay vì mask)."
+  }
+]
