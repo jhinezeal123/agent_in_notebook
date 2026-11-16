@@ -30,12 +30,21 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            openresearch/ui/pnpm-lock.yaml
       # The Mentor exercises check themselves with a real Python.
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install numpy matplotlib ipython
       - run: pnpm install --frozen-lockfile
+      # The studio is built from OpenResearch's client code (README, "Cài đặt").
+      - name: Install OpenResearch's client code
+        working-directory: openresearch/ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec paraglide-js compile --emit-ts-declarations
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
