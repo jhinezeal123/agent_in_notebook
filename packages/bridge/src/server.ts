@@ -51,7 +51,8 @@ import { Mentor } from "./mentor/index.js";
 import { MentorPlaces } from "./mentor/place.js";
 import { MentorSession } from "./mentor/session.js";
 import { loadCatalog } from "./mentor/catalog.js";
-import { referenceContext, verifyExercise } from "./mentor/verify.js";
+import { referenceContext, trainsOnGpu, verifyExercise } from "./mentor/verify.js";
+import { KernelPool } from "./mentor/pool.js";
 import { fetchArxiv, paperIdFor, parseArxivId, pdfChunkCode, pdfExtractCode, pdfMarked, readSliceCode, type PaperSource } from "./mentor/fetch.js";
 import { authorChatKey } from "./mentor/place.js";
 import { WorkshopHub, WorkshopSession, type AuthorChat } from "./mentor/workshop.js";
@@ -956,14 +957,24 @@ export class Bridge {
         if (r.status === "running") await this.notebookOp(target, { op: "interrupt" }).catch(() => {});
         return r;
       };
-      for (const id of wanted) {
-        const ex = catalog.exercise(id);
-        if (!ex) {
-          line({ t: "error", exerciseId: id, message: `No exercise ${id}.` });
-          continue;
-        }
-        const report = await verifyExercise(ex, exec, { context: referenceContext(catalog, ex), onStep: (text) => line({ t: "step", exerciseId: id, text }) });
-        line({ t: "report", report });
+      // Every exercise at once, through one queue of the machine's GPUs (see mentor/pool.ts).
+      const pool = new KernelPool(exec);
+      const info = await pool.start();
+      line({ t: "step", exerciseId: "máy", text: info.gpus ? `${info.gpus} GPU, ${info.slots} việc chạy cùng lúc` : `không có GPU, ${info.slots} việc chạy cùng lúc` });
+      try {
+        await Promise.all(wanted.map(async (id) => {
+          const ex = catalog.exercise(id);
+          if (!ex) return line({ t: "error", exerciseId: id, message: `No exercise ${id}.` });
+          try {
+            const context = referenceContext(catalog, ex);
+            const report = await verifyExercise(ex, pool.exec(id, trainsOnGpu(ex, context)), { context, concurrent: true, onStep: (text) => line({ t: "step", exerciseId: id, text }) });
+            line({ t: "report", report });
+          } catch (e) {
+            line({ t: "error", exerciseId: id, message: (e as Error).message });
+          }
+        }));
+      } finally {
+        await pool.close();
       }
     } catch (e) {
       line({ t: "error", message: (e as Error).message });

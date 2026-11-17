@@ -125,6 +125,16 @@ export class JupyterAdapter implements NotebookAdapter {
     return true;
   }
 
+  /** Runs started by `startExecution` whose `done` has not settled. */
+  private readonly ownRuns = new Set<object>();
+
+  private async cellRunning(): Promise<boolean> {
+    if (!this.widgets().some((w) => this.running(w))) return false;
+    // A future first seen just now settles on the next microtask if its run had ended: look again after it.
+    await Promise.resolve();
+    return this.widgets().some((w) => this.running(w));
+  }
+
   private toInfo(cell: Any, index: number, includeOutputs: boolean): CellInfo {
     const m = cell.model;
     const type: CellType = m.type === "code" ? "code" : "markdown";
@@ -259,9 +269,15 @@ export class JupyterAdapter implements NotebookAdapter {
 
   async startExecution(code: string): Promise<Execution> {
     const kernel = await this.readyKernel();
-    if (kernel.status === "busy") throw new OpError(KERNEL_BUSY);
+    // "Busy" here means a run this call would wait behind: a cell, or a run of ours not yet ended.
+    // The kernel's own status flag is not used: it reads "busy" for a moment after a run has ended
+    // and while the page asks the kernel small things, so it refused calls that had nothing to wait for.
+    if (this.ownRuns.size > 0 || (await this.cellRunning())) throw new OpError(KERNEL_BUSY);
     const collected = new OutputCollector();
     const future = kernel.requestExecute({ code, silent: false, store_history: false, allow_stdin: false, stop_on_error: false }, true);
+    this.ownRuns.add(future);
+    const ended = () => { this.ownRuns.delete(future); };
+    Promise.resolve(future.done).then(ended, ended);
     future.onIOPub = (msg: Any) => {
       const type = msg?.header?.msg_type;
       if (type === "clear_output") collected.clear(!!msg.content?.wait);

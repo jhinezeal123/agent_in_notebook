@@ -2,12 +2,13 @@
 // what the kernel holds, measured numbers) and the exercise check, on this
 // machine's Python with numpy standing in for a Kaggle kernel.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import type { ExecResult } from "@ainb/protocol";
 import { usesOrder, type Exercise } from "../src/mentor/catalog.js";
 import { judgeCode, newNonce, parseVerdict } from "../src/mentor/judge.js";
-import { leakedLines, verifyExercise } from "../src/mentor/verify.js";
+import { KernelPool } from "../src/mentor/pool.js";
+import { leakedLines, trainsOnGpu, verifyExercise, type Exec } from "../src/mentor/verify.js";
 
 function findPython(): string[] | null {
   for (const c of process.platform === "win32" ? [["python"], ["py", "-3"]] : [["python3"], ["python"]]) {
@@ -124,5 +125,89 @@ describe("exercise order and leaks", () => {
   it("finds reference lines in the notebook", () => {
     const line = "return np.sqrt(np.mean(x ** 2, axis=-1, keepdims=True))";
     expect(leakedLines(exercise({ reference: `def f(x):\n    ${line}\n`, brief: `Gợi ý: ${line}` }))).toEqual([line]);
+  });
+});
+
+/** A kernel that keeps its globals between calls, like a notebook's: one Python process, one call at a time. */
+function persistentKernel(): { exec: Exec; close: () => void } {
+  const loop = [
+    "import sys, base64",
+    "G = {'__name__': '__main__'}",
+    "for line in sys.stdin:",
+    "    try:",
+    "        exec(compile(base64.b64decode(line).decode('utf-8'), '<cell>', 'exec'), G)",
+    "    except BaseException as e:",
+    "        print('ERR', repr(e))",
+    "    print('<<DONE>>', flush=True)",
+  ].join("\n");
+  const child = spawn(python![0]!, [...python!.slice(1), "-X", "utf8", "-u", "-c", loop], { env: { ...process.env, PYTHONIOENCODING: "utf-8", MPLBACKEND: "Agg" } });
+  child.stdout.setEncoding("utf8");
+  let buffer = "";
+  let waiting: ((text: string) => void) | null = null;
+  child.stdout.on("data", (d: string) => {
+    buffer += d;
+    const at = buffer.indexOf("<<DONE>>");
+    if (at >= 0 && waiting) {
+      const text = buffer.slice(0, at);
+      buffer = buffer.slice(at + "<<DONE>>".length);
+      const w = waiting;
+      waiting = null;
+      w(text);
+    }
+  });
+  let chain: Promise<unknown> = Promise.resolve();
+  const exec: Exec = (code) => {
+    const call = chain.then(() => new Promise<string>((resolve) => {
+      waiting = resolve;
+      child.stdin.write(`${Buffer.from(code, "utf8").toString("base64")}\n`);
+    })).then((text) => ({ status: "ok" as const, outputs: [{ kind: "stream" as const, name: "stdout" as const, text }] }));
+    chain = call;
+    return call;
+  };
+  return { exec, close: () => child.kill() };
+}
+
+describe.skipIf(!python)("checking many exercises through a pool", () => {
+  it("checks them side by side, each check in its own process, and says which gave no result", async () => {
+    const kernel = persistentKernel();
+    const pool = new KernelPool(kernel.exec, 100);
+    try {
+      const info = await pool.start();
+      expect(info.slots).toBeGreaterThanOrEqual(1);
+      const experiment = exercise({
+        id: "exp", role: "experiment", judge: "kernel", reference: "w = 2.98\n", starter: "w = None\n", lab: [],
+        metrics: [{ name: "loss", target: { op: "<=", value: 0.1 } }],
+        tests: "def test_trained(user, ref):\n    t.report('loss', abs(user['w'] - 3.0))",
+        mutants: [
+          { name: "untrained", source: "w = 0.0\n" },
+          { name: "close-enough", source: "w = 2.95\n" },
+          { name: "dies", source: "raise SystemExit(3)\n" },
+        ],
+      });
+      const [plain, exp] = await Promise.all([
+        verifyExercise(exercise({}), pool.exec("scale"), { concurrent: true }),
+        verifyExercise(experiment, pool.exec("exp"), { concurrent: true }),
+      ]);
+      expect(plain.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(plain.checks.map((c) => c.id)).toEqual(["files", "leak", "modules", "reference", "speed", "starter", "mutants", "lab"]);
+      const mutants = exp.checks.find((c) => c.id === "mutants");
+      expect(exp.checks.find((c) => c.id === "reference")?.ok).toBe(true);
+      expect(mutants?.note).toMatch(/close-enough lọt qua test/);
+      expect(mutants?.note).toMatch(/dies không có kết quả \(exit 3/);
+      expect(mutants?.note).not.toMatch(/untrained/);
+    } finally {
+      await pool.close();
+      kernel.close();
+    }
+  }, 120_000);
+});
+
+describe("which checks wait for a GPU", () => {
+  it("is an experiment whose reference or given code asks for cuda", () => {
+    const exp = exercise({ role: "experiment", reference: "device = 'cuda' if torch.cuda.is_available() else 'cpu'" });
+    expect(trainsOnGpu(exp)).toBe(true);
+    expect(trainsOnGpu(exercise({ role: "experiment", reference: "train()" }), { beforeRef: "x.to('cuda')" })).toBe(true);
+    expect(trainsOnGpu(exercise({ role: "experiment", reference: "train()" }))).toBe(false);
+    expect(trainsOnGpu(exercise({ reference: "x.cuda()" }))).toBe(false);
   });
 });

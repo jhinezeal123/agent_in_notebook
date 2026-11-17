@@ -331,7 +331,8 @@ describe("scaffold", () => {
 });
 
 describe("variations", () => {
-  const variant = catalog.exercises.find((e) => e.variantOf && !catalog.exercise(e.variantOf)!.diagnostic);
+  // One that does not build on the learner's code of another exercise (the helpers here record no code).
+  const variant = catalog.exercises.find((e) => e.variantOf && !e.uses.length && !catalog.exercise(e.variantOf)!.diagnostic);
 
   it.skipIf(!variant)("offers a variation right after its exercise is learnt, never before", () => {
     const clock = { now: T0 };

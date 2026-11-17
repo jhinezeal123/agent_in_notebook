@@ -9,10 +9,11 @@
 
 import type { ExecResult } from "@ainb/protocol";
 import { usesOrder, type Catalog, type Exercise } from "./catalog.js";
-import { judgeCode, newNonce, parseVerdict, type JudgeContext } from "./judge.js";
+import { judgeCode, newNonce, parseVerdict, TOO_LONG, type JudgeContext } from "./judge.js";
 import { exerciseCells } from "./notebook.js";
 
-export type Exec = (code: string, waitMs: number) => Promise<Pick<ExecResult, "status" | "outputs" | "message">>;
+/** Runs code on the notebook machine. `ms`: how long it ran, when the caller knows better than a clock around the call (a queued run). */
+export type Exec = (code: string, waitMs: number) => Promise<Pick<ExecResult, "status" | "outputs" | "message"> & { ms?: number }>;
 
 export interface VerifyCheck {
   id: string;
@@ -51,6 +52,11 @@ export function referenceContext(catalog: Pick<Catalog, "exercise" | "paperGiven
   const used = usesOrder(ex.uses, (id) => catalog.exercise(id)?.uses ?? []).map((id) => catalog.exercise(id)).filter((u): u is Exercise => !!u);
   const code = [ex.paper ? catalog.paperGiven(ex.paper) : "", ...used.flatMap((u) => [u.given, u.reference])].map((c) => c.trim()).filter(Boolean).join("\n\n");
   return { before: code, beforeRef: code };
+}
+
+/** An experiment whose training uses a GPU when there is one (its reference, or the paper's given code, asks for "cuda"). */
+export function trainsOnGpu(ex: Exercise, ctx: JudgeContext = {}): boolean {
+  return ex.role === "experiment" && /\bcuda\b/.test(`${ex.reference}\n${ctx.beforeRef ?? ""}`);
 }
 
 /** Lines of the reference solution that show up in the learner's notebook. */
@@ -125,6 +131,8 @@ export interface VerifyOptions {
   now?: () => number;
   /** Progress, one line per step. */
   onStep?: (text: string) => void;
+  /** `exec` takes several calls at once (a pool): after the reference, the other checks are sent together. */
+  concurrent?: boolean;
 }
 
 export async function verifyExercise(ex: Exercise, exec: Exec, opts: VerifyOptions = {}): Promise<VerifyReport> {
@@ -165,14 +173,39 @@ export async function verifyExercise(ex: Exercise, exec: Exec, opts: VerifyOptio
     const nonce = newNonce();
     const t0 = now();
     const res = await exec(judgeCode(ex, source, nonce, ctx), waitMs);
-    return { verdict: parseVerdict(res, nonce), ms: now() - t0 };
+    const text = res.outputs.filter((o) => o.kind === "stream").map((o) => o.text ?? "").join("");
+    return { verdict: parseVerdict(res, nonce), ms: res.ms ?? now() - t0, answered: text.includes(nonce), message: res.message };
+  };
+  // Started now on a pool (side by side), or when awaited on a kernel (one after another, in this order).
+  const later = <T>(f: () => Promise<T>): (() => Promise<T>) => {
+    if (!opts.concurrent) return f;
+    const p = f();
+    p.catch(() => {});
+    return () => p;
   };
 
-  // 3. The reference passes, twice.
+  // 3. The reference passes, twice. It runs first and alone: it may download data the other checks use.
   opts.onStep?.("chấm lời giải chuẩn");
   const refWait = experiment ? Math.max(judgeWait, 15 * 60_000) : judgeWait;
   const first = await judge(ex.reference, refWait);
-  const second = first.verdict.ok && !experiment ? await judge(ex.reference, refWait) : first;
+  const secondRun = later(() => first.verdict.ok && !experiment ? judge(ex.reference, refWait) : Promise.resolve(first));
+  const starterRun = later(() => {
+    if (experiment) return Promise.resolve(null);
+    opts.onStep?.("chấm starter");
+    return judge(ex.starter);
+  });
+  const mutantRuns = ex.mutants.map((m) => later(() => {
+    opts.onStep?.(`chấm bản sai ${m.name}`);
+    return judge(m.source, refWait);
+  }));
+  const lab = ex.lab.filter((c) => c.type === "code").map((c) => c.source);
+  const labRun = later(async () => {
+    if (!lab.length) return null;
+    opts.onStep?.("chạy Phòng công thức");
+    return marked<{ errors: string[] }>(await exec(labCode(lab, ex.prelude, ctx.beforeRef ?? "", ex.given), 120_000)) ?? { errors: ["không đọc được kết quả"] };
+  });
+
+  const second = await secondRun();
   const failed = (v: typeof first.verdict) => v.error ?? v.tests.filter((t) => !t.ok).map((t) => `${t.name}: ${t.message ?? "trượt"}`)[0] ?? "không có test nào";
   if (!first.verdict.ok) add("reference", false, failed(first.verdict));
   else if (!second.verdict.ok) add("reference", false, `lần 2 trượt (test chập chờn?): ${failed(second.verdict)}`);
@@ -189,27 +222,24 @@ export async function verifyExercise(ex: Exercise, exec: Exec, opts: VerifyOptio
   }
 
   // 4. The starter and the broken solutions fail.
-  if (!experiment) {
-    opts.onStep?.("chấm starter");
-    const starter = await judge(ex.starter);
-    add("starter", !starter.verdict.ok, starter.verdict.ok ? "starter qua hết test: test quá lỏng" : undefined);
-  }
+  const starter = await starterRun();
+  if (starter) add("starter", !starter.verdict.ok, starter.verdict.ok ? "starter qua hết test: test quá lỏng" : undefined);
   const caught: string[] = [];
-  for (const m of ex.mutants) {
-    opts.onStep?.(`chấm bản sai ${m.name}`);
-    const { verdict } = await judge(m.source, refWait);
+  for (const [i, m] of ex.mutants.entries()) {
+    const { verdict, answered, message } = await mutantRuns[i]!();
     if (verdict.ok) caught.push(`${m.name} lọt qua test`);
+    // Failing because the machine did (the process died, the GPU ran out of memory) is not being caught by the tests.
+    // An experiment's broken solution stopped for time was never measured: nothing says the tests catch it.
+    else if (verdict.error === TOO_LONG && experiment) caught.push(`${m.name} chạy quá giờ (${Math.round(refWait / 1000)} s), chưa đo được`);
+    else if (!answered && verdict.error !== TOO_LONG) caught.push(`${m.name} không có kết quả (${(message ?? verdict.error ?? "").slice(0, 100)})`);
+    else if (verdict.error && /out of memory/i.test(verdict.error)) caught.push(`${m.name} hết bộ nhớ GPU`);
     else if (verdict.error && !experiment) caught.push(`${m.name} không chạy được (${verdict.error.slice(0, 80)})`);
   }
   add("mutants", !caught.length, caught.join("; "));
 
   // 5. The formula lab runs.
-  const lab = ex.lab.filter((c) => c.type === "code").map((c) => c.source);
-  if (lab.length) {
-    opts.onStep?.("chạy Phòng công thức");
-    const out = marked<{ errors: string[] }>(await exec(labCode(lab, ex.prelude, ctx.beforeRef ?? "", ex.given), 120_000));
-    add("lab", !!out && !out.errors.length, out ? out.errors[0] : "không đọc được kết quả");
-  }
+  const out = await labRun();
+  if (out) add("lab", !out.errors.length, out.errors[0]);
   return finish();
 }
 

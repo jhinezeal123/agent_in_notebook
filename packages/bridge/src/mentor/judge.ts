@@ -174,6 +174,9 @@ finally:
 `.trimStart();
 }
 
+/** The verdict's error when a run was stopped for taking too long. */
+export const TOO_LONG = "Bài làm chạy quá lâu (có thể bị lặp vô hạn), máy chấm đã dừng nó.";
+
 export function newNonce(): string {
   return randomBytes(9).toString("base64url");
 }
@@ -205,7 +208,7 @@ export function parseVerdict(res: Pick<ExecResult, "status" | "outputs" | "messa
     verdict.ok = !verdict.error && !verdict.missing && tests.length > 0 && passed === tests.length;
     return verdict;
   }
-  if (res.status === "running") return { at, ok: false, passed: 0, total: 0, tests: [], error: "Bài làm chạy quá lâu (có thể bị lặp vô hạn), máy chấm đã dừng nó." };
+  if (res.status === "running") return { at, ok: false, passed: 0, total: 0, tests: [], error: TOO_LONG };
   const err = res.outputs.find((o) => o.kind === "error");
   const why = err ? `${err.ename ?? "Error"}: ${err.evalue ?? ""}` : res.message ?? "không có kết quả";
   return { at, ok: false, passed: 0, total: 0, tests: [], error: `Máy chấm không chạy được (${why.trim()}).` };

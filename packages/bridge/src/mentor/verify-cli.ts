@@ -68,6 +68,8 @@ export async function mentorVerify(args: string[]): Promise<number> {
         reports.push(r);
         console.log(reportText(r));
         if (!r.ok) failed = true;
+        // Written at once: a long run that is cut off keeps what passed.
+        else record(dir, [r]);
       } else if (msg.t === "error") {
         failed = true;
         console.error(`Error${msg.exerciseId ? ` (${msg.exerciseId})` : ""}: ${msg.message}`);
@@ -75,12 +77,14 @@ export async function mentorVerify(args: string[]): Promise<number> {
     }
   }
   const passed = reports.filter((r) => r.ok);
-  if (passed.length) {
-    const verified = readVerified(dir);
-    for (const r of passed) verified[r.exerciseId] = { hash: r.hash, python: r.python, torch: r.torch ?? null, at: new Date(r.at).toISOString() };
-    const sorted = Object.fromEntries(Object.entries(verified).sort(([a], [b]) => a.localeCompare(b)));
-    writeFileSync(verifiedFile(dir), `${JSON.stringify(sorted, null, 2)}\n`);
-    console.log(`Recorded ${passed.length} in ${verifiedFile(dir)}.`);
-  }
+  if (passed.length) console.log(`Recorded ${passed.length} in ${verifiedFile(dir)}.`);
   return failed ? 1 : 0;
+}
+
+function record(dir: string, passed: VerifyReport[]): void {
+  const verified = readVerified(dir);
+  for (const r of passed) verified[r.exerciseId] = { hash: r.hash, python: r.python, torch: r.torch ?? null, at: new Date(r.at).toISOString() };
+  const sorted = Object.fromEntries(Object.entries(verified).sort(([a], [b]) => a.localeCompare(b)));
+  writeFileSync(verifiedFile(dir), `${JSON.stringify(sorted, null, 2)}
+`);
 }
