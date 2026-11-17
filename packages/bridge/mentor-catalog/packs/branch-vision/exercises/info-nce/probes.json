@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Nếu mọi embedding đều giống hệt nhau (mô hình sụp đổ về một điểm), loss NT-Xent bằng bao nhiêu theo N, và nó có phụ thuộc temperature không? Số đó cho biết gì về \"loss tệ nhất hợp lý\" của bài toán, và vì sao bạn nên chờ loss lúc bắt đầu train gần số này?",
+    "tag": "nt-xent-collapse-loss",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Mọi s_ik bằng nhau, mẫu số có 2N − 1 số hạng bằng nhau nên ℓ_i = log(2N − 1) với mọi τ. Đó chính là mức \"đoán mò đều\" giữa 2N − 1 ứng viên: loss lúc khởi tạo (embedding gần như không phân biệt) xấp xỉ giá trị này, ví dụ N = 256 thì ≈ log(511) ≈ 6,24. Loss thấp hơn nghĩa là mô hình đã phân biệt được positive với negative."
+  },
+  {
+    "q": "Trong mẫu số, vì sao loại k = i nhưng KHÔNG loại positive? Nếu quên loại k = i thì loss tăng hay giảm, và mô hình có thể \"gian lận\" ra sao?",
+    "tag": "nt-xent-self-mask",
+    "kind": "break",
+    "stage": "lab",
+    "answer": "Chính nó luôn có cosine = 1 (giống nhất có thể) nên là một negative hiển nhiên, không mang thông tin, chỉ thêm hằng e^{1/τ} vào mẫu số: loss tăng và gradient bị nhiễu, nhưng mô hình không thể giảm nó vì nó không phụ thuộc tham số. Còn positive phải ở mẫu số: đó là một bài toán phân loại 2N − 1 lớp, lớp đúng là positive; thiếu nó thì xác suất không chuẩn hóa về 1."
+  },
+  {
+    "q": "Giảm temperature từ 0.5 xuống 0.05 thì phân phối softmax trên các ứng viên nhọn hơn hay phẳng hơn? Loss tập trung vào những negative nào hơn, và vì sao τ quá nhỏ có thể gây hại?",
+    "tag": "nt-xent-temperature-role",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Nhọn hơn: chia cho τ nhỏ phóng đại chênh lệch giữa các cosine, nên softmax dồn gần hết khối lượng vào ứng viên giống query nhất. Vì thế loss (và gradient) tập trung vào các hard negative (những negative rất giống) trong khi bỏ qua các negative dễ. τ quá nhỏ làm gradient bị chi phối bởi vài hard negative (có thể là false negative: ảnh khác cùng lớp) và làm train mất ổn định, cũng dễ tràn số nếu tính exp trực tiếp; τ quá lớn thì loss phân biệt kém (mọi ứng viên gần như đều nhau)."
+  },
+  {
+    "q": "Với batch N, mỗi anchor có bao nhiêu positive và bao nhiêu negative? Lợi ích của việc tăng N là gì, và vì sao SimCLR cần batch rất lớn (hàng nghìn) còn MoCo thì không?",
+    "tag": "nt-xent-batch-negatives",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Mỗi anchor có 1 positive và 2N − 2 negative (mọi vector còn lại trừ chính nó và positive). Tăng N tăng số negative, làm ước lượng của loss InfoNCE chặt hơn và có nhiều hard negative hơn. SimCLR lấy negative chỉ từ trong batch nên phải dùng batch lớn (tốn bộ nhớ); MoCo tách số negative khỏi batch bằng hàng đợi (queue) các key cũ từ một encoder trung bình động, nên batch nhỏ vẫn có hàng chục nghìn negative."
+  },
+  {
+    "q": "Vì sao phải chuẩn hóa L2 các embedding trước khi so? Nếu không chuẩn hóa, mô hình có thể giảm loss bằng một cách rẻ tiền nào?",
+    "tag": "nt-xent-l2-norm",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Chuẩn hóa biến tích vô hướng thành cosine, bị chặn trong [−1, 1], nên s/τ nằm trong [−1/τ, 1/τ] và τ mới có nghĩa rõ ràng (là thang đo của độ giống). Không chuẩn hóa, mô hình có thể tăng độ dài các vector để phóng đại tích vô hướng (làm positive tăng và negative giảm theo tỉ lệ) và giảm loss mà không cải thiện chút nào về hướng (góc) giữa chúng; độ dài còn làm tràn số."
+  }
+]

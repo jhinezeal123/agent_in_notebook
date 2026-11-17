@@ -1,0 +1,13 @@
+{
+  "id": "bpe-train",
+  "title": "BPE: học bảng merge",
+  "star": "bpe",
+  "skills": ["blank", "formula"],
+  "difficulty": 1500,
+  "minutes": 25,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["learn_merges"],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

@@ -1,0 +1,14 @@
+{
+  "id": "gpt-generate",
+  "title": "Sinh văn bản: temperature và top-k",
+  "star": "gpt",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1600,
+  "minutes": 20,
+  "requires": ["numpy", "torch"],
+  "order": 3,
+  "functions": ["generate"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["gpt-mini"]
+}

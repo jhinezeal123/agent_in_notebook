@@ -1,0 +1,13 @@
+{
+  "id": "lora-linear",
+  "title": "LoRA: bọc một lớp Linear bằng adapter hạng thấp",
+  "star": "lora",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1750,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["LoRALinear"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

@@ -1,0 +1,26 @@
+{
+  "id": "info-nce-temperature",
+  "title": "Temperature học được (biến thể của info-nce, kiểu CLIP)",
+  "star": "contrastive",
+  "skills": [
+    "formula",
+    "theory"
+  ],
+  "difficulty": 1700,
+  "minutes": 15,
+  "requires": [
+    "numpy",
+    "torch"
+  ],
+  "order": 2,
+  "functions": [
+    "LearnableTemperature"
+  ],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": [
+    "info-nce"
+  ],
+  "variantOf": "info-nce",
+  "predict": "Với NT-Xent ở bài trước, đặt $s = 1/\\tau$. Trước khi code, dự đoán (không chạy máy): (a) Khi **mọi** embedding giống hệt nhau, loss bằng bao nhiêu theo $N$, và đạo hàm của loss theo $\\log s$ bằng bao nhiêu? (b) Khi $\\tau \\to \\infty$ (tức $s \\to 0$) với embedding bất kỳ, loss tiến tới bao nhiêu? (c) Cho $N = 4$, hai view của mỗi ảnh trùng nhau và các ảnh trực giao với nhau (positive có cosine 1, mọi negative có cosine 0). Viết loss theo $N$ và $s$; khi $s$ tăng thì loss tăng hay giảm, và tiến tới đâu khi $s \\to \\infty$? (d) Nếu chỉ cho $\\log s$ học trên batch như ở (c), nó có xu hướng tăng hay giảm, và vì sao CLIP chặn $s \\le 100$ trong forward?"
+}

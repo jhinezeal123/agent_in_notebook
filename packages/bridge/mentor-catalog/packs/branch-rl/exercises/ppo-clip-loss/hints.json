@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_example",
+    "text": "Với mỗi mẫu trong ví dụ, tính tay hai con số (r nhân A, và r đã bị ép vào đoạn nhân A). Phép chọn giữa chúng là lấy số lớn hơn hay số nhỏ hơn? Dấu của kết quả cuối cùng cần là gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradient_positive_advantage",
+    "text": "Khi A dương và r vượt xa 1 + eps, hai số hạng là gì và số nào nhỏ hơn? Số hạng được chọn có phụ thuộc vào new_logp không?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradient_negative_advantage",
+    "text": "Khi A âm và r > 1 + eps: r nhân A và (1 + eps) nhân A, cả hai đều âm; số nào nhỏ hơn? Số đó có đổi khi r đổi không?"
+  },
+  {
+    "level": 0,
+    "test": "test_ratio_from_log_probs",
+    "text": "Hai log-xác suất là -120 và -121: xác suất của chúng trong float32 là bao nhiêu? Có cách nào ra tỉ số mà không phải tính từng xác suất?"
+  },
+  {
+    "level": 0,
+    "test": "test_raw_advantages_and_unit_ratio",
+    "text": "Nếu policy chưa đổi thì tỉ số bằng bao nhiêu, và loss phải bằng bao nhiêu với advantage [1, 2, 3, 4]? Hàm của bạn có đổi advantage trước khi dùng không?"
+  },
+  {
+    "level": 0,
+    "test": "test_advantages_and_old_logp_get_no_gradient",
+    "text": "Sau backward(), tensor nào được phép có .grad? advantages và old_logp đến từ đâu, và loss này đang tối ưu theta qua tensor nào?"
+  },
+  {
+    "level": 1,
+    "text": "Dựng bốn thứ theo thứ tự. Một: tỉ số, bằng lũy thừa e của hiệu hai log-xác suất (old_logp coi là hằng số). Hai: số hạng thô, tỉ số nhân advantage (advantage coi là hằng số). Ba: số hạng cắt, tỉ số bị ép vào đoạn từ một trừ eps tới một cộng eps rồi nhân advantage. Bốn: ở mỗi mẫu chọn số NHỎ hơn trong hai số hạng (phép lấy nhỏ hơn theo từng phần tử), lấy trung bình, rồi đổi dấu."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "ratio = exp(new_logp - old_logp_không_gradient)\nadv = advantages không gradient\nthô = ratio * adv\ncắt = clamp(ratio, 1 - eps, 1 + eps) * adv\nloss = -(trung bình của min theo từng phần tử giữa thô và cắt)"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chỗ min hay max",
+    "text": "Hàm min theo từng phần tử của hai tensor cùng shape (khác với hàm min lấy cực tiểu theo một trục của một tensor). Loss muốn tối đa hóa giá trị thay thế bi quan, mà bi quan nghĩa là lấy số nhỏ hơn; dấu âm bên ngoài biến việc tối đa hóa thành giảm loss."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở số hạng cắt và phép min",
+    "text": "```python\nclipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv\nreturn -torch.min(unclipped, clipped).mean()\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở tỉ số và việc tách gradient",
+    "text": "```python\nratio = torch.exp(new_logp - old_logp.detach())\nadv = advantages.detach()\n```"
+  }
+]

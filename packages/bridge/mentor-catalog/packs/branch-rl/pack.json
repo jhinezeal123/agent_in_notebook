@@ -1,0 +1,6 @@
+{
+  "protocol": 1,
+  "id": "branch-rl",
+  "name": "Nhánh học tăng cường",
+  "description": "Bài cho các sao Bandit, Q-learning bảng, DQN, REINFORCE, GAE, PPO (đợt 4)."
+}

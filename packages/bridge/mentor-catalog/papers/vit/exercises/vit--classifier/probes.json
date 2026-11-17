@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Đếm ô trong hình lab: patch 4 và patch 7 trên ảnh 28×28 cho bao nhiêu token (chưa tính cls)? Ma trận attention của cấu hình patch 4 lớn hơn của patch 7 cỡ bao nhiêu lần, và vì sao chi phí đó không chỉ tỷ lệ với số token?",
+    "tag": "patch-token-count",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "Patch 4 cho 7×7 = 49 token, patch 7 cho 4×4 = 16 token (cộng cls: 50 và 17). Ma trận attention có (N+1)² phần tử: 2500 so với 289, cỡ 8 đến 9 lần, khoảng bình phương tỷ lệ số token (49/16 ≈ 3 nên 3² ≈ 9). Mỗi token chú ý tới mọi token khác nên chi phí attention tăng theo N², trong khi các phần còn lại (chiếu tuyến tính, MLP) chỉ tăng theo N: patch nhỏ làm attention thành phần đắt nhất khi N lớn."
+  },
+  {
+    "q": "Nếu chọn patch 14 trên ảnh 28×28 (chỉ 4 token), mỗi token phải mang thông tin gì và bằng cách nào? Còn patch 1 (784 token): mô hình được gì và mất gì so với patch 4?",
+    "tag": "patch-size-tradeoff",
+    "kind": "break",
+    "stage": "lab",
+    "answer": "Patch 14: mỗi token là một phần tư ảnh (196 pixel) bị nén bởi MỘT phép chiếu tuyến tính xuống 64 chiều, nên chi tiết nhỏ như nét đứt hay vòng nhỏ khó giữ; chỉ có 4 token nên attention rất rẻ nhưng biểu diễn thô. Patch 1: mỗi token là một pixel, 784 token nên attention đắt (cỡ 784² phần tử mỗi head) và mô hình phải tự học lại ý niệm 'lân cận' và nét từ pixel lẻ; token mang rất ít thông tin. Patch trung gian (4 hoặc 7) cân bằng giữa chi tiết mỗi token và số token."
+  },
+  {
+    "q": "ViT dùng positional embedding học được, một vector cho mỗi vị trí trong chuỗi 1D, không hề có khái niệm hàng và cột. Vì sao khi đổi độ phân giải ta vẫn phải nội suy 2D chứ không nội suy dọc theo chuỗi?",
+    "tag": "pos-embed-2d-interpolation",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Chuỗi là ảnh quét hàng trước cột, nên hai vị trí liền nhau trong chuỗi chỉ gần nhau trong ảnh khi cùng hàng; cuối hàng này và đầu hàng kế tiếp liền nhau trong chuỗi nhưng cách nhau cả bề rộng ảnh. Nội suy dọc theo chuỗi sẽ trộn các vị trí xa nhau trong ảnh. Paper (§3.2, và §4.5 cho thấy embedding của các patch gần nhau thực sự giống nhau, cấu trúc hàng cột tự xuất hiện) nội suy theo vị trí trong ảnh gốc: đưa về lưới 2D, nội suy hai chiều, rồi duỗi lại."
+  },
+  {
+    "q": "Vì sao hàng cls của pos_embed không được nội suy cùng với các hàng patch? Chuyện gì xảy ra nếu bạn coi cả 1 + old² hàng là một lưới và nội suy chúng cùng nhau?",
+    "tag": "cls-token-not-on-grid",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "Token cls không ứng với vị trí nào trong ảnh nên không có tọa độ để nội suy; nó là một vector học riêng. Số hàng 1 + old² thường không phải số chính phương (50, 197), nên không reshape được thành lưới vuông; nếu cố ép (ví dụ bỏ một hàng) thì mọi patch bị lệch một vị trí và vector của cls bị trộn vào các patch. Cách đúng là tách hàng 0 ra, nội suy lưới, rồi ghép lại."
+  },
+  {
+    "q": "Bạn fine-tune một ViT đã train trên ảnh 28×28 (patch 4) lên ảnh 56×56 mà giữ patch 4. Chuỗi dài ra bao nhiêu lần, chi phí attention tăng cỡ bao nhiêu lần, và trong mô hình chỉ có tham số nào phải đổi (còn lại giữ nguyên)?",
+    "tag": "resolution-fine-tuning",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Số patch từ 49 lên 196: dài gấp 4 lần (cộng cls: 50 lên 197). Ma trận attention có (N+1)² phần tử nên đắt gấp cỡ 15 đến 16 lần. Chỉ có positional embedding phụ thuộc độ dài chuỗi (1 + N hàng), nên chỉ pos_embed phải nội suy; trọng số của patch embedding (kích thước patch không đổi), attention, MLP, LayerNorm, đầu phân loại đều không phụ thuộc N và dùng lại nguyên. Đây là lý do ViT chạy được ở độ phân giải khác lúc huấn luyện sau khi nội suy pos_embed."
+  }
+]

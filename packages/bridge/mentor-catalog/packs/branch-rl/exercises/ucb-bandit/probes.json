@@ -1,0 +1,37 @@
+[
+  {
+    "q": "So dự đoán của bạn với kết quả thật về tay chưa thử và về c: chỗ nào lệch? Cụ thể, vì sao tay chưa thử phải được chọn trước chứ không để công thức tự xử lý bằng cách cho n = 0?",
+    "tag": "predict-vs-reality",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Với N = 0 bonus là sqrt(ln t / 0), tiến tới vô cùng: về mặt toán học tay chưa thử có điểm cao nhất nên được chọn trước, và đó là ý định (chưa có thông tin gì về nó). Nhưng máy tính chia cho 0 cho ra inf, hoặc nan khi t = 1 (0/0), kèm cảnh báo; argmax trên nan hoặc inf có thể đúng một cách may mắn và sai một cách khó đoán, nên phải xử lý riêng nhánh N = 0. c = 0 là greedy thuần; c rất lớn thì chỉ còn thứ tự ít được thử nhất, gần như chọn luân phiên."
+  },
+  {
+    "q": "Vì sao bonus có ln t ở tử số và N_a ở mẫu số? Một tay không được chọn trong một thời gian dài: điểm của nó thay đổi thế nào theo t, và điều đó đảm bảo gì về việc nó sẽ được chọn lại?",
+    "tag": "ucb-bonus",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "N_a ở mẫu số: càng thử nhiều thì càng chắc về Q_a nên bonus (độ không chắc chắn) nhỏ lại, theo 1/sqrt(N). ln t ở tử số: khi t tăng mà N_a đứng yên, bonus của tay đó tăng chậm (theo logarit) nhưng không bao giờ ngừng, nên sớm muộn nó vượt điểm của tay đang dẫn đầu và được chọn lại. Đó là cái đảm bảo 'không bỏ rơi vĩnh viễn' mà greedy không có; ln chậm nên tổng lượt khám phá vẫn chỉ cỡ log t (regret logarit)."
+  },
+  {
+    "q": "UCB không dùng số ngẫu nhiên nào. Nó khám phá khác epsilon-greedy ở điểm cốt lõi nào? Khi đã biết rõ tay tốt nhất, tỉ lệ lượt khám phá của hai phương pháp thay đổi ra sao theo thời gian?",
+    "tag": "ucb-vs-eps",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Epsilon-greedy khám phá mù: chọn đều mọi tay, kể cả tay đã biết là tệ, với tỉ lệ cố định eps mãi mãi. UCB khám phá có định hướng: chỉ thử tay mà ước lượng còn không chắc (ít được thử), và tỉ lệ đó tự giảm khi bonus co lại (N tăng). Nên UCB thường lãng phí ít hơn (regret tăng theo log t, trong khi eps-greedy với eps cố định tăng tuyến tính theo t). Đổi lại UCB cần n và t, giả định thưởng bị chặn và phụ thuộc vào c."
+  },
+  {
+    "q": "Nếu một cái bẫy là 'dùng n + 1 ở mẫu số để tránh chia cho 0' hoặc 'sửa n = 0 thành 1' thì UCB mất tính chất nào? Điều gì xảy ra với thứ tự thử các tay lúc đầu?",
+    "tag": "ucb-zero-division",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Tay chưa thử chỉ có bonus tương đương tay đã thử một lần (hoặc nhỏ hơn): không còn đảm bảo mọi tay được thử ít nhất một lần trước, nên một tay có Q thật cao có thể bị bỏ qua rất lâu nếu các tay khác có Q ban đầu cao. Cách sửa n tại chỗ còn phá hỏng dữ liệu của người gọi (n sai về sau). Đúng là xử lý n = 0 bằng một nhánh riêng, chọn mọi tay chưa thử trước."
+  },
+  {
+    "q": "Thang đo của c và của thưởng: nếu thưởng của bandit nhân lên 100 lần (đơn vị đổi), c = 1 có còn hợp lý không? Cần đổi c ra sao?",
+    "tag": "ucb-scale",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Không: Q đổi theo thang của thưởng còn bonus c*sqrt(ln t / N) không đổi theo thang, nên c = 1 trở thành quá nhỏ (gần như greedy) khi thưởng nhân 100. c phải tỷ lệ với độ rộng của thưởng (khoảng 100 lần lớn hơn). Với thưởng trong [0, 1] c ≈ sqrt(2) là mặc định lý thuyết. Đây là lý do UCB nhạy với thang đo thưởng và phải chuẩn hóa."
+  }
+]

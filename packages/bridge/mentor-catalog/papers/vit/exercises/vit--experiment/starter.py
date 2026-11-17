@@ -1,0 +1,16 @@
+# Cell train. Chạy xong cell này, hai biến toàn cục `model_p_small` (patch size nhỏ: nhiều token) và `model_p_large` (patch size lớn: ít token) phải giữ hai ViT đã train.
+torch.manual_seed(0)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# 1. Dữ liệu: load_mnist(20000), đưa lên `device`.
+...
+
+# 2. Một hàm train(model) dùng CHUNG cho cả hai mô hình: AdamW + lịch learning rate, 8 epoch, mỗi epoch xáo thứ tự rồi duyệt hết bằng batch 128.
+...
+
+# 3. Hai mô hình: make_vit với patch size nhỏ (4) và lớn (7) trên `device`; train từng cái bằng hàm ở bước 2.
+model_p_small = ...
+model_p_large = ...
+
+# 4. Xem thử: evaluate trên 2000 ảnh test và ms_per_image của từng mô hình; so số token của hai mô hình.
+...

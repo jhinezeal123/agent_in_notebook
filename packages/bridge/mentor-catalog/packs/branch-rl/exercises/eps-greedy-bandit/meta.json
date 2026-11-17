@@ -1,0 +1,13 @@
+{
+  "id": "eps-greedy-bandit",
+  "title": "Bandit epsilon-greedy",
+  "star": "bandit",
+  "skills": ["formula", "blank"],
+  "difficulty": 1300,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["select_action", "update", "run_bandit"],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

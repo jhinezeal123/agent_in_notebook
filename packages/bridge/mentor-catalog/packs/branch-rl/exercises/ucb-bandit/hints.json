@@ -1,0 +1,51 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_examples",
+    "text": "Với hai tay có cùng Q, tay nào có bonus lớn hơn: tay đã kéo nhiều hay ít? Bonus đó thay đổi thế nào khi tử số ln t lớn dần?"
+  },
+  {
+    "level": 0,
+    "test": "test_unvisited_first",
+    "text": "Một tay có n = 0: công thức cho bonus bằng bao nhiêu, và máy tính của bạn có chạy được phép chia đó không? Nên tách tay chưa thử ra trước khi tính điểm hay sau?"
+  },
+  {
+    "level": 0,
+    "test": "test_c_extremes",
+    "text": "Khi c = 0 điểm của mỗi tay còn lại gì? Khi c vô cùng lớn, thành phần nào của điểm lấn át phần còn lại?"
+  },
+  {
+    "level": 0,
+    "test": "test_bonus_grows_with_t",
+    "text": "Giữ nguyên Q và n, chỉ tăng t: bonus của tay ít được thử tăng nhanh hơn hay chậm hơn tay thử nhiều? Logarit lấy của đại lượng nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_inputs_untouched_and_tie",
+    "text": "Để tránh chia cho 0, bạn có đổi gì trên mảng n của người gọi không? Mảng đó còn dùng để cập nhật sau lượt chọn này."
+  },
+  {
+    "level": 1,
+    "text": "Làm theo hai pha. Pha một: nếu có tay nào chưa được kéo, trả về luôn tay chưa kéo có chỉ số nhỏ nhất, không tính điểm nào cả. Pha hai (mọi tay đã kéo ít nhất một lần): tính điểm của cả K tay cùng lúc bằng phép toán trên mảng (cộng q với phần bonus tính từ ln t chia cho n), rồi trả về chỉ số của điểm lớn nhất."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết cấu trúc hàm",
+    "text": "tìm các chỉ số mà n bằng 0\nnếu có: trả về chỉ số đầu tiên trong số đó\nbonus = c nhân căn của (ln t chia n), tính theo từng phần tử\nscore = q + bonus\ntrả về chỉ số của phần tử lớn nhất của score (đồng điểm: chỉ số nhỏ nhất)"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chỗ c đặt ở đâu",
+    "text": "c nhân với CẢ căn bậc hai, không nằm trong căn. Thử với c = 2: bonus phải gấp đôi, không gấp căn 2 lần."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở nhánh tay chưa thử",
+    "text": "```python\nunvisited = np.flatnonzero(n == 0)\nif len(unvisited) > 0:\n    return int(unvisited[0])\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở dòng tính điểm",
+    "text": "```python\nscore = q + c * np.sqrt(np.log(t) / n)\n```"
+  }
+]

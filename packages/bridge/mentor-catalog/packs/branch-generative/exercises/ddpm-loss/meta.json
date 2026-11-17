@@ -1,0 +1,14 @@
+{
+  "id": "ddpm-loss",
+  "title": "DDPM: loss đơn giản L_simple, đoán nhiễu (Eq. 14, Alg. 1)",
+  "star": "ddpm",
+  "skills": ["formula", "train"],
+  "difficulty": 1750,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 3,
+  "functions": ["ddpm_loss"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["q-sample"]
+}

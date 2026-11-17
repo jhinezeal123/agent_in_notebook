@@ -1,0 +1,22 @@
+{
+  "id": "patch-embed",
+  "title": "Patch embedding: cắt ảnh thành token, conv stride p = Linear",
+  "star": "vitpatch",
+  "skills": [
+    "tensor",
+    "formula"
+  ],
+  "difficulty": 1600,
+  "minutes": 20,
+  "requires": [
+    "numpy",
+    "torch"
+  ],
+  "order": 1,
+  "functions": [
+    "patchify",
+    "PatchEmbed"
+  ],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

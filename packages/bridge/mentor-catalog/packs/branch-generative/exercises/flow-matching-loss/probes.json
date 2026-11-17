@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab: ở cùng một vị trí tại t = 0.5, vận tốc đích có một giá trị hay nhiều giá trị khác nhau? Khi hồi quy bình phương trên các đích như vậy, mô hình v(x, t) học ra con số nào, và vì sao vẫn sinh được dữ liệu?",
+    "tag": "fm-conditional-vs-marginal",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Nhiều giá trị: vài cặp (x0, x1) khác nhau có đoạn thẳng đi qua cùng một điểm ở cùng thời gian với vận tốc khác nhau (đoạn đi về cụm trái, đoạn đi về cụm phải). Mô hình chỉ thấy (x, t), nên hồi quy bình phương học ra TRUNG BÌNH CÓ ĐIỀU KIỆN của vận tốc đích tại (x, t) (đường đỏ): đó chính là trường vận tốc 'biên' sinh ra đúng phân phối p_t. Đó là ý của conditional flow matching: loss theo từng cặp (x0, x1) dễ tính, nhưng gradient của nó cùng một hướng với loss khó tính của trường vận tốc 'biên' (trung bình theo mọi cặp đi qua điểm đó), nên train bằng cái dễ vẫn học ra đúng trường biên."
+  },
+  {
+    "q": "Trong lab: độ dốc của mỗi đoạn thẳng có đổi theo thời gian t trên cùng đoạn đó không? Điều đó nói gì về đích u = x1 − x0 và việc u có phụ thuộc vào t không?",
+    "tag": "fm-target-constant-in-t",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Không đổi: mỗi đoạn là đường thẳng nên vận tốc của nó là hằng số x1 − x0 trên suốt t ∈ [0, 1]. Vì thế đích u KHÔNG chứa t: t chỉ xuất hiện trong việc xác định điểm x_t = (1 − t)x0 + t x1 và là đầu vào của mô hình (để mô hình biết nó đang ở đâu trên đường đi); sai khi viết đích là (x1 − x0)·t hay tương tự."
+  },
+  {
+    "q": "Quy ước: t = 0 là nhiễu và t = 1 là dữ liệu, ngược với DDPM. Nếu bạn lỡ viết x_t = t·x0 + (1 − t)·x1 nhưng vẫn giữ đích x1 − x0, mô hình sẽ được dạy gì, và lúc sinh bằng euler-sampler đi từ t = 0 tới 1 thì chuyện gì xảy ra?",
+    "tag": "fm-interp-direction",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Khi đó điểm x_t chạy từ dữ liệu (t = 0) về nhiễu (t = 1) nhưng đích lại nói 'đi theo hướng x1 − x0' tức đi từ nhiễu về dữ liệu: dấu của vận tốc ngược với chuyển động thật của điểm. Mô hình học một trường mâu thuẫn hình học (đi ngược hướng của quỹ đạo); khi sinh, bắt đầu từ nhiễu tại t = 0 mà mô hình tưởng đang ở dữ liệu nên đẩy ra xa, kết quả là rác chứ không phải dữ liệu. Hai bên (nội suy và đích) phải cùng một quy ước về chiều thời gian."
+  },
+  {
+    "q": "Vì sao đích hồi quy là hiệu x1 − x0 mà không phải x1 (như DDPM từng thử đoán ảnh sạch)? Hãy nối nó với đạo hàm của x_t theo t.",
+    "tag": "fm-velocity-target",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Mô hình là một trường VẬN TỐC trong phương trình dx/dt = v(x, t); x_t = (1 − t)x0 + t x1 có đạo hàm theo t bằng x1 − x0, nên đó là vận tốc của điểm chạy dọc đường thẳng, và là cái mô hình phải bằng khi ta tích phân để đi theo đường đó. Đoán x1 là đoán đích cuối (giống đoán x0 trong DDPM) chứ không phải hướng đi tức thời; dùng nó làm vận tốc sẽ kéo mọi điểm thẳng tới x1 mà không tính tới điểm đang ở đâu và vì sao."
+  },
+  {
+    "q": "t có shape (B,) còn x1 có shape (B, C, H, W). Vì sao ta đổi t thành (B, 1, 1, 1) để nội suy nhưng vẫn đưa t shape (B,) cho model? Cách đổi shape nào chạy được cho cả (B, D) lẫn (B, C, H, W)?",
+    "tag": "fm-t-broadcast",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Để nhân từng mẫu với hệ số của riêng nó, t phải có shape (B, 1, 1, 1) (số trục bằng số trục của x1, các trục sau batch bằng 1) để broadcasting căn trục batch với trục batch; nhưng mô hình (embedding của t) quy ước nhận t shape (B,), và bản đổi shape chỉ là công cụ cục bộ, nên ta đưa t gốc. Viết cứng (-1, 1, 1, 1) chỉ chạy cho ảnh 4 chiều; số trục 1 phải tính từ số chiều của x1: một dạng như (-1,) + (1,) * (x1.dim() − 1) chạy cho cả vectơ lẫn ảnh."
+  },
+  {
+    "q": "DDPM đoán nhiễu ε, flow matching đoán vận tốc u = x1 − x0. Nếu x0 chính là nhiễu ε và t = 0 là nhiễu, hai đích liên hệ ra sao, và điểm khác nhau cốt lõi về mặt thời gian là gì?",
+    "tag": "fm-vs-ddpm-target",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Với x0 = ε, đích của flow matching là x1 − ε: ghép cả dữ liệu lẫn nhiễu, trong khi DDPM chỉ đoán ε (phần nhiễu) rồi suy ra x0 từ Eq. 4. Khác biệt về thời gian: trong DDPM chiều đi sinh là t giảm từ T về 0 (nhiễu ở t lớn) và bước phụ thuộc lịch β, còn flow matching dùng thời gian liên tục [0, 1] với nhiễu ở 0, dữ liệu ở 1, đường đi là đường thẳng không cần lịch nhiễu, và lúc sinh là giải một ODE (không cần nhiễu ngẫu nhiên mỗi bước)."
+  }
+]

@@ -1,0 +1,80 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Trong số weight, bias, running_mean, running_var, num_batches_tracked: thứ nào được optimizer học bằng gradient (nn.Parameter) và thứ nào chỉ là trạng thái đi theo state_dict (buffer)? Mỗi thứ có shape gì và khởi tạo bằng gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_train_forward",
+    "text": "Đầu vào có 4 trục (N, C, H, W): mỗi kênh cần một trung bình và một phương sai, vậy gộp theo những trục nào, và làm sao để kết quả broadcast ngược lại được với x?"
+  },
+  {
+    "level": 0,
+    "test": "test_running_mean",
+    "text": "Nếu momentum = 0.1 thì sau một bước, running_mean mới chứa bao nhiêu phần trăm của trung bình batch mới và bao nhiêu phần trăm của giá trị cũ? Phép cập nhật này có cần gradient không?"
+  },
+  {
+    "level": 0,
+    "test": "test_running_var",
+    "text": "Cho một kênh có n = 8 giá trị: phương sai chia 8 và phương sai chia 7 chênh nhau bao nhiêu? Con số nào của hai con số này đi vào running_var, và con số nào đi vào phép chuẩn hóa?"
+  },
+  {
+    "level": 0,
+    "test": "test_eval_mode",
+    "text": "Ở chế độ eval, các con số trung bình và phương sai đến từ đâu? Cập nhật buffer có xảy ra không, và kết quả của một ảnh có được phụ thuộc vào các ảnh khác trong cùng batch không?"
+  },
+  {
+    "level": 0,
+    "test": "test_mode_switch",
+    "text": "Module biết mình đang ở train hay eval nhờ thứ gì (một thuộc tính có sẵn của nn.Module)? Sau khi gọi eval() rồi train() lại, hành vi của bạn có đổi theo không?"
+  },
+  {
+    "level": 0,
+    "test": "test_eps",
+    "text": "Khi phương sai của một kênh bằng 0, mẫu số của bạn bằng bao nhiêu? ε nằm bên trong hay bên ngoài căn bậc hai, và có đang được lấy từ đối số truyền vào không?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients",
+    "text": "Trung bình và phương sai của batch đều tính từ x: gradient theo x có cần đi qua chúng không? Còn running_mean và running_var thì có nên nằm trong đồ thị tính gradient không, và nên bọc phép cập nhật chúng bằng gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_single_value_per_channel",
+    "text": "Nếu mỗi kênh chỉ có một giá trị (n = 1) thì phương sai không thiên lệch có chia cho bao nhiêu? Chế độ nào còn chạy được trong trường hợp đó, và vì sao?"
+  },
+  {
+    "level": 0,
+    "test": "test_no_builtin",
+    "text": "Bài này là tự viết phép chuẩn hóa: bạn đang gọi hàm batch_norm có sẵn nào, hoặc đang bọc lớp nn.BatchNorm nào bên trong module của mình không?"
+  },
+  {
+    "level": 1,
+    "text": "Khởi tạo: tạo hai nn.Parameter (γ toàn 1, β toàn 0) và ba buffer (trung bình trượt toàn 0, phương sai trượt toàn 1, bộ đếm số lần train là số nguyên 0 chiều) bằng register_buffer. Forward: nhánh train tính trung bình và phương sai theo trục (N, H, W) của chính batch (chia n), cập nhật buffer ngoài đồ thị gradient; nhánh eval lấy trung bình và phương sai từ buffer. Cuối cùng cả hai nhánh dùng chung một công thức: trừ trung bình, chia căn (phương sai + ε), nhân γ, cộng β."
+  },
+  {
+    "level": 1,
+    "text": "Muốn kết quả thống kê trộn lại với x được bằng broadcasting thì phải giữ trục kênh ở vị trí 1 với kích thước C và các trục còn lại có kích thước 1. Có hai việc cần: giữ chiều khi tính trung bình/phương sai, và đổi shape (C,) của γ, β, buffer thành thứ broadcast được với (N, C, H, W)."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "__init__: gọi super; lưu eps, momentum; weight = Parameter(ones(C)); bias = Parameter(zeros(C)); register_buffer cho running_mean (zeros), running_var (ones), num_batches_tracked (tensor long 0)\nforward(x):\n  nếu self.training:\n    n = số phần tử mỗi kênh; n <= 1 thì ValueError\n    mean = trung bình theo (0, 2, 3), giữ chiều\n    var = trung bình của (x - mean)^2 theo (0, 2, 3), giữ chiều (chia n)\n    trong khối không gradient: running_mean = (1 - m) * running_mean + m * mean; running_var = (1 - m) * running_var + m * var * n / (n - 1); đếm + 1\n  ngược lại: mean, var lấy từ buffer, đổi shape thành (1, C, 1, 1)\n  trả về weight * (x - mean) / căn(var + eps) + bias, với weight, bias cũng đổi thành (1, C, 1, 1)"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc cập nhật running stats",
+    "text": "Việc cập nhật là một phép trung bình có trọng số giữa giá trị cũ của buffer và thống kê mới, sửa thẳng tại chỗ trên buffer bên trong torch.no_grad(). Chú ý: trung bình và phương sai của batch có shape (1, C, 1, 1) còn buffer có shape (C,); và phương sai đi vào running_var là phương sai chia (n - 1), không phải phương sai bạn dùng để chuẩn hóa."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở trục và giữ chiều",
+    "text": "```python\nmean = x.mean(dim=(0, 2, 3), keepdim=True)\nvar = ((x - mean) ** 2).mean(dim=(0, 2, 3), keepdim=True)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở cập nhật buffer",
+    "text": "```python\nwith torch.no_grad():\n    self.running_mean.mul_(1 - m).add_(mean.view(-1), alpha=m)\n    self.num_batches_tracked += 1\n```"
+  }
+]

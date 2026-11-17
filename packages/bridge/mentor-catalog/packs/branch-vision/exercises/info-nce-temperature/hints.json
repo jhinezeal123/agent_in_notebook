@@ -1,0 +1,65 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Tham số học được ở đây là một con số duy nhất: nó là log của đại lượng nào, khi init_tau = 0.5 thì giá trị khởi tạo bằng bao nhiêu? Nó có shape gì, và có buffer hay tham số nào khác không?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward_matches",
+    "text": "Để forward ở init_tau = 0.5 cho đúng loss của nt_xent với temperature = 0.5, từ log_scale bạn phải tính ra s rồi ra temperature bằng những phép nào, theo đúng thứ tự?"
+  },
+  {
+    "level": 0,
+    "test": "test_uses_nt_xent",
+    "text": "Bạn đang gọi nt_xent đã định nghĩa ở bài trước hay viết lại loss trong forward? Đối số temperature bạn truyền vào có còn nối với log_scale trong đồ thị tính toán không?"
+  },
+  {
+    "level": 0,
+    "test": "test_identical_embeddings",
+    "text": "Nếu mọi embedding giống hệt nhau thì đổi temperature có làm đổi loss không? Từ đó gradient theo log_scale phải bằng bao nhiêu, và nếu bạn thấy nó khác 0 thì có phải vì temperature đi vào sai chỗ không?"
+  },
+  {
+    "level": 0,
+    "test": "test_orthogonal_gradient",
+    "text": "Khi positive có cosine 1 và mọi negative có cosine 0, tăng s thì loss tăng hay giảm, nên gradient theo log_scale mang dấu gì? Nếu gradient là None, chỗ nào trong code của bạn đã làm mất đường gradient?"
+  },
+  {
+    "level": 0,
+    "test": "test_clamp",
+    "text": "Khi exp(log_scale) vượt 100, đầu ra của phép chặn có phụ thuộc log_scale không, nên gradient là bao nhiêu? Bạn chặn bằng phép nào, và nó có sửa giá trị của tham số không?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradient_matches",
+    "text": "Gradient theo log_scale đi qua những phép nào từ loss ngược về tham số? Phép nào trong chuỗi đó bạn đã thay bằng một phép không có gradient (hay chuyển sang số Python)?"
+  },
+  {
+    "level": 1,
+    "text": "Khởi tạo: một tham số 0 chiều bằng logarit của (1 chia init_tau). Forward: lấy mũ của log_scale để ra s, chặn trên s ở 100, lấy 1 chia s ra temperature (vẫn là tensor), rồi gọi nt_xent của bạn với z1, z2 và temperature đó."
+  },
+  {
+    "level": 1,
+    "text": "Phép chặn trên của tensor có sẵn trong torch và có gradient bằng 0 ở vùng bị chặn: hãy chặn kết quả của phép mũ (giá trị đi vào phép tính), đừng sửa lại chính tham số."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "__init__(init_tau):\n  super().__init__()\n  log_scale = Parameter(tensor 0 chiều = ln(1 / init_tau))\nforward(z1, z2):\n  scale = chặn_trên(exp(log_scale), 100)\n  trả về nt_xent(z1, z2, temperature = 1 / scale)   # nt_xent của bạn"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở khởi tạo tham số",
+    "text": "torch.tensor(...) nhận một số Python (dùng numpy để lấy logarit, rồi đổi sang float); bọc kết quả bằng nn.Parameter. Đừng dùng torch.tensor([...]) với dấu ngoặc vuông, vì khi đó tham số có shape (1,) thay vì 0 chiều."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở forward",
+    "text": "```python\nscale = self.log_scale.exp().clamp(max=100.0)\nreturn nt_xent(z1, z2, 1.0 / scale)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khởi tạo",
+    "text": "```python\nself.log_scale = nn.Parameter(torch.tensor(float(np.log(1.0 / init_tau))))\n```"
+  }
+]

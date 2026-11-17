@@ -1,0 +1,51 @@
+[
+  {
+    "q": "Với mask causal có đường chéo, query ở vị trí t nhìn được bao nhiêu key? Hàng đầu tiên (t = 0) của mask có bao nhiêu ô được nhìn, và chuyện gì xảy ra với softmax nếu hàng đó không có ô nào?",
+    "tag": "diagonal-visible",
+    "stage": "lab",
+    "kind": "edge",
+    "answer": "Vị trí t nhìn t + 1 key (0..t, gồm chính nó); hàng 0 chỉ có một ô (chính nó), nên trọng số của nó là 1 và đầu ra là v của chính token đầu. Nếu che cả đường chéo thì hàng 0 toàn -inf: softmax của một hàng toàn -inf là 0/0 = NaN, và NaN lan ra cả loss lẫn gradient."
+  },
+  {
+    "q": "Vì sao đặt -inf vào điểm attention trước softmax mà không nhân trọng số với 0 sau softmax?",
+    "tag": "mask-before-softmax",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "exp(-inf) = 0 nên key bị che có trọng số đúng 0 và các trọng số còn lại vẫn cộng thành 1. Nhân 0 sau softmax thì mẫu số softmax đã tính cả các key tương lai: các hàng không còn cộng thành 1 và trọng số của các key hợp lệ vẫn phụ thuộc vào điểm của tương lai, tức là thông tin tương lai vẫn lọt vào đầu ra."
+  },
+  {
+    "q": "Lúc train, GPT tính đầu ra của cả T vị trí song song và tính loss ở mọi vị trí. Vì sao mask causal bắt buộc? Nếu bỏ nó thì mô hình \"gian lận\" ra sao?",
+    "tag": "causal-leak",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Đầu ra ở vị trí t được dùng để dự đoán token t + 1. Không có mask thì attention ở vị trí t đọc được trực tiếp token t + 1 từ đầu vào và chỉ việc sao chép: loss gần 0 mà không học ngôn ngữ gì. Lúc sinh văn bản tương lai chưa tồn tại nên mô hình hỏng hoàn toàn. Mask làm train song song mà vẫn giống hệt sinh từng token."
+  },
+  {
+    "q": "Khi sinh văn bản, người ta lưu lại K và V của các token đã có (KV cache) và chỉ tính thêm cho token mới. Vì sao việc đó chỉ hợp lệ nhờ mask causal?",
+    "tag": "kv-cache",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Nhờ mask causal, đầu ra, K và V của một vị trí chỉ phụ thuộc các vị trí đến nó (ở mọi lớp), nên thêm token mới không làm đổi chúng; chỉ cần tính q của token mới rồi attention với K, V đã lưu. Với attention hai chiều thì thêm một token làm đổi biểu diễn của mọi vị trí, nên không cache được."
+  },
+  {
+    "q": "Điểm attention có shape (B, n_head, T, T). Với B = 8, n_head = 12, T = 1024 và float32 thì tensor này chiếm khoảng bao nhiêu bộ nhớ? Thành phần nào tăng theo bậc hai của T?",
+    "tag": "attention-memory",
+    "stage": "defend",
+    "kind": "shape",
+    "answer": "8 × 12 × 1024 × 1024 × 4 byte ≈ 4,0 × 10^8 byte, cỡ 0,4 GB cho điểm của một lớp (và cần thêm cho trọng số sau softmax). Chính ma trận T × T tăng bậc hai theo T, cả bộ nhớ lẫn số phép tính; đó là lý do FlashAttention và các biến thể tránh tạo nó ra hẳn."
+  },
+  {
+    "q": "Self-attention trong bài multi-head-attention gốc (mask padding, nhìn cả hai phía) khác gì attention causal này? Mô hình nào dùng loại nào (GPT, BERT, encoder của Transformer gốc)?",
+    "tag": "causal-vs-bidirectional",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Khác ở mask: causal chỉ cho nhìn quá khứ và chính nó (tam giác dưới), hai chiều cho nhìn mọi vị trí (trừ padding). GPT (và decoder của Transformer gốc ở self-attention) dùng causal vì sinh từng token; BERT và encoder của Transformer gốc dùng hai chiều vì hiểu cả câu. Phần tính toán attention giống nhau, chỉ đổi mask."
+  },
+  {
+    "q": "Vì sao điểm attention chia cho căn của d_h (số chiều mỗi head) mà không phải căn của n_embd?",
+    "tag": "scale-dk",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Mỗi head tính tích vô hướng trên d_h chiều, nên phương sai của q·k cỡ d_h; chia căn d_h đưa nó về cỡ 1. Chia căn n_embd là chia quá tay khi có nhiều head (softmax quá phẳng)."
+  }
+]

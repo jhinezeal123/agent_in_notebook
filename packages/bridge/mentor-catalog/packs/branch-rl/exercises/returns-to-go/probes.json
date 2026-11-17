@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Nhìn ma trận trọng số trong lab: hàng t của G_t chứa r_s nào, với trọng số gì, và vì sao có thể tính tất cả các G chỉ bằng MỘT lượt duyệt qua mảng thay vì cộng từng ô? Lượt duyệt đó phải đi theo chiều nào, và vì sao chiều ngược lại không làm được?",
+    "tag": "backward-recurrence",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Hàng t chứa r_s với s >= t (trong cùng episode), trọng số gamma^(s-t). Quan hệ truy hồi G_t = r_t + gamma * G_(t+1) cho phép dùng lại kết quả của hàng t+1, nên chỉ cần O(T) phép tính thay vì O(T^2). Phải duyệt ngược từ cuối về đầu vì G_t cần G_(t+1) đã biết; duyệt xuôi thì khi tới t chưa có G_(t+1) (tương lai chưa tính), nên không dùng được truy hồi này."
+  },
+  {
+    "q": "Bạn nối 3 episode thành một mảng dài và quên không dùng dones (cứ cộng dồn một mạch). G của bước cuối episode thứ nhất sẽ chứa gì sai? Với gamma = 0.99 thì lỗi này lớn hay nhỏ, và vì sao khó phát hiện bằng cách nhìn loss?",
+    "tag": "episode-boundary",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "G ở cuối episode 1 sẽ cộng thêm gamma^k nhân thưởng của episode 2 (và 3): thưởng của một ván khác bị tính cho hành động của ván này, nên hành động dở ở ván 1 có thể được 'thưởng' vì ván 2 may mắn. Với gamma = 0.99 lỗi này lớn (các thưởng của ván sau gần như còn nguyên trọng số), chỉ nhỏ khi gamma nhỏ. Khó thấy vì loss vẫn ra số bình thường, chỉ tín hiệu học bị nhiễu và học chậm hoặc không học."
+  },
+  {
+    "q": "gamma = 0 và gamma = 1 làm G_t thành gì? Nêu một lý do để chọn gamma gần 1 (ví dụ 0.99) và một lý do không muốn gamma = 1 hẳn, kể cả khi bài toán có episode kết thúc hữu hạn.",
+    "tag": "discount-horizon",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "gamma = 0: G_t = r_t, chỉ thấy thưởng tức thời (agent ngắn thị). gamma = 1: G_t là tổng không chiết khấu các thưởng còn lại. Gamma gần 1 để agent biết quan tâm thưởng xa (tầm nhìn hiệu dụng cỡ 1/(1-gamma) bước). Không muốn đúng 1: nhiều bước tương lai làm phương sai của G lớn (nhiều nhiễu cộng dồn), với bài toán không có kết thúc thì tổng có thể vô hạn, và chiết khấu nhẹ giúp ưu tiên thưởng sớm, làm tín hiệu học 'sạch' hơn."
+  },
+  {
+    "q": "Mảng của bạn kết thúc giữa chừng một episode (bước cuối không có done, trò chơi chưa xong). Hàm này đặt G ở bước cuối bằng chính thưởng của nó. Điều đó thiên lệch về phía nào so với giá trị thật, và bạn sẽ sửa bằng cách nào ở bài sau (gae)?",
+    "tag": "truncation-bootstrap",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "G bị đánh giá thấp: ta bỏ mất phần thưởng tương lai mà episode còn lại sẽ mang (nếu thưởng dương). Cách sửa là bootstrap: cộng thêm gamma^k nhân giá trị ước lượng V của trạng thái tiếp theo (last_value) ở cuối mảng, tức là thay phần đuôi chưa biết bằng ước lượng của mạng giá trị; đó chính là last_value của GAE. Khi episode thật sự kết thúc (done) thì không bootstrap vì không còn tương lai."
+  },
+  {
+    "q": "Trong policy gradient người ta dùng return còn lại G_t của từng bước, chứ không dùng tổng thưởng cả episode cho mọi bước. Vì sao thưởng đã xảy ra TRƯỚC bước t không nên được tính cho hành động ở bước t, và điều đó giảm cái gì?",
+    "tag": "reward-to-go-causality",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Hành động ở bước t không thể ảnh hưởng đến thưởng đã nhận trước nó (nhân quả), nên thưởng quá khứ chỉ là nhiễu đối với tín hiệu của hành động đó. Bỏ chúng đi không làm lệch kỳ vọng của gradient (kỳ vọng của nhiễu nhân log-prob bằng 0) nhưng giảm phương sai đáng kể, vì mỗi hành động chỉ bị 'chấm điểm' theo hậu quả của nó."
+  }
+]

@@ -15,8 +15,8 @@
     "answer": "softmax làm tròn xác suất rất nhỏ về 0 nên log ra -inf (gradient thành NaN). log_softmax(z)_c = z_c − logsumexp(z), trong đó logsumexp trừ max trước khi lấy exp, nên luôn hữu hạn."
   },
   {
-    "q": "Trong einsum \"bhtd,bhsd->bhst\", chữ nào bị cộng dồn và vì sao? Đổi vế phải thành \"bhts\" ra \"bhst\" thì kết quả khác gì? Vì sao chia √d?",
+    "q": "Trong einsum \"bhtd,bhsd->bhts\", chữ nào bị cộng dồn và vì sao? Đổi vế phải thành \"bhst\" thì kết quả khác gì? Vì sao chia √d?",
     "tag": "einsum-reading",
-    "answer": "d không có ở vế phải nên bị cộng dồn (tích vô hướng); b, h giữ nguyên là trục batch. Đổi thành bhts là chuyển vị hai trục cuối (S trước T). Chia √d để phương sai của tích vô hướng giữ cỡ 1 khi q, k có phương sai 1, softmax sau đó không bị bão hoà."
+    "answer": "d không có ở vế phải nên bị cộng dồn (tích vô hướng); b, h giữ nguyên là trục batch. Đổi thành bhst là chuyển vị hai trục cuối (S trước T). Chia √d để phương sai của tích vô hướng giữ cỡ 1 khi q, k có phương sai 1, softmax sau đó không bị bão hoà."
   }
 ]

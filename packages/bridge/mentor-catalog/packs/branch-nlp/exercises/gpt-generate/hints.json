@@ -1,0 +1,86 @@
+[
+  {
+    "level": 0,
+    "test": "test_output_shape",
+    "text": "Mỗi bước bạn thêm một token vào chuỗi: nối theo trục nào, và kết quả cuối có bao nhiêu cột? Khi bạn nối, tensor idx của người gọi còn nguyên hay đã bị thay?"
+  },
+  {
+    "level": 0,
+    "test": "test_sampling",
+    "text": "Phân phối của token kế lấy từ logits ở vị trí nào của chuỗi mà mô hình vừa nhìn? Temperature được chia vào trước hay sau softmax, và bạn lấy mẫu bằng hàm nào, mấy lần mỗi bước?"
+  },
+  {
+    "level": 0,
+    "test": "test_top_k_support",
+    "text": "Một token bị loại thì sau softmax phải có xác suất đúng 0. Logit của nó cần bằng giá trị nào để điều đó đúng? Và ngưỡng bạn so sánh là logit lớn nhất hay logit lớn thứ k của mỗi hàng?"
+  },
+  {
+    "level": 0,
+    "test": "test_top_k_edges",
+    "text": "Với top_k = 1, sau khi loại thì còn mấy token có xác suất khác 0, vậy kết quả giống cách chọn nào? Và nếu top_k lớn hơn cỡ từ vựng, hàm bạn dùng để tìm k giá trị lớn nhất làm gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_low_temperature",
+    "text": "Chia logits cho một số rất nhỏ thì các logit xa nhau hơn hay gần nhau hơn? Softmax của chúng khi đó dồn xác suất về đâu?"
+  },
+  {
+    "level": 0,
+    "test": "test_high_temperature",
+    "text": "Chia logits cho một số rất lớn thì các logit xa nhau hơn hay gần nhau hơn? Phân phối softmax trông thế nào, và mô hình có còn ưu tiên token nào không?"
+  },
+  {
+    "level": 0,
+    "test": "test_context_crop",
+    "text": "Mô hình có đúng block_size vị trí. Khi chuỗi hiện có đã dài hơn block_size, bạn đưa vào mô hình đoạn nào của chuỗi: phần đầu hay phần cuối, và vì sao?"
+  },
+  {
+    "level": 0,
+    "test": "test_eval_no_grad",
+    "text": "Lúc sinh văn bản, dropout nên bật hay tắt, và có cần ghi đồ thị gradient không? Trước khi gọi generate mô hình đang ở chế độ nào, và sau khi gọi xong nó nên ở chế độ nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_with_your_gpt",
+    "text": "GPT của bạn có thuộc tính nào cho biết độ dài tối đa của chuỗi? generate của bạn đọc nó từ đâu, và bạn lấy logits từ giá trị trả về (logits, loss) của mô hình ra sao?"
+  },
+  {
+    "level": 1,
+    "text": "Một vòng lặp max_new_tokens lần. Mỗi lần: lấy block_size token cuối của chuỗi hiện có, cho qua mô hình, chỉ giữ logits của vị trí cuối cùng (một vector V cho mỗi mẫu trong batch), chia cho temperature, nếu có top_k thì loại các logit nhỏ hơn logit lớn thứ k, softmax để ra xác suất, lấy mẫu mỗi hàng một token, rồi nối token mới vào cột cuối của chuỗi. Bao ngoài vòng lặp: chuyển mô hình sang eval và tắt gradient, xong thì trả chế độ cũ."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "chế độ_cũ = mô hình đang train hay eval; chuyển sang eval; tắt gradient\nlặp max_new_tokens lần:\n  1. ctx = block_size cột cuối của idx                       # (B, ≤ block_size)\n  2. logits = logits của mô hình trên ctx, chỉ vị trí cuối      # (B, V)\n  3. chia logits cho temperature\n  4. nếu có top_k: ngưỡng = logit lớn thứ k của từng hàng (giữ chiều); logit nhỏ hơn ngưỡng ← -inf\n  5. probs = softmax theo trục từ vựng                          # (B, V)\n  6. token mới = lấy mẫu một token từ mỗi hàng của probs        # (B, 1)\n  7. nối token mới vào idx theo trục thời gian\nkhôi phục chế độ_cũ; trả về idx"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở top-k",
+    "text": "Lấy k giá trị lớn nhất của mỗi hàng bằng hàm topk; chúng được trả về xếp giảm dần, nên giá trị cuối cùng trong k giá trị đó chính là ngưỡng. Giữ chiều để so sánh broadcast được với logits (B, V). Những logit nhỏ hơn ngưỡng thì điền -inf (không điền 0: softmax của 0 vẫn cho xác suất khác 0). Nhớ k không được vượt cỡ từ vựng."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chế độ eval và gradient",
+    "text": "Lưu lại model.training trước khi đổi. model.eval() tắt dropout; một khối no_grad bao quanh vòng lặp tắt việc ghi đồ thị. Khi xong, đưa mô hình về đúng chế độ đã lưu (model.train nhận một đối số bool). Hàm trả về chuỗi nên nhớ làm bước khôi phục trước lệnh return."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc cắt ngữ cảnh",
+    "text": "Cắt theo trục thời gian (trục 1) của idx, giữ block_size phần tử cuối. Nếu chuỗi ngắn hơn block_size thì lát cắt kiểu này tự lấy hết, không cần if. Dùng chỉ số âm."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở top-k",
+    "text": "```python\nv, _ = torch.topk(logits, min(top_k, logits.size(-1)))\nlogits = logits.masked_fill(logits < v[:, [-1]], float(\"-inf\"))\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở chế độ eval và gradient",
+    "text": "```python\nwas_training = model.training\nmodel.eval()\nwith torch.no_grad():\n    ...  # vòng lặp sinh token\nmodel.train(was_training)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở cắt ngữ cảnh và lấy mẫu",
+    "text": "```python\nlogits, _ = model(idx[:, -model.block_size:])\nprobs = F.softmax(logits[:, -1, :] / temperature, dim=-1)\nidx = torch.cat([idx, torch.multinomial(probs, num_samples=1)], dim=1)\n```"
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "id": "resnet--net",
+  "title": "ResNet kiểu CIFAR: 6n + 2 lớp, có và không có shortcut",
+  "star": "resnet--net",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1750,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["ResNetCifar"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "resnet",
+  "role": "component",
+  "cites": "§3.3 (Hình 3), §4.2",
+  "uses": ["residual-block"]
+}

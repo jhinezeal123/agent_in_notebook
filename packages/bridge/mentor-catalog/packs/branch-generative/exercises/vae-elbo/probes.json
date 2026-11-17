@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Ảnh 28×28 (784 pixel), latent 20 chiều. Nếu tái tạo dùng reduction=\"mean\" (trung bình theo pixel) còn KL cộng theo 20 chiều latent, hạng nào lớn hơn và gấp khoảng bao nhiêu lần so với khi tái tạo cộng theo pixel? Optimizer sẽ \"ưu tiên\" hạng nào và encoder dần thành gì?",
+    "tag": "recon-kl-balance",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Tái tạo trung bình theo pixel nhỏ đi 784 lần so với cộng theo pixel, trong khi KL giữ nguyên: KL (cỡ vài chục nat) áp đảo tái tạo (cỡ 0,1). Optimizer giảm KL trước vì đó là đòn bẩy lớn nhất, kéo q(z|x) về prior với mọi x: posterior collapse, z không mang thông tin về x, decoder chỉ ra được ảnh trung bình. Muốn ELBO đúng nghĩa thì hai hạng phải cùng đơn vị nat mỗi ảnh: tái tạo cộng theo pixel (log-likelihood của cả ảnh) và KL cộng theo chiều latent."
+  },
+  {
+    "q": "Một pixel có nhãn 1 nhưng decoder cho logit -150. Loss đúng của pixel đó khoảng bao nhiêu? Nếu tính sigmoid(logit) trong float32 rồi lấy log thì ra gì, và vì sao điều đó nguy hiểm khi train?",
+    "tag": "bce-logits-stability",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "BCE đúng = softplus(150) ≈ 150 (loss lớn gần tuyến tính theo logit sai). Trong float32, sigmoid(-150) ≈ 7e-66 nhỏ hơn số nhỏ nhất biểu diễn được nên bằng đúng 0; log(0) = -inf, loss = inf, và gradient sau đó là nan. Các hàm BCE kiểu probabilities còn cắt log ở -100 nên loss sai lệch và gradient bị chặn. BCE-with-logits dùng dạng ổn định max(ℓ, 0) - ℓ·x + log(1 + e^-|ℓ|), không bao giờ lấy log của số bằng 0 hay exp của số dương lớn."
+  },
+  {
+    "q": "Vì sao decoder trả logits thay vì xác suất đã qua sigmoid? Chuyện này đổi gì ở lúc train và ở lúc sinh ảnh mới từ prior?",
+    "tag": "decoder-logits",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Lúc train, hàm loss ổn định số nhận logits trực tiếp (không mất độ chính xác khi sigmoid bão hòa); nếu decoder đã sigmoid thì không còn cách tính BCE ổn định. Lúc sinh ảnh, ta chỉ cần thêm sigmoid một lần để đổi logits thành xác suất pixel (rồi lấy trung bình hoặc lấy mẫu Bernoulli). Tách hai việc: mô hình biểu diễn log-odds, còn \"đổi sang xác suất\" là bước hậu xử lý."
+  },
+  {
+    "q": "Tăng β lên 4 hoặc giảm xuống 0,1: encoder và ảnh tái tạo/ảnh sinh ra thay đổi thế nào? Với β = 0 thì VAE trở thành mô hình gì?",
+    "tag": "beta-tradeoff",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "β lớn ép q(z|x) về prior mạnh hơn: latent gọn, gần Gaussian chuẩn, ảnh sinh từ prior hợp lý hơn và các chiều có thể \"tách bạch\" hơn (β-VAE), nhưng tái tạo mờ và có nguy cơ posterior collapse. β nhỏ ưu tiên tái tạo: ảnh tái tạo nét nhưng q(z|x) rời xa prior nên lấy z từ prior ra ảnh xấu (lỗ hổng trong không gian latent). β = 0 chỉ còn tái tạo: mất ràng buộc ngẫu nhiên, σ co về 0, thực chất là autoencoder thường, không còn là mô hình sinh."
+  },
+  {
+    "q": "Vì sao loss lấy trung bình theo batch chứ không cộng theo batch? Nếu cộng thì điều gì đổi ở learning rate hiệu dụng khi bạn đổi batch size?",
+    "tag": "batch-mean",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "ELBO là kỳ vọng theo dữ liệu, ước lượng bằng trung bình trên batch. Cộng theo batch nhân gradient với B: đổi batch size thì độ lớn gradient (và bước cập nhật) đổi theo, nên phải chỉnh lại learning rate mỗi lần đổi B; trung bình giữ gradient ở cùng quy mô cho mọi B (chỉ giảm nhiễu). Điều quan trọng thêm: tái tạo và KL phải dùng CÙNG quy ước theo batch, nếu chỉ một trong hai bị cộng thì tỉ trọng giữa chúng bị lệch B lần."
+  },
+  {
+    "q": "-ELBO là một cận trên của -log p(x). Phần chênh giữa hai số là gì, và vì sao tối thiểu hóa -ELBO vừa làm decoder tốt lên vừa làm encoder xấp xỉ posterior thật tốt lên?",
+    "tag": "elbo-bound",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "log p(x) = ELBO + KL(q(z|x) ‖ p(z|x)), mà KL ≥ 0 nên ELBO ≤ log p(x): phần chênh chính là KL giữa encoder q và posterior thật p(z|x) (không tính được trực tiếp). Với tham số decoder cố định, log p(x) không đổi nên tăng ELBO là thu nhỏ khoảng cách đó, tức làm encoder xấp xỉ posterior tốt hơn; với tham số decoder, tăng ELBO nâng cận dưới của log-likelihood nên decoder cũng tốt lên. Một hàm mục tiêu phục vụ cả hai việc."
+  }
+]

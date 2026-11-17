@@ -1,0 +1,11 @@
+{
+  "id": "lora",
+  "title": "LoRA: Low-Rank Adaptation of Large Language Models",
+  "authors": "Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, Chen",
+  "year": 2021,
+  "url": "https://arxiv.org/abs/2106.09685",
+  "arxiv": "2106.09685",
+  "closes": "nlp",
+  "goal": "Gắn adapter hạng thấp vào các lớp attention của GPT thu nhỏ rồi fine-tune sang một tác vụ mới, so với fine-tune toàn bộ tham số: xem LoRA chỉ train vài phần trăm tham số mà loss vẫn gần bằng.",
+  "status": "ready"
+}

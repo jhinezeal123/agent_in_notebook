@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab, mạng plain 30 lớp có loss TRAIN cao hơn mạng plain 4 lớp ở cùng số bước, dù mạng sâu có nhiều tham số hơn và về nguyên tắc biểu diễn được mọi hàm mà mạng nông biểu diễn (các lớp thừa chỉ cần làm đồng nhất). Đó có phải overfitting không? Cần đo gì để phân biệt degradation với overfitting?",
+    "tag": "degradation-not-overfitting",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Không phải overfitting: overfitting là lỗi train thấp mà lỗi test cao. Degradation là lỗi (hay loss) TRAIN của mạng sâu hơn cao hơn của mạng nông: bộ tối ưu không tìm được lời giải mà mạng nông đã có (ví dụ nhờ các lớp đồng nhất). Phải đo lỗi train riêng, không chỉ lỗi test: lỗi test cao hơn thì chưa biết do mô hình không khớp được dữ liệu hay khớp quá mức. Đó là lý do máy chấm báo train_err_res và train_err_plain."
+  },
+  {
+    "q": "Dự đoán trước khi train: ở độ sâu 20 (n = 3), mạng plain có lỗi train cao hơn ResNet rõ rệt không? Vì sao paper thấy degradation rõ ở 56 lớp nhưng ở 20 lớp plain và ResNet gần nhau, và Batch Norm đóng vai gì ở đây?",
+    "tag": "degradation-depth-dependence",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Chưa chắc thấy, có thể rất yếu: ở 20 lớp mạng plain có Batch Norm vẫn train được tốt, chênh lệch nhỏ (Hình 6 của paper: plain-20 và ResNet-20 gần nhau, plain-56 lỗi train cao hơn rõ). Degradation tăng theo độ sâu vì tối ưu hóa khó dần khi chồng nhiều lớp phi tuyến không có đường tắt. Batch Norm giữ tín hiệu và gradient không biến mất hay nổ khi đi qua nhiều lớp, nên chỉ riêng việc vanishing gradient không giải thích được hiện tượng: paper kiểm tra thấy tín hiệu forward có phương sai khác 0 mà vẫn có degradation."
+  },
+  {
+    "q": "Vì sao hai mạng phải train bằng cùng optimizer, learning rate, số epoch, dữ liệu và seed? Nếu bạn cho mạng plain learning rate 0,01 còn mạng residual 0,1 rồi thấy lỗi train của plain cao hơn, bạn kết luận gì và kết luận đó sai ở đâu?",
+    "tag": "fair-training-protocol",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Phép so sánh chỉ cô lập được ảnh hưởng của đường tắt khi mọi thứ khác bằng nhau. Nếu learning rate khác thì sự chênh lỗi train có thể do learning rate (plain với 0,01 học chậm hơn trong cùng số epoch), chứ không do thiếu đường tắt: hai biến thay đổi cùng lúc nên không quy cho biến nào được. Cũng vậy với số epoch, augmentation, seed khởi tạo. Cách chắc hơn: nhiều seed và xem chênh lệch có lớn hơn dao động giữa các lần chạy không."
+  },
+  {
+    "q": "Với 10 000 ảnh, 30 epoch, mạng ResNet-20 thường gần như không còn lỗi train (đoán đúng gần hết ảnh train) nhưng lỗi test vẫn cao hơn nhiều. Vì sao điều đó làm khó việc nhìn thấy degradation trong thí nghiệm này, và bạn đổi thiết lập thế nào để thấy rõ hơn?",
+    "tag": "train-vs-test-error",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Degradation là hiện tượng của lỗi train: cần mạng không khớp nổi dữ liệu mà lẽ ra khớp được. Với tập nhỏ và nhiều epoch, cả mạng plain-20 lẫn ResNet-20 đều đủ khả năng và thời gian để ghi nhớ gần hết 10 000 ảnh (lỗi train gần 0, phần còn lại là overfitting), nên khoảng cách giữa hai mạng bị che mất. Muốn thấy rõ hơn: tăng độ sâu (n = 9 trở lên), dùng nhiều dữ liệu hơn hoặc augmentation mạnh để mạng khó ghi nhớ, và nhìn lỗi train sau cùng một số epoch hoặc trong lúc train (đường cong theo epoch) chứ không chỉ lúc cuối."
+  },
+  {
+    "q": "Giả sử số của bạn cho thấy plain-20 có lỗi train bằng hoặc thấp hơn ResNet-20. Bạn có kết luận được paper sai không? Cần thay đổi hoặc lặp lại gì trước khi nói điều đó, và bản thu nhỏ của thí nghiệm khác bản gốc ở những điểm nào?",
+    "tag": "scaled-down-claims",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Không: bản thu nhỏ khác ở độ sâu 20 thay vì 56 trở lên (nơi degradation rõ), chỉ 10 000 ảnh và 30 epoch thay vì 45 000 ảnh và 164 epoch, không có tăng cường dữ liệu đầy đủ, option B (projection) thay vì option A, và chỉ một seed. Một con số duy nhất khác chiều dự đoán nói về bản thu nhỏ của mình chứ chưa kiểm được tuyên bố của paper. Trước khi kết luận cần thử n lớn hơn, nhiều seed, nhìn đường cong lỗi train theo epoch, và xem chênh lệch có vượt dao động giữa các seed không."
+  },
+  {
+    "q": "Máy chấm đo accuracy và lỗi train ở chế độ eval, không phải train. Điều gì khác đi với Batch Norm giữa hai chế độ, và nếu bạn quên gọi eval khi tự đo thì con số của bạn sai theo hướng nào?",
+    "tag": "bn-eval-mode",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "Ở chế độ train BN chuẩn hóa bằng trung bình và phương sai của batch hiện tại (và cập nhật running stats); ở eval nó dùng running stats đã tích lũy khi train. Đo ở chế độ train thì kết quả phụ thuộc vào cách chia batch (cùng một ảnh cho logits khác nhau trong các batch khác nhau) và cập nhật running stats ngoài ý muốn; thường số đo nhiễu hơn và hơi khác (thường tệ hơn một chút với batch nhỏ). Đo ở eval cho con số ổn định, tái lập được, và là cách mạng được dùng khi triển khai."
+  }
+]

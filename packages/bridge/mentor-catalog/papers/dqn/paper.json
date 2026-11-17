@@ -1,0 +1,10 @@
+{
+  "id": "dqn",
+  "title": "Human-level control through deep reinforcement learning",
+  "authors": "Mnih, Kavukcuoglu, Silver, Rusu, Veness, Bellemare, Graves, Riedmiller, Fidjeland, Ostrovski, Petersen, Beattie, Sadik, Antonoglou, King, Kumaran, Wierstra, Legg, Hassabis",
+  "year": 2015,
+  "url": "https://www.nature.com/articles/nature14236",
+  "closes": "rl",
+  "goal": "Ráp một agent DQN (mạng Q, ε-greedy, replay buffer, mạng target, loss TD) từ các bài bạn đã làm rồi train nó chơi CartPole thuần NumPy trong vài chục giây trên CPU: bản thu nhỏ của thí nghiệm Atari (bản Nature 2015, có mạng target; bản arXiv 1312.5602 là bản đầu chưa có mạng target).",
+  "status": "ready"
+}

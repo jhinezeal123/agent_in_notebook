@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Nhìn hai hình trong lab: với A > 0, từ vạch 1 + eps trở sang phải, giá trị được chọn là đường nằm ngang. Điều đó nghĩa gì với gradient theo r, và nó ngăn policy làm gì? Còn với A > 0 mà r nhỏ hơn 1 - eps thì sao: gradient còn chảy không, vì sao như vậy là hợp lý?",
+    "tag": "clip-positive-advantage",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "A > 0, r > 1 + eps: min chọn số hạng bị cắt (clip(r) * A = (1 + eps) * A là hằng số theo r), gradient = 0: hành động tốt này đã được tăng xác suất đủ nhiều so với policy cũ, không thưởng thêm, nên policy không bị đẩy tiếp xa khỏi policy cũ. A > 0 mà r < 1 - eps: min chọn r * A (nhỏ hơn), gradient vẫn chảy và kéo r lên: policy đã lỡ giảm xác suất của hành động tốt, ta muốn sửa sai chứ không chặn."
+  },
+  {
+    "q": "Với A < 0 thì hình KHÔNG phải ảnh gương của A > 0. Chỉ ra: ở đâu gradient bằng 0, ở đâu vẫn chảy, và vì sao PPO cố ý thiết kế để r vượt xa 1 + eps với A < 0 vẫn không bị chặn (hậu quả nếu bị chặn?).",
+    "tag": "clip-negative-advantage",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "A < 0: r < 1 - eps thì min chọn số hạng bị cắt, gradient = 0 (đã giảm xác suất hành động xấu đủ nhiều, ngừng). r > 1 + eps thì min chọn r * A (âm hơn), gradient vẫn chảy và kéo r xuống: policy đã lỡ tăng xác suất của hành động xấu, loss vẫn phải sửa. Nếu bị chặn ở đó thì policy có thể tăng xác suất một hành động xấu rất nhiều mà loss không phản ứng: gradient 0 nghĩa là không có lực kéo về. Đây là bi quan (pessimistic bound): chỉ bỏ qua tiến bộ, không bao giờ bỏ qua tổn thất."
+  },
+  {
+    "q": "Vì sao tính tỉ số bằng exp(new_logp - old_logp) chứ không bằng exp(new_logp) / exp(old_logp)? Cho ví dụ con số, và nói rõ ở đâu về mặt số học bản thứ hai thất bại.",
+    "tag": "log-ratio-stability",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Hai biểu thức bằng nhau về toán, nhưng bản thứ hai tính từng xác suất riêng: log-xác suất -120 cho xác suất cỡ 1e-52, nhỏ hơn mức float32 biểu diễn (khoảng 1e-45) nên làm tròn thành 0, rồi 0/0 = nan (hoặc inf khi mẫu số 0). Bản đầu trừ hai log trước (hiệu 1 chẳng hạn), rồi lấy exp của một số cỡ đơn vị, luôn tốt. Quy tắc chung: giữ ở không gian log càng lâu càng tốt, chỉ đi qua exp ở cuối."
+  },
+  {
+    "q": "Vì sao advantage và old_logp phải coi là hằng số (detach)? Nếu advantage vẫn nhận gradient thì loss này tối ưu thêm điều gì lạ, và vì sao không muốn?",
+    "tag": "constants-in-surrogate",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Loss thay thế L(theta) chỉ nên phụ thuộc theta qua policy mới (new_logp): advantage và old_logp được tính từ dữ liệu/policy cũ, là hằng số khi tối ưu theta. Nếu advantage nhận gradient (ví dụ nó tính từ critic V có chung tham số), loss sẽ có thêm đường gradient làm critic thay đổi để làm đẹp loss của policy (ví dụ giảm A ở những chỗ ratio lớn), không phải để dự đoán return đúng. old_logp tương tự: gradient qua policy cũ là vô nghĩa (policy đã dùng để thu dữ liệu), và nếu tham số chung thì phá hỏng tính chất 'neo' của PPO."
+  },
+  {
+    "q": "Trong PPO, ngay lúc bắt đầu epoch đầu tiên, tỉ số bằng bao nhiêu và gradient của loss clip bằng gì? Sau nhiều epoch trên cùng một batch, vì sao clip dần chặn nhiều mẫu hơn, và fraction mẫu bị cắt nói với bạn điều gì khi nó quá lớn?",
+    "tag": "ppo-clip-fraction",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Epoch đầu, theta = theta_old nên r = 1 cho mọi mẫu, nằm trong đoạn cắt: loss clip có gradient bằng chính policy gradient thường (-A * grad log pi / B). Sau mỗi bước cập nhật r của nhiều mẫu rời khỏi 1; những mẫu 'đã được thưởng đủ' (A > 0 và r > 1 + eps, hoặc A < 0 và r < 1 - eps) ngừng đóng góp gradient, nên fraction mẫu bị cắt tăng dần. Fraction rất lớn nghĩa là policy đã đi xa so với dữ liệu cũ: learning rate hoặc số epoch quá lớn, và phần lớn dữ liệu không còn học được gì thêm."
+  },
+  {
+    "q": "Chuẩn hóa advantage (trừ trung bình, chia std) thường được làm ở quanh loss này. Vì sao hàm này KHÔNG tự chuẩn hóa mà để nơi gọi làm? Nêu một lỗi nếu hàm tự chuẩn hóa trên mỗi lần gọi khi nơi gọi chỉ đưa vào một minibatch nhỏ hoặc một mẫu.",
+    "tag": "advantage-normalization-placement",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Chuẩn hóa là một quyết định của vòng huấn luyện (trên cả batch hay từng minibatch, có làm hay không, eps bao nhiêu), không thuộc định nghĩa của loss; để trong hàm thì không kiểm soát được và test kiểu 'ratio = 1 thì loss = -mean(A)' không còn đúng. Hàm tự chuẩn hóa trên minibatch rất nhỏ cho thống kê nhiễu (với B = 1: std không xác định, ra nan; với hai mẫu: A chỉ còn +1 và -1) và làm mất tín hiệu về độ lớn tương đối giữa các minibatch."
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "id": "q-learning-update",
+  "title": "Q-learning bảng: bước cập nhật và vòng lặp gridworld",
+  "star": "qlearn",
+  "skills": ["formula", "blank"],
+  "difficulty": 1500,
+  "minutes": 25,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["q_update", "q_learning"],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

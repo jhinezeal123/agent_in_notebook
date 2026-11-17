@@ -1,0 +1,59 @@
+{
+  "id": "vit--experiment",
+  "title": "Thí nghiệm: ViT nhỏ trên MNIST với hai patch size (4 và 7)",
+  "star": "vit--experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["model_p_small", "model_p_large"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "vit",
+  "role": "experiment",
+  "cites": "§3.1 (Eq. 1), §4.1, §4.5",
+  "uses": ["vit--classifier"],
+  "judge": "kernel",
+  "judgeSeconds": 300,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) Patch 4 (49 token) hay patch 7 (16 token) cho accuracy test cao hơn, và chênh bao nhiêu điểm phần trăm? Cả hai cỡ bao nhiêu (gần 90%, hay trên 95%)? (2) Thời gian forward mỗi ảnh của mô hình patch 4 so với patch 7 gấp khoảng bao nhiêu lần: gần 3 (tỷ lệ số token) hay gần 9 (tỷ lệ bình phương)? Ước lượng bằng chi phí tuyến tính và bậc hai theo số token của một khối. (3) Nếu cho cả hai cùng ngân sách thời gian thay vì cùng số epoch, kết quả có đổi chiều không? (4) Đổi patch size sang 14 (4 token) thì accuracy tụt nhiều hay ít, vì sao?",
+  "metrics": [
+    {
+      "name": "acc_p_small",
+      "paper": "— (ViT-B/16 hơn ViT-B/32 vài điểm phần trăm trên ImageNet, chi phí cỡ gấp bốn: bài toán khác, không so trực tiếp)",
+      "unit": "accuracy của model_p_small (patch nhỏ, nhiều token) trên 2000 ảnh đầu tập test MNIST",
+      "target": { "op": ">=", "value": 0.9 }
+    },
+    {
+      "name": "acc_p_large",
+      "paper": "—",
+      "unit": "accuracy của model_p_large (patch lớn, ít token) trên 2000 ảnh đầu tập test MNIST",
+      "target": { "op": ">=", "value": 0.9 }
+    },
+    {
+      "name": "tokens_p_small",
+      "paper": "N = HW/P² (§3.1)",
+      "unit": "số token patch của model_p_small (không tính cls); patch 4 trên ảnh 28×28 là 49"
+    },
+    {
+      "name": "tokens_p_large",
+      "paper": "N = HW/P² (§3.1)",
+      "unit": "số token patch của model_p_large (không tính cls); patch 7 trên ảnh 28×28 là 16"
+    },
+    {
+      "name": "ms_p_small",
+      "paper": "—",
+      "unit": "mili giây forward mỗi ảnh của model_p_small (nhiễu, chỉ báo)"
+    },
+    {
+      "name": "ms_p_large",
+      "paper": "—",
+      "unit": "mili giây forward mỗi ảnh của model_p_large (nhiễu, chỉ báo)"
+    },
+    {
+      "name": "attn_cost_ratio",
+      "paper": "chi phí attention tăng theo N², tức tỷ lệ nghịch với P⁴ (§4.1)",
+      "unit": "((N_small + 1) / (N_large + 1))²: tỷ lệ số phần tử ma trận attention của hai mô hình"
+    }
+  ]
+}

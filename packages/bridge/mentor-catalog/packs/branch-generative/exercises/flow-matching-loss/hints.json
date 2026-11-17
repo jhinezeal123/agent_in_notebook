@@ -1,0 +1,15 @@
+[
+  {"level": 0, "test": "test_loss_value", "text": "Hàm của bạn chạy được cho cả x1 shape (5, 4) lẫn (3, 2, 3, 3) không? Hệ số t đã đổi shape của bạn có bao nhiêu trục so với x1? Và loss là trung bình trên bao nhiêu phần tử?"},
+  {"level": 0, "test": "test_target_is_velocity", "text": "Điểm x_t chạy dọc đường thẳng từ x0 (t = 0) đến x1 (t = 1). Đạo hàm của x_t theo t bằng gì? Đích hồi quy của bạn có đúng là đại lượng đó, đúng dấu không?"},
+  {"level": 0, "test": "test_interpolation_direction", "text": "Khi t = 0 điểm x_t phải là nhiễu hay dữ liệu, và khi t = 1 thì sao? Công thức bạn viết cho t = 0 và t = 1 cho ra hai đầu mút nào?"},
+  {"level": 0, "test": "test_t_passed_to_model", "text": "Model nhận t từ hàm của bạn có shape gì? Bạn đã đổi shape của t để nhân với ảnh: bạn đưa cho model bản gốc hay bản đã đổi?"},
+  {"level": 0, "test": "test_default_t", "text": "Thời gian trên đường đi chạy trong khoảng nào, và mỗi mẫu cần một số hay cả batch chung một số? Hàm sinh số ngẫu nhiên của bạn cho phân phối gì: đều, Gauss hay số nguyên?"},
+  {"level": 0, "test": "test_default_noise", "text": "Với x1 = 0 và mô hình luôn đoán 0 thì loss là trung bình x0². Nếu x0 ~ N(0, 1) thì bằng bao nhiêu, và nhiễu bạn tự lấy có phải N(0, 1) không?"},
+  {"level": 0, "test": "test_gradient", "text": "Hãy in loss.requires_grad. Trong hàm của bạn có chỗ nào gọi detach, đổi sang số Python hay bọc trong no_grad làm đường gradient về tham số của model bị đứt không?"},
+  {"level": 1, "text": "Bốn việc: (1) nếu t hoặc x0 là None thì tự lấy (t: một số đều trong [0, 1) cho mỗi mẫu; x0: Gauss chuẩn cùng shape với x1); (2) đưa t về shape có số trục bằng số trục của x1, các trục sau batch bằng 1, để nội suy từng mẫu một; (3) tính x_t là tổ hợp (1 − t) của x0 và t của x1; (4) cho model đoán vận tốc từ x_t và t gốc, rồi lấy MSE trung bình với đích x1 trừ x0."},
+  {"level": 1, "when": "chưa biết đổi shape cho mọi số chiều", "text": "Số trục 1 cần thêm bằng số chiều của x1 trừ một. Dùng phép đổi shape với trục đầu đặt -1 và một dãy các số 1 có độ dài tính từ số chiều của x1, thay vì viết cứng một dãy cho ảnh 4 chiều."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "B = số mẫu; n_trục = số chiều của x1\nnếu t là None: t = số ngẫu nhiên đều [0, 1) shape (B,)\nnếu x0 là None: x0 = Gauss chuẩn cùng shape với x1\nt_b = t đổi shape thành (B, 1, ..., 1) với n_trục - 1 số 1\nx_t = tổ hợp: (1 trừ t_b) nhân x0, cộng t_b nhân x1\nđích = x1 trừ x0\ntrả MSE trung bình giữa model(x_t, t) và đích"},
+  {"level": 2, "when": "kẹt ở lấy t", "text": "Hàm sinh số đều trên [0, 1) của PyTorch (tên là viết tắt của random) nhận shape; hãy truyền shape (B,), và truyền kiểu số của x1 để t cùng kiểu với ảnh."},
+  {"level": 3, "when": "kẹt ở đổi shape của t", "text": "```python\ntb = t.view(-1, *([1] * (x1.dim() - 1)))\nx_t = (1 - tb) * x0 + tb * x1\n```"},
+  {"level": 3, "when": "kẹt ở dòng loss", "text": "```python\ntarget = x1 - x0\nreturn F.mse_loss(model(x_t, t), target)\n```"}
+]

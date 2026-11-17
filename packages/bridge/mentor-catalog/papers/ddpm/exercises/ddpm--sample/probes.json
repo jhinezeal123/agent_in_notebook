@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Alg. 2 bắt đầu từ x_T ~ N(0, I). Với T = 200 nhưng β vẫn tăng từ 1e-4 đến 0,02 như paper (T = 1000), ᾱ_T bằng cỡ bao nhiêu? Quá trình thuận thật kết thúc ở một x_T trông thế nào so với N(0, I), và mô hình sẽ gặp điều gì ở bước đầu của vòng lấy mẫu?",
+    "tag": "x-t-prior-gap",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "ᾱ_T ≈ exp(−Σβ) ≈ exp(−2) ≈ 0,13 (Σβ ≈ 200 · 0,01), không phải ≈ 0: x_T thật còn sqrt(0,13) ≈ 0,36 biên độ của ảnh gốc (trung bình của nó lệch khỏi 0, ví dụ nền −1 thì thành khoảng −0,3). Vòng lấy mẫu lại bắt đầu từ N(0, I) có trung bình 0, một đầu vào mà mô hình chưa từng gặp ở t = T−1 khi train, nên ảnh sinh ra sai ngay từ đầu (nền xám, sáng hơn). Khi đổi T phải co giãn β (T = 200: β cỡ 5e-4 đến 0,1) để ᾱ_T vẫn ≈ 0."
+  },
+  {
+    "q": "Với T = 200, sinh một ảnh bằng Alg. 2 cần gọi U-Net bao nhiêu lần, và train trên một ảnh cần gọi bao nhiêu lần? Các lần gọi lúc sinh có thể chạy song song với nhau không? Điều đó nói gì về chi phí khi T = 1000?",
+    "tag": "sampling-cost",
+    "kind": "compare",
+    "stage": "lab",
+    "answer": "Sinh: đúng T = 200 lần gọi (mỗi bước một lần), nối tiếp nhau vì x_{t-1} cần x_t nên không song song hóa theo t được (chỉ song song được theo batch ảnh). Train: một lần gọi cho mỗi ảnh vì q(x_t | x_0) cho nhảy thẳng tới bước t bất kỳ. Với T = 1000 sinh chậm gấp 5 lần; đó là lý do các sampler về sau (DDIM...) cố giảm số bước."
+  },
+  {
+    "q": "Vì sao phải bọc vòng lấy mẫu trong chế độ không gradient? Nếu quên, chuyện gì xảy ra với bộ nhớ khi T lớn, và ảnh trả về có gì khác?",
+    "tag": "no-grad-sampling",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Mỗi lần gọi mô hình, PyTorch giữ lại toàn bộ activation để có thể backward; qua T bước nối tiếp, đồ thị chuỗi T lần forward của U-Net nằm trong bộ nhớ cùng lúc (bộ nhớ nhân lên cỡ T lần), nên dễ hết bộ nhớ GPU với T = 200 hoặc 1000. Ảnh trả về có requires_grad = True dù không ai cần đạo hàm. Sinh ảnh là suy luận thuần, không cần gradient."
+  },
+  {
+    "q": "Ở mỗi bước t > 0 bạn lấy một nhiễu z mới. Nếu bỏ z (luôn dùng 0), hoặc dùng cùng một z cho mọi bước, ảnh sinh ra khác gì? Vì sao z cần thiết dù mô hình đã đoán nhiễu của ảnh?",
+    "tag": "fresh-noise-per-step",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Bước reverse là lấy mẫu từ một phân phối Gauss (trung bình do mô hình, phương sai σ_t²), không phải trả về trung bình: z là phần ngẫu nhiên của chuỗi Markov. Bỏ z thì chuỗi gần như tất định theo x_T, các ảnh có xu hướng mờ, nghiêng về ảnh trung bình và kém đa dạng (không cam kết vào một chữ số cụ thể). Dùng cùng một z cho mọi bước thì nhiễu tương quan giữa các bước (không còn là chuỗi Markov đúng) và tạo vệt có cấu trúc. Mỗi bước cần một z độc lập."
+  },
+  {
+    "q": "Nhiều bản cài đặt cắt (clamp) giá trị về [-1, 1]; Alg. 2 của paper thì không. Hàm của bạn nên cắt ở đâu và khi nào, và việc cắt giá trị ở từng bước khác gì cắt ở ảnh cuối?",
+    "tag": "clamp-in-sampling",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Alg. 2 không có clamp: x_0 là mẫu của mô hình và có thể hơi vượt [-1, 1]. Cắt ở ảnh cuối chỉ là chuyện hiển thị (đổi về [0, 1] để vẽ), không đổi thuật toán. Cắt ở từng bước thay đổi phân phối của x_t mà mô hình sẽ nhận ở bước sau (sai lệch so với lúc train, nó là một xấp xỉ thêm vào), và còn che mất dấu hiệu hỏng (mẫu phát nổ) khi bạn kiểm tra. Vì vậy hàm lấy mẫu trả giá trị thô, hiển thị mới cắt."
+  },
+  {
+    "q": "Trong lúc sinh ảnh, mô hình ở chế độ eval. Với U-Net có dropout hoặc BatchNorm thì điều gì khác đi giữa train và eval, và tại sao hàm của bạn còn phải trả mô hình về chế độ cũ thay vì để nguyên eval?",
+    "tag": "eval-mode",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Dropout chỉ bỏ ngẫu nhiên ở train (eval tắt, kết quả tất định); BatchNorm dùng thống kê của batch ở train nhưng thống kê chạy (running) ở eval, nên mẫu sinh ở chế độ train sẽ nhiễu hoặc bị thống kê của batch ảnh nhiễu làm lệch. Hàm phải trả về chế độ cũ vì người gọi có thể đang giữa vòng train (lấy mẫu giữa chừng để xem): nếu hàm để mô hình ở eval thì các bước train sau đó âm thầm chạy ở eval, một lỗi khó thấy."
+  }
+]

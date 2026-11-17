@@ -1,0 +1,16 @@
+# Cell train. Chạy xong cell này, hai biến toàn cục `model_res` và `model_plain` phải giữ hai ResNet-20 (có và không có shortcut) đã train.
+torch.manual_seed(0)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# 1. Dữ liệu: load_cifar10(10000), đưa lên `device`.
+...
+
+# 2. Một hàm train(model) dùng CHUNG cho cả hai mạng: SGD + lịch learning rate, 30 epoch, mỗi epoch xáo thứ tự rồi duyệt hết bằng batch 128.
+...
+
+# 3. Hai mô hình: ResNetCifar(3, shortcut=True) và ResNetCifar(3, shortcut=False) trên `device`; train từng cái bằng hàm ở bước 2.
+model_res = ...
+model_plain = ...
+
+# 4. Xem thử: evaluate của từng mô hình trên tập train (2000 ảnh đầu) và tập test (2000 ảnh đầu), rồi so hai mạng.
+...

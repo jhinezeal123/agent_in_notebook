@@ -1,0 +1,17 @@
+{
+  "id": "ppo--rollout",
+  "title": "PPO: thu thập một rollout và tính advantage (Algorithm 1)",
+  "star": "ppo--rollout",
+  "skills": ["blank", "train"],
+  "difficulty": 1950,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["collect_rollout"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "ppo",
+  "role": "component",
+  "cites": "§5 (Algorithm 1, Eq. 10–12)",
+  "uses": ["gae"]
+}

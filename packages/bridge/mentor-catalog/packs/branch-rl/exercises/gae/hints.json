@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_example",
+    "text": "Với ví dụ trong đề, bước nào bạn tính được A ngay mà không cần bước nào khác, và bước đó cần giá trị nào của 'bước kế tiếp' khi nó đứng cuối rollout? Rồi bước đứng trước nó dùng lại thông tin gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_done_blocks_bootstrap_and_trace",
+    "text": "Khi done = 1 ở bước t, hai số hạng nào trong công thức của bước t đến từ 'bước sau' (một trong delta, một trong phần cộng dồn)? Hệ số (1 - done) của bạn đã đứng ở cả hai chỗ chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_last_value_bootstraps_rollout_end",
+    "text": "Khi bạn bắt đầu vòng lặp ngược ở bước cuối, 'giá trị của bước kế tiếp' bạn đang mang là bao nhiêu? Số đó đến từ đâu, và khi nào nó phải bị bỏ qua?"
+  },
+  {
+    "level": 0,
+    "test": "test_lambda_zero_is_td0",
+    "text": "Khi lambda = 0, phần cộng dồn từ bước sau nhân với bao nhiêu? Advantage còn lại là đại lượng nào quen thuộc?"
+  },
+  {
+    "level": 0,
+    "test": "test_lambda_one_is_monte_carlo",
+    "text": "Khi lambda = 1, các V ở giữa chuỗi triệt tiêu lẫn nhau (telescoping): A_t + V_t còn lại gì? Tính tay returns của một rollout ngắn và so với kết quả của bạn."
+  },
+  {
+    "level": 0,
+    "test": "test_no_gradient_dtype_and_inputs_untouched",
+    "text": "Sau khi hàm chạy, advantages có requires_grad không? Tensor values bạn nhận vào có thể đang gắn với mạng nào, và bạn đã tách nó ra chưa?"
+  },
+  {
+    "level": 1,
+    "text": "Duyệt ngược từ bước cuối về bước đầu, mang theo hai con số: giá trị V của bước đứng sau (khởi đầu là last_value) và advantage của bước đứng sau (khởi đầu là 0). Ở mỗi bước: sai số TD bằng thưởng cộng gamma nhân V-sau nhân (một trừ done), trừ V hiện tại; advantage bằng sai số đó cộng gamma nhân lambda nhân (một trừ done) nhân advantage-sau. Ghi advantage vào mảng kết quả, rồi cập nhật hai con số mang theo cho bước kế tiếp (V-sau trở thành V hiện tại). Cuối cùng returns là advantages cộng values. Dùng bản đã detach của values."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "values = values đã detach; advantages = mảng 0 cùng shape với rewards\nnext_value = last_value; next_adv = 0\nvới t từ T-1 xuống 0:\n    notdone = 1 - dones[t]\n    delta = rewards[t] + gamma * next_value * notdone - values[t]\n    next_adv = delta + gamma * lam * notdone * next_adv\n    advantages[t] = next_adv\n    next_value = values[t]\nreturns = advantages cộng values"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở thứ tự cập nhật next_value",
+    "text": "next_value của bước t là V của bước t+1. Bạn chỉ được đặt next_value = values[t] SAU khi đã dùng nó để tính delta của bước t (nó dành cho bước t-1 ở vòng lặp kế tiếp). Đặt trước thì delta của bước t dùng V của chính nó."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở thân vòng lặp",
+    "text": "```python\nnotdone = 1.0 - dones[t]\ndelta = rewards[t] + gamma * next_value * notdone - values[t]\nlast_adv = delta + gamma * lam * notdone * last_adv\nadvantages[t] = last_adv\nnext_value = values[t]\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khởi tạo và tách gradient",
+    "text": "```python\nvalues = values.detach()\nadvantages = torch.zeros_like(rewards)\nlast_adv = 0.0\nnext_value = last_value\n```"
+  }
+]

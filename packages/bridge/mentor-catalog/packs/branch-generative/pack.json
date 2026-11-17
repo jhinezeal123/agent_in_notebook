@@ -1,0 +1,6 @@
+{
+  "protocol": 1,
+  "id": "branch-generative",
+  "name": "Nhánh mô hình sinh",
+  "description": "Bài cho các sao VAE/ELBO, GAN, DDPM, Flow matching (đợt 4)."
+}

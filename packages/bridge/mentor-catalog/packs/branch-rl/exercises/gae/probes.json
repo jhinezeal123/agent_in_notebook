@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Nhìn hình trọng số (gamma * lambda)^k: lambda = 0 và lambda = 1 mỗi cái 'nhìn thấy' bao nhiêu sai số TD của tương lai? Vì sao tầm nhìn hiệu dụng là cỡ 1/(1 - gamma * lambda), và với gamma = 0.99, lambda = 0.95 nó là bao nhiêu bước (làm tròn)?",
+    "tag": "lambda-horizon",
+    "stage": "lab",
+    "kind": "shape",
+    "answer": "lambda = 0: chỉ delta_t (một bước, trọng số (gamma*0)^k = 0 với k >= 1). lambda = 1: gần như mọi delta về sau, trọng số gamma^k, chỉ bị cắt bởi chiết khấu và ranh giới episode. Tổng trọng số của chuỗi hình học (gamma*lambda)^k là 1/(1 - gamma*lambda), nên đó là 'độ dài hiệu dụng'. Với 0.99 * 0.95 = 0.9405: 1/(1 - 0.9405) ≈ 16.8, tức cỡ 17 bước."
+  },
+  {
+    "q": "Từ hai đường cong bias và phương sai trong lab: vì sao lambda nhỏ thì thiên lệch (bias) mà ít nhiễu, lambda lớn thì ít bias mà nhiều nhiễu? Bias đến từ đâu (nhắc tới mạng giá trị), phương sai đến từ đâu?",
+    "tag": "bias-variance-lambda",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "lambda nhỏ: advantage dựa vào ước lượng V của mạng ở bước kế tiếp (bootstrap): V sai (đặc biệt ở đầu huấn luyện) thì advantage lệch có hệ thống, đó là bias; nhưng chỉ gộp 1 thưởng thật nên ít nhiễu. lambda lớn: dựa vào thưởng thật của nhiều bước, ít phụ thuộc V nên ít bias; nhưng tổng của nhiều thưởng ngẫu nhiên (cùng sự ngẫu nhiên của policy và môi trường) có phương sai lớn. Lambda giữa (0.9-0.97) là thỏa hiệp: đủ nhìn xa để giảm bias của V mà chưa cộng quá nhiều nhiễu."
+  },
+  {
+    "q": "Tại sao khi done_t = 1 phải chặn CẢ V_(t+1) trong delta LẪN A_(t+1) trong phần cộng dồn? Nếu bạn chỉ chặn một trong hai thì thông tin nào của episode sau lọt vào advantage của episode trước?",
+    "tag": "terminal-mask-gae",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "V_(t+1) và A_(t+1) ở bước sau done thuộc một episode khác (trạng thái reset), không phải hậu quả của hành động ở bước t. Chặn V: không cộng gamma * V của trạng thái đầu episode sau vào delta_t. Chặn A: không cộng dồn các sai số TD của episode sau vào A_t. Chỉ chặn V mà quên A: các delta của ván sau vẫn lọt vào (nhân (gamma*lambda)^k); chỉ chặn A mà quên V: delta_t vẫn mang giá trị của trạng thái khởi đầu ván sau. Cả hai đều làm advantage nhiễu và sai tín hiệu, mà loss vẫn ra số bình thường."
+  },
+  {
+    "q": "Cuối rollout, episode đang dở (chưa done). Hàm của bạn bootstrap bằng last_value. Khi nào một episode bị CẮT (hết giờ, time limit) thì vẫn nên bootstrap, còn khi nào thật sự KẾT THÚC (thua, đến đích) thì không? Điều gì sai nếu mỗi lần hết giờ bạn đặt done = 1?",
+    "tag": "truncation-vs-termination",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Kết thúc thật (terminal): không còn tương lai, giá trị sau đó bằng 0, nên không bootstrap (done = 1). Bị cắt (truncation: hết số bước tối đa, rollout hết T bước): trạng thái vẫn có tương lai, chỉ là ta không quan sát được; ta thay phần đuôi bằng ước lượng V(s_next) (last_value) để không đánh giá thấp. Nếu cứ coi hết giờ là done = 1, agent học rằng 'sống lâu thì giá trị cuối bằng 0': đánh giá thấp các trạng thái gần giới hạn thời gian, hành vi bị méo (ví dụ tới gần giờ thì tưởng mọi hành động đều vô nghĩa)."
+  },
+  {
+    "q": "returns = advantages + values được dùng làm mục tiêu cho mạng giá trị. Biểu thức đó chính là return kiểu nào (hai cực lambda cho ra mục tiêu gì)? Vì sao không dùng thẳng advantages làm mục tiêu cho V?",
+    "tag": "value-target-lambda-return",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "A_t + V_t chính là lambda-return: lambda = 0 cho r_t + gamma * V_(t+1) (mục tiêu TD(0)); lambda = 1 cho return Monte-Carlo (có bootstrap ở cuối). Mạng giá trị phải dự đoán giá trị tuyệt đối của trạng thái, còn advantage là chênh lệch so với V (trung bình quanh 0, mất thông tin mức): regress V về A sẽ kéo V về 0. Cộng V lại khôi phục thang đo đúng."
+  },
+  {
+    "q": "Nhiều bản cài chuẩn hóa advantage (trừ trung bình, chia độ lệch chuẩn). Nếu bạn chuẩn hóa advantages TRƯỚC khi tính returns = advantages + values thì mục tiêu của mạng giá trị sai thế nào? Nên chuẩn hóa ở đâu?",
+    "tag": "advantage-normalize-order",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Advantage đã chuẩn hóa mất thang và mất trung bình, nên A_norm + V không còn là lambda-return: mục tiêu của V bị sai lệch (lệch về hướng và độ lớn tùy batch). Phải tính returns từ advantages gốc, rồi chỉ chuẩn hóa bản advantage đưa vào loss của policy (ví dụ ở nơi dùng, ngay trước loss, thường trên mỗi minibatch hoặc cả batch)."
+  }
+]

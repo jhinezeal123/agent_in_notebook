@@ -1,0 +1,51 @@
+[
+  {
+    "q": "Cùng một vector logits, bạn chia cho temperature 0.5 rồi softmax, và một lần khác chia cho 2. Phân phối nào nhọn hơn? Khi temperature tiến tới 0 và tiến tới vô cùng thì phân phối tiến tới đâu? Việc chia có làm đổi thứ tự xếp hạng các token không?",
+    "tag": "temperature-effect",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Temperature 0.5 (nhỏ) làm các logit xa nhau gấp đôi nên phân phối nhọn hơn; temperature 2 làm chúng gần nhau, phân phối phẳng hơn. Temperature → 0: dồn hết xác suất vào token có logit lớn nhất (greedy); → ∞: phân phối đều trên mọi token. Chia cho một số dương không đổi thứ tự xếp hạng: argmax không đổi, chỉ độ nhọn đổi."
+  },
+  {
+    "q": "Top-k với k = 1 và temperature rất nhỏ đều gần như greedy. Chúng khác nhau thế nào về cách làm, và ở ca nào hai cách cho kết quả khác nhau?",
+    "tag": "topk-vs-temperature",
+    "stage": "lab",
+    "kind": "compare",
+    "answer": "Top-k = 1 cắt cứng: chỉ token có logit lớn nhất còn lại, xác suất đúng 1, bất kể temperature. Temperature nhỏ chỉ làm phân phối rất nhọn nhưng mọi token vẫn có xác suất khác 0 (cực nhỏ), và nếu hai logit đầu bằng nhau hoặc sát nhau thì cả hai vẫn có cơ hội đáng kể. Top-k = 1 còn không phụ thuộc vào việc chia cho temperature nên không bao giờ chia cho 0."
+  },
+  {
+    "q": "Vì sao khi sinh văn bản ta bật eval và no_grad? Nếu bỏ từng cái thì hỏng gì, hỏng ở đâu: kết quả, hay bộ nhớ?",
+    "tag": "eval-no-grad",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Eval tắt dropout (và đưa BatchNorm về thống kê chạy): nếu quên, mỗi lần sinh có thêm nhiễu ngẫu nhiên, chất lượng văn bản giảm và không tái lập được với cùng seed. no_grad bỏ việc ghi đồ thị tính gradient: nếu quên, kết quả vẫn đúng nhưng bộ nhớ và thời gian tăng dần theo số token sinh (mỗi bước giữ đồ thị của cả chuỗi), có thể hết bộ nhớ. Trả lại chế độ ban đầu để người gọi (đang train) không bị đổi chế độ ngầm."
+  },
+  {
+    "q": "Sinh n token cần n lần forward, mỗi lần trên một cửa sổ tới block_size token. Chi phí tính toán cỡ bao nhiêu theo n và block_size, và KV cache bớt được phần nào?",
+    "tag": "generation-cost",
+    "stage": "defend",
+    "kind": "shape",
+    "answer": "Mỗi bước forward cả cửa sổ cỡ block_size token, mà attention tốn bậc hai theo độ dài cửa sổ, nên tổng cỡ n · block_size² (và n · block_size phần còn lại). Phần lớn là tính lại những vị trí cũ mà K, V của chúng không đổi (nhờ mask causal). KV cache lưu K, V của các token đã có và chỉ tính cho token mới: mỗi bước chỉ còn cỡ block_size thay vì block_size²."
+  },
+  {
+    "q": "Top-k cố định k token. Khi nào cách này giữ quá ít hoặc quá nhiều so với điều ta muốn? Top-p (nucleus sampling) sửa điều đó thế nào?",
+    "tag": "top-k-limits",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Phân phối rất nhọn (một token chiếm 99%): k = 50 vẫn giữ 49 token xác suất cực nhỏ, vô nghĩa nhưng vô hại phần nào. Phân phối rất phẳng (nhiều lựa chọn hợp lý ngang nhau): k nhỏ cắt bỏ nhiều lựa chọn tốt. Top-p giữ tập nhỏ nhất có tổng xác suất ≥ p, nên số token giữ lại tự co giãn theo độ nhọn của phân phối ở từng bước."
+  },
+  {
+    "q": "Greedy (luôn lấy token xác suất lớn nhất) và lấy mẫu khác nhau thế nào về chất lượng văn bản? Vì sao greedy hay bị lặp đi lặp lại một cụm?",
+    "tag": "sampling-vs-greedy",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Greedy tất định và luôn đi theo nhánh có xác suất cao nhất từng bước, nên dễ rơi vào vòng lặp: sau khi lặp, ngữ cảnh càng khiến mô hình tin việc lặp tiếp, và chuỗi có xác suất cao từng bước chưa chắc là chuỗi tốt tổng thể. Lấy mẫu cho tính đa dạng và phá vòng lặp, đánh đổi bằng nguy cơ chọn phải token kém (nên có temperature, top-k, top-p để kiểm soát)."
+  },
+  {
+    "q": "Khi chuỗi đã dài hơn block_size, ta chỉ đưa các token cuối vào mô hình. Mô hình mất gì so với việc \"nhớ\" toàn bộ chuỗi? Điều đó nói gì về cách nhìn \"ngữ cảnh dài vô hạn\" của mô hình này?",
+    "tag": "context-window",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Các token ra ngoài cửa sổ bị quên hoàn toàn: mô hình không có trí nhớ nào ngoài cửa sổ, nên tên nhân vật, chủ đề, ràng buộc ở đầu văn bản có thể biến mất và văn bản trôi đi. Ngữ cảnh hiệu dụng của mô hình đúng bằng block_size; muốn dài hơn thì phải huấn luyện với block_size lớn hơn (tốn bậc hai) hoặc dùng cơ chế khác (bộ nhớ ngoài, truy hồi, attention thưa)."
+  }
+]

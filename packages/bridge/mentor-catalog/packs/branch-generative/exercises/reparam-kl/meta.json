@@ -1,0 +1,13 @@
+{
+  "id": "reparam-kl",
+  "title": "Reparameterization và KL dạng đóng của VAE",
+  "star": "vae",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1650,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["reparameterize", "kl_gaussian"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

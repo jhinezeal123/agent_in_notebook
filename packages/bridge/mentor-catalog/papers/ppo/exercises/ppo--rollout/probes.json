@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Rollout dài T = 8 bước bị cắt giữa một episode (gậy chưa đổ). Với bước cuối, ta không biết phần thưởng còn lại của episode. Ước lượng phần đó ở đâu ra, và nếu bạn thay nó bằng 0 thì advantage của các bước cuối rollout bị lệch theo hướng nào?",
+    "tag": "last-value-bootstrap",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "Lấy giá trị V(s) mà critic ước lượng cho trạng thái hiện tại sau bước cuối (last_value) để bootstrap thay cho phần thưởng chưa chạy tới. Thay bằng 0 tức là coi như episode kết thúc ở đó: advantage của các bước cuối bị thấp đi một lượng cỡ γ·V (bị 'phạt' vì tương lai bị giả định bằng 0), nên policy bị dạy rằng các hành động cuối rollout kém hơn thực tế, mà việc rollout bị cắt chỉ là chuyện tình cờ."
+  },
+  {
+    "q": "Vì sao old_logp phải được tính ngay lúc thu thập, dưới no_grad, mà không tính lại ở bước cập nhật bằng chính policy lúc đó? Nếu bạn quên no_grad khi thu thập thì có hỏng gì không, hay chỉ tốn bộ nhớ?",
+    "tag": "old-logp-detached",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Tỉ số r = π_mới/π_cũ cần log xác suất dưới policy CŨ, tức policy đã sinh ra dữ liệu: tính lại sau khi policy đã đổi sẽ ra policy mới, tỉ số luôn bằng 1 và phần cắt vô nghĩa. Nó phải là hằng số: nếu còn dính đồ thị thì gradient chảy vào cả mẫu số, hoặc bộ nhớ giữ cả đồ thị của mọi bước rollout (lớn dần), và nếu nơi dùng không detach thì gradient sai. Tốn bộ nhớ là chắc chắn; sai gradient là có thể."
+  },
+  {
+    "q": "Khi gậy đổ, bạn gọi env.reset() và đi tiếp. Nếu quên reset (cứ gọi step tiếp trên môi trường đã kết thúc) thì dữ liệu của phần còn lại của rollout ra sao, và loss/return có báo lỗi không?",
+    "tag": "forgot-reset",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Không báo lỗi: môi trường vẫn nhận step và cho ra các trạng thái ngày càng xa vô lý (gậy nghiêng quá giới hạn, xe ra ngoài ray) và reward vẫn là 1 (hoặc cờ done luôn bật), nên phần còn lại của rollout là dữ liệu vô nghĩa, hoặc cả một chuỗi episode dài 1 bước. Policy học từ dữ liệu không đúng phân phối của môi trường, nên học tệ một cách im lặng. Đây là lỗi 'im lặng' điển hình của RL: chỉ thấy qua đường return không tăng."
+  },
+  {
+    "q": "Cờ done của bước cuối cùng của episode bị cắt ở 200 bước (truncated) khác gì cờ done khi gậy đổ thật? Bài này coi cả hai là done: sai ở đâu, và cách làm đúng là gì?",
+    "tag": "truncation-vs-termination",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Gậy đổ là kết thúc thật: tương lai bằng 0. Bị cắt vì hết giờ thì tương lai VẪN còn (nếu chơi tiếp sẽ còn thưởng), nên coi là done làm advantage của các bước cuối episode bị thấp đi (mục tiêu giá trị gần 0 trong khi thật ra còn lớn). Cách đúng: với bước bị cắt, bootstrap bằng V(s) của trạng thái cuối thay vì chặn bằng 0 (hoặc cộng γ·V(s_cuối) vào reward bước đó). Nhiều cài đặt bỏ qua vì sai lệch nhỏ khi episode đủ dài."
+  },
+  {
+    "q": "Vì sao hành động lúc thu thập được lấy mẫu từ phân phối của policy chứ không chọn argmax? Nếu bạn chọn argmax thì old_logp và việc học PPO hỏng ở đâu?",
+    "tag": "sampling-vs-greedy",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "PPO là thuật toán on-policy: cập nhật dựa trên kỳ vọng dưới chính phân phối π của policy, và ước lượng gradient chỉ đúng khi hành động được lấy mẫu từ π (khám phá cũng đến từ đây). Chọn argmax thì dữ liệu không đại diện cho π, không có khám phá (mọi trạng thái lặp lại), và log π(a|s) của hành động argmax không phản ánh xác suất thật của việc chọn nó; tỉ số r và advantage sẽ đánh giá hành động sai phân phối. Policy cũng sớm trở nên tất định, mất entropy."
+  }
+]

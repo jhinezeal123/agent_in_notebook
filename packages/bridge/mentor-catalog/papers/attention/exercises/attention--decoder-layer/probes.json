@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Khi train, decoder nhận cả chuỗi đích một lúc, vậy mask causal để làm gì? Nếu bỏ mask thì lúc train loss thế nào, và lúc greedy decode thật (sinh từng token) chuyện gì xảy ra?",
+    "tag": "causal-mask-purpose",
+    "kind": "break",
+    "stage": "lab",
+    "answer": "Mask causal làm vị trí t chỉ thấy các token trước nó, giống lúc inference khi các token sau chưa tồn tại. Bỏ mask thì lúc train vị trí t nhìn thấy chính token đáp án t+1 (qua các vị trí sau): mô hình học chép, loss xuống rất thấp, nhưng lúc greedy decode không có token sau để chép nên sinh ra rác."
+  },
+  {
+    "q": "Trong cross-attention, q, k, v lấy từ đâu? Số vị trí của decoder (T) và của encoder (S) khác nhau: chúng nằm ở trục nào của ma trận điểm attention, và đầu ra có độ dài T hay S?",
+    "tag": "cross-attention-roles",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "q lấy từ decoder (đầu ra sublayer trước), k và v đều lấy từ memory = đầu ra encoder. Điểm attention có shape (B, h, T, S): hàng là vị trí decoder, cột là vị trí encoder, softmax theo S. Đầu ra là tổ hợp của v nên có độ dài T: mỗi vị trí decoder nhận một vector tổng hợp từ câu nguồn."
+  },
+  {
+    "q": "Vì sao có hai mask khác nhau (tgt_mask và memory_mask) mà không dùng chung một? Mỗi cái che cái gì, và mỗi cái dùng ở sublayer nào?",
+    "tag": "two-masks",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "tgt_mask (causal, có thể kèm PAD của chuỗi đích) che tương lai của chuỗi đích, dùng ở self-attention của decoder, shape (T, T) hoặc (B, 1, T, T). memory_mask che PAD của câu nguồn, dùng ở cross-attention, shape (B, 1, 1, S). Hai ma trận khác shape và khác ý nghĩa: một cái là ràng buộc nhân quả, một cái chỉ để bỏ qua token đệm."
+  },
+  {
+    "q": "Vì sao decoder cần cross-attention trong khi encoder đã gom thông tin của câu nguồn? Nếu bỏ cross-attention, mô hình còn làm được bài đảo chuỗi không?",
+    "tag": "why-cross-attention",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Cross-attention là đường duy nhất để thông tin câu nguồn đi vào decoder. Bỏ nó thì decoder chỉ là một mô hình ngôn ngữ trên chuỗi đích, không biết đầu vào là gì, nên không thể đảo đúng chuỗi cụ thể (chỉ đoán mò theo thống kê, độ chính xác cỡ ngẫu nhiên)."
+  },
+  {
+    "q": "Vì sao self_attn và cross_attn phải là hai đối tượng MultiHeadAttention riêng, mỗi cái có w_q, w_k, w_v, w_o riêng? Điều gì thay đổi nếu dùng chung?",
+    "tag": "separate-attention-weights",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Hai sublayer làm hai việc khác nhau: một cái xử lý quan hệ trong chuỗi đích (q, k, v cùng không gian decoder), cái kia ánh xạ từ không gian decoder sang không gian encoder (k, v là memory). Dùng chung trọng số buộc hai việc đó chia nhau một bộ phép chiếu, giảm biểu diễn và làm số tham số không khớp paper; trọng số cũng nhận gradient từ cả hai nơi lẫn lộn."
+  }
+]

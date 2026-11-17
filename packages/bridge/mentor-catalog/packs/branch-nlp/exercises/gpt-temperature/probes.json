@@ -1,0 +1,44 @@
+[
+  {
+    "q": "So dự đoán của bạn với kết quả thật khi temperature đi về 0 và về vô cùng, và khi tính z / T với T = 0. Chỗ nào làm bạn đoán lệch?",
+    "tag": "predict-vs-reality",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "T → 0: phân phối dồn hết vào token có logit lớn nhất (one-hot), entropy → 0. T → ∞: z/T → 0 nên phân phối đều, entropy → ln V (với 3 token là ln 3 ≈ 1,10). z / 0 trong máy cho +inf với z dương, -inf với z âm, nan với z = 0; softmax của vector đó ra nan, dù giới hạn toán học là một one-hot hoàn toàn hợp lệ. Và p·ln p với p = 0 trong máy là 0·(-inf) = nan, trong khi giới hạn toán học là 0."
+  },
+  {
+    "q": "Entropy lớn nhất của một phân phối trên V token là bao nhiêu và đạt khi nào? Nhỏ nhất thì sao? Với V = 50 000, perplexity e^H của phân phối đều là bao nhiêu?",
+    "tag": "entropy-bounds",
+    "stage": "lab",
+    "kind": "shape",
+    "answer": "Lớn nhất ln V, đạt ở phân phối đều (mô hình hoàn toàn không biết gì); nhỏ nhất 0, đạt ở one-hot (chắc chắn tuyệt đối). Với V = 50 000: ln V ≈ 10,8 nat, perplexity e^H = V = 50 000: perplexity đọc là \"số lựa chọn đồng khả năng hiệu dụng\"."
+  },
+  {
+    "q": "Vì sao quy ước 0·ln 0 = 0 là hợp lý chứ không phải một mẹo cho đẹp? Còn vì sao máy tính ra nan nếu bạn nhân thẳng p với log(p)?",
+    "tag": "zero-times-log-zero",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Vì p ln p → 0 khi p → 0+ (p tiến về 0 nhanh hơn ln p tiến về -∞; có thể chứng minh bằng L'Hôpital với ln p / (1/p)). Nên quy ước chỉ là điền giá trị giới hạn. Trong máy, log(0) = -inf và 0 · (-inf) không xác định theo chuẩn số thực dấu phẩy động nên ra nan, và nan lan sang toàn bộ tổng. Cần hàm có sẵn quy ước (như xlogy) hoặc loại các số hạng p = 0."
+  },
+  {
+    "q": "Bài này xử lý temperature = 0 bằng một nhánh riêng thay vì chia cho một số rất nhỏ như 1e-9. Hai cách khác nhau thế nào về mặt số học và về kết quả?",
+    "tag": "limit-vs-special-case",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Chia cho số rất nhỏ gần đúng ở logits có khoảng cách bình thường nhưng vẫn có thể hỏng: với softmax không ổn định exp tràn số, với temperature nhỏ cỡ 1e-40 phép chia ra inf, và kết quả phụ thuộc vào ngưỡng tuỳ ý. Nhánh riêng là cách viết thẳng giới hạn (one-hot ở argmax): chính xác, rẻ, không có ngưỡng, không tràn số. Khác biệt đáng kể chỉ ở trường hợp hai logit lớn nhất bằng hoặc rất sát nhau."
+  },
+  {
+    "q": "Hai logit lớn nhất bằng nhau. Giới hạn của softmax(z / T) khi T → 0 là gì? argmax cho gì? Vì sao đề bài loại trường hợp này khỏi test?",
+    "tag": "temperature-ties",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Giới hạn chia đều xác suất cho các token bằng nhau ở đầu (ví dụ 0,5 và 0,5), còn argmax chọn đúng một token (thường là cái đầu tiên), nên one-hot của argmax không phải giới hạn ở ca hoà. Hành vi khi hoà phụ thuộc cài đặt, nên đề loại ca đó thay vì ép một quy ước."
+  },
+  {
+    "q": "Entropy của phân phối mô hình dự đoán ở một vị trí cao cho ta biết điều gì về mô hình? Temperature có làm mô hình \"biết thêm\" gì không, hay chỉ đổi độ chắc chắn bề ngoài?",
+    "tag": "entropy-uncertainty",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Entropy cao nghĩa là mô hình phân vân giữa nhiều token, entropy thấp là mô hình đang chắc (có thể đúng, cũng có thể chắc nhầm). Temperature không đổi thứ tự xếp hạng nên không thêm thông tin nào: nó chỉ co giãn khoảng cách giữa các logit, tức là đổi độ nhọn, qua đó đổi entropy và mức độ ngẫu nhiên khi lấy mẫu."
+  }
+]

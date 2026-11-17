@@ -1,0 +1,13 @@
+[
+  {"level": 0, "test": "test_betas_linear", "text": "betas[0] và betas[T-1] của bạn bằng bao nhiêu? Một lịch tuyến tính trải T điểm từ beta_start đến beta_end: hai đầu mút có nằm trong T điểm đó không?"},
+  {"level": 0, "test": "test_alphas_and_alpha_bar", "text": "Sau đúng một bước thì tín hiệu còn lại là bao nhiêu, nên alpha_bar[0] phải bằng số nào? Bạn gộp các hệ số của nhiều bước bằng phép cộng hay phép nhân?"},
+  {"level": 0, "test": "test_sqrt_terms", "text": "Hệ số tín hiệu và hệ số nhiễu có bình phương cộng lại bằng 1. Nếu √ᾱ_t = 0.6 thì √(1 − ᾱ_t) bằng bao nhiêu, và con số đó có bằng 1 − 0.6 không?"},
+  {"level": 0, "test": "test_small_T", "text": "Với T = 1 thì lịch có mấy phần tử và alpha_bar bằng bao nhiêu? Hàm của bạn có chạy đúng khi T chỉ là 1 hay 2 không?"},
+  {"level": 0, "test": "test_float32", "text": "Hàm bạn dùng để tạo dãy số trả về kiểu số gì? Kiểu mặc định của PyTorch là gì, và các bài sau trộn lịch này với ảnh kiểu gì?"},
+  {"level": 1, "text": "Bốn đại lượng nối nhau theo thứ tự: từ β dựng α (một trừ β), từ α dựng ᾱ bằng phép tích luỹ (nhân dồn) dọc mảng độ dài T, rồi hai căn bậc hai cho hai hệ số của Eq. 4. Chỉ cần một dãy T số cách đều làm gốc."},
+  {"level": 1, "when": "chưa biết dựng β", "text": "β là dãy T điểm cách đều nhau, bắt đầu đúng ở beta_start và kết thúc đúng ở beta_end (cả hai đầu mút đều có mặt). PyTorch có sẵn một hàm tạo dãy cách đều theo số điểm, tên gần giống từ \"line\" và \"space\"."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "betas: T điểm cách đều từ beta_start đến beta_end, kiểu float32\nalphas: 1 trừ betas\nalpha_bar: tích luỹ (nhân dồn) của alphas dọc chiều duy nhất, phần tử i là tích alphas[0..i]\nsqrt_alpha_bar: căn của alpha_bar\nsqrt_one_minus_alpha_bar: căn của (1 trừ alpha_bar)\ntrả về dict với đúng năm khoá của đề"},
+  {"level": 2, "when": "kẹt ở phép tích luỹ", "text": "PyTorch có một hàm tích luỹ cho phép nhân (tên bắt đầu bằng \"cum\", giống cumsum nhưng nhân). Nó cần biết chạy dọc chiều nào: với tensor một chiều thì đó là chiều 0."},
+  {"level": 3, "when": "kẹt ở dựng betas và alpha_bar", "text": "```python\nbetas = torch.linspace(beta_start, beta_end, T, dtype=torch.float32)\nalphas = 1.0 - betas\nalpha_bar = torch.cumprod(alphas, dim=0)\n```"},
+  {"level": 3, "when": "kẹt ở dict trả về", "text": "```python\nreturn {\n    \"betas\": betas, \"alphas\": alphas, \"alpha_bar\": alpha_bar,\n    \"sqrt_alpha_bar\": torch.sqrt(alpha_bar),\n    \"sqrt_one_minus_alpha_bar\": torch.sqrt(1.0 - alpha_bar),\n}\n```"}
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Đoán trước khi train: patch 4 (49 token) hay patch 7 (16 token) cho accuracy MNIST cao hơn, và chênh khoảng bao nhiêu điểm phần trăm? Vì sao bạn (và paper) kỳ vọng patch nhỏ tốt hơn, và vì sao trên MNIST khoảng cách có thể rất nhỏ?",
+    "tag": "patch-size-accuracy",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Kỳ vọng patch nhỏ nhỉnh hơn một chút (cỡ vài phần mười đến vài điểm phần trăm): mỗi token mang chi tiết mịn hơn và mô hình có nhiều token để mô tả ảnh, đúng như paper thấy ViT-B/16 hơn ViT-B/32 vài điểm trên ImageNet. Nhưng MNIST là bài rất dễ, nét chữ to và đơn giản: cả hai cấu hình đều đủ thông tin để phân biệt chữ số, nên khoảng cách nhỏ, cùng cỡ dao động giữa các seed; có thể thậm chí đảo chiều với một seed. Khoảng cách chỉ rõ trên bài khó hơn (ảnh tự nhiên, nhiều lớp)."
+  },
+  {
+    "q": "Với dim 64, 3 khối, thời gian forward mỗi ảnh của mô hình 49 token so với mô hình 16 token (cộng cls: 50 so với 17) gần 3 lần hay gần 9 lần? Hãy ước lượng bằng hai phần của chi phí một khối (tuyến tính theo N và bậc hai theo N) trước khi đo.",
+    "tag": "time-ratio-vs-n-squared",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "Gần 3 lần (cỡ 3,2), không phải 9. Mỗi token tốn cỡ 12·D² = 49 152 phép nhân-cộng ở các lớp tuyến tính và MLP, còn attention chỉ tốn 2·N·D mỗi token, tức 6 400 ở N = 50 (cỡ 11% tổng) và 2 176 ở N = 17. Ở D nhỏ và N vài chục, phần tuyến tính theo N chi phối, nên chi phí tỷ lệ gần với số token (50/17 ≈ 2,9) cộng một chút từ N². Phần bậc hai chỉ thắng khi N vượt cỡ 6D (khoảng 384 với D = 64)."
+  },
+  {
+    "q": "Bạn đo ms_p_small / ms_p_large và thấy nó gần tỷ lệ số token (cỡ 3) chứ không gần tỷ lệ bình phương (cỡ 9). Nếu bạn lặp lại phép đo trên GPU với batch chỉ 8 ảnh, con số sẽ ra sao và vì sao? Điều đó nói gì về độ tin cậy của số đo thời gian này?",
+    "tag": "timing-measurement",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "Với batch rất nhỏ trên GPU, chi phí bị chi phối bởi độ trễ khởi chạy các kernel (mỗi phép toán một lần gọi) chứ không phải số phép tính, nên cả hai mô hình mất gần như cùng thời gian mỗi lượt và tỷ lệ tiến về 1; phải đo với batch đủ lớn để GPU bận thật. Trên CPU tỷ lệ gần số phép tính hơn. Số đo thời gian nhiễu (máy bận, tần số GPU, khởi động nguội) nên cần khởi động trước, lặp nhiều lần, và chỉ tin tỷ lệ lặp lại được; vì thế đề báo nó chỉ để tham khảo."
+  },
+  {
+    "q": "Hai mô hình bạn train cùng số epoch, tức cùng số bước. Nhưng mô hình patch nhỏ tốn nhiều thời gian hơn mỗi bước. Nếu thay vào đó cho hai mô hình cùng một NGÂN SÁCH THỜI GIAN train, kết luận 'patch nhỏ tốt hơn bao nhiêu' có thể đổi thế nào, và phép so sánh nào công bằng hơn?",
+    "tag": "equal-compute-comparison",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Cùng số bước là so sánh theo mẫu đã thấy; cùng thời gian là so theo tài nguyên. Patch nhỏ đắt hơn cỡ 3 lần mỗi bước, nên trong cùng thời gian mô hình patch lớn đi được nhiều bước hơn (hoặc nhiều epoch hơn), và có thể bắt kịp hoặc vượt nếu patch nhỏ chưa hội tụ. Cái nào công bằng hơn tùy câu hỏi: nếu hỏi 'cấu hình nào biểu diễn tốt hơn' thì cùng dữ liệu và cùng số bước; nếu hỏi 'cấu hình nào đáng tiền hơn' thì cùng chi phí tính toán. Paper vẽ độ chính xác theo chi phí tính toán (exaFLOPs) chính vì lý do này."
+  },
+  {
+    "q": "ViT không có thiên kiến quy nạp của conv như tính lân cận và bất biến tịnh tiến (paper §4.1, §4.5 nói chỉ patch embedding và pos_embed khi đổi độ phân giải mới dùng cấu trúc 2D của ảnh). Vì sao ViT vẫn học được MNIST chỉ với 20 000 ảnh, nhưng paper lại thấy ViT thua ResNet cùng cỡ khi pretrain trên tập nhỏ như ImageNet-1k?",
+    "tag": "vit-inductive-bias",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Conv có sẵn giả định cục bộ và bất biến tịnh tiến nên cần ít dữ liệu hơn; ViT phải tự học các quy luật đó từ dữ liệu, nên cần nhiều ảnh hơn mới bù được (paper: trên ImageNet-1k thuần ViT thua ResNet cùng cỡ, nhưng khi pretrain trên 14M đến 300M ảnh thì thắng). MNIST dễ đến mức mô hình nhỏ học được các nét chữ từ vài chục nghìn ảnh mà không cần thiên kiến mạnh: bài toán đơn giản, ít lớp, ảnh căn giữa. Với ảnh tự nhiên nhiều biến thiên thì thiếu thiên kiến quy nạp mới lộ."
+  }
+]

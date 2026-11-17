@@ -1,0 +1,15 @@
+{
+  "id": "gpt-temperature",
+  "title": "Temperature và entropy (biến thể của sinh văn bản)",
+  "star": "gpt",
+  "skills": ["formula", "theory"],
+  "difficulty": 1600,
+  "minutes": 15,
+  "requires": ["numpy", "torch"],
+  "order": 4,
+  "functions": ["temperature_probs", "entropy"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "variantOf": "gpt-generate",
+  "predict": "Cho logits $z = (2.0,\\ 1.0,\\ 0.1)$ của 3 token. (a) Khi $\\tau$ giảm dần về 0, phân phối $\\operatorname{softmax}(z/\\tau)$ tiến tới đâu và entropy của nó tiến tới bao nhiêu? (b) Khi $\\tau \\to \\infty$ thì sao, entropy tiến tới bao nhiêu (viết bằng $\\ln$)? (c) Nếu chương trình tính thẳng $z/\\tau$ với $\\tau = 0$ thì ra những giá trị nào, và softmax của chúng ra gì? (d) Với một xác suất $p = 0$ đúng, nếu máy tính $p \\cdot \\ln p$ bằng cách nhân hai số $p$ và $\\ln p$ thì ra gì, so với giới hạn toán học?"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "replay-buffer",
+  "title": "Replay buffer: bộ nhớ vòng của DQN",
+  "star": "dqn",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1500,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["ReplayBuffer"],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

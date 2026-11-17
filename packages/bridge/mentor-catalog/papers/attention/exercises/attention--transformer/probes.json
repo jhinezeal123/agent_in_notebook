@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Khi train, decoder nhận tgt_in = [BOS, đảo...] và loss tính với tgt_out = [đảo..., EOS]. Vì sao lệch một vị trí? Nếu đưa nhầm tgt_out vào decoder thì loss lúc train ra sao, và lúc sinh thật?",
+    "tag": "shift-teacher-forcing",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Vị trí t của tgt_in là token đã biết; mô hình phải đoán token kế tiếp, tức tgt_out[t]. Đưa tgt_out vào decoder thì vị trí t đã thấy chính đáp án của mình (qua đường residual): loss rơi gần 0 vì mô hình học chép, nhưng lúc sinh thật nó không có đáp án để chép nên ra rác."
+  },
+  {
+    "q": "Vì sao encoder và decoder dùng chung một embedding, và vì sao còn dùng chung nó với lớp out trước softmax? Số tham số giảm bao nhiêu, và logits tính bằng phép nào giữa vector đầu ra và bảng embedding?",
+    "tag": "weight-tying",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Cùng một từ vựng nên cùng một bảng token → vector; chia sẻ giảm tham số (bảng vocab × d_model chỉ có một bản) và ép embedding đầu vào và đầu ra nhất quán. Logits là tích vô hướng của vector đầu ra (B, T, d_model) với từng hàng của bảng embedding: out.weight có shape (vocab, d_model), cùng shape embedding, nên dùng chung được. (§3.4)"
+  },
+  {
+    "q": "Mask padding của câu nguồn được dùng ở những chỗ nào trong cả mô hình? Bỏ nó khỏi cross-attention nhưng giữ ở encoder thì chuyện gì xảy ra?",
+    "tag": "padding-mask-everywhere",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Dùng ở hai chỗ: self-attention của encoder (để token thật không nhìn PAD) và cross-attention của decoder (để decoder không nhìn PAD của memory). Bỏ ở cross-attention thì các vị trí PAD của memory vẫn nhận một phần trọng số attention: đầu ra phụ thuộc vào độ dài đệm, tức câu giống nhau mà batch khác nhau cho kết quả khác nhau."
+  },
+  {
+    "q": "Mô hình có mấy cụm attention theo kiểu q, k, v lấy từ đâu? Với n_layers = 2, đếm tổng số đối tượng MultiHeadAttention trong cả Transformer.",
+    "tag": "count-attentions",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Encoder: mỗi lớp một self-attention (q=k=v từ cùng chuỗi nguồn). Decoder: mỗi lớp hai: self-attention có mask (q=k=v từ chuỗi đích) và cross-attention (q từ decoder, k=v từ memory). Với n_layers = 2: 2 + 2·2 = 6 đối tượng MultiHeadAttention."
+  },
+  {
+    "q": "Tại sao Transformer này tính song song trên cả chuỗi đích lúc train mà lúc sinh phải lặp từng token? Điều gì làm chuyện đó hợp lệ?",
+    "tag": "parallel-train-serial-decode",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Lúc train ta biết đáp án (teacher forcing) nên có thể đưa cả tgt_in một lần; mask causal đảm bảo mỗi vị trí chỉ thấy tiền tố của nó, nên kết quả giống hệt việc tính lần lượt từng vị trí. Lúc sinh không có đáp án: token kế phụ thuộc token vừa sinh nên phải lặp từng bước, mỗi bước chạy lại mô hình trên tiền tố đã sinh."
+  }
+]

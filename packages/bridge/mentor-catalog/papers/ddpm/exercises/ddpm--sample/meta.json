@@ -1,0 +1,17 @@
+{
+  "id": "ddpm--sample",
+  "title": "DDPM: vòng lấy mẫu đầy đủ (Alg. 2)",
+  "star": "ddpm--sample",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1800,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["sample"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "ddpm",
+  "role": "component",
+  "cites": "Alg. 2, §3.2",
+  "uses": ["p-sample"]
+}

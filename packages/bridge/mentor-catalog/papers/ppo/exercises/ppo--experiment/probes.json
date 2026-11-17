@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trước khi train: một ActorCritic vừa khởi tạo cho logits gần 0 ở mọi trạng thái. Nếu lấy mẫu hành động từ nó thì return trung bình cỡ bao nhiêu trên CartPole, và entropy của policy là bao nhiêu? Còn nếu luôn chọn hành động có logit lớn nhất (tham lam) thì sao?",
+    "tag": "untrained-policy-baseline",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Lấy mẫu: gần như ngẫu nhiên đều nên return cỡ 20 và entropy gần ln 2 ≈ 0,69 (hai hành động ngang nhau). Tham lam: logits gần bằng nhau nhưng argmax vẫn chọn một phía cố định gần như ở mọi trạng thái nên xe bị đẩy một hướng, gậy đổ sau chỉ cỡ 10–20 bước: thường không hơn ngẫu nhiên. Vì thế mốc dưới của PPO là chính sách lấy mẫu (≈ 20), không phải 0."
+  },
+  {
+    "q": "Entropy của policy nên đi theo hướng nào trong lúc train, và con số nào là mức khởi đầu? Nếu entropy tụt về gần 0 chỉ sau vài vòng thì đó là tin tốt hay xấu, và hệ số ent_coef giúp gì?",
+    "tag": "entropy-collapse",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Bắt đầu ở ln 2 ≈ 0,69 và giảm dần khi policy tự tin hơn vào hành động tốt; giảm dần là bình thường. Về gần 0 quá sớm nghĩa là policy gần như tất định trước khi khám phá đủ: nó kẹt ở một hành vi chưa tốt, vì gradient không còn hành động nào khác để so (mất khám phá). Số hạng thưởng entropy −c₂·H trong loss giữ policy ngẫu nhiên thêm một lúc, nên khám phá lâu hơn; quá lớn thì policy mãi ngẫu nhiên và không học được."
+  },
+  {
+    "q": "REINFORCE chỉ được dùng mỗi rollout một lần, còn ppo_update chạy 4 epoch trên cùng rollout. Vì sao PPO làm được điều đó? Điều gì sẽ hỏng nếu epoch hoặc learning rate tăng thật lớn, và những số nào trong kết quả của ppo_update cho thấy dấu hiệu?",
+    "tag": "why-multiple-epochs",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Sau epoch đầu policy đã đổi, dữ liệu không còn đúng của policy hiện tại. PPO dùng tỉ số π_mới/π_cũ (importance sampling) để sửa, và phần cắt giữ tỉ số trong [1−ε, 1+ε] để policy mới không xa policy cũ, nên tái dùng dữ liệu còn hợp lệ xấp xỉ. REINFORCE không có tỉ số, dữ liệu cũ sẽ làm gradient sai. Nếu epoch/lr quá lớn, nhiều mẫu có tỉ số bị cắt (gradient bằng 0) hoặc policy vẫn trôi xa; theo dõi clip_fraction (tăng) và approx_kl (tăng) để thấy; cắt không phải ràng buộc cứng."
+  },
+  {
+    "q": "Trước ppo_update bạn chuẩn hóa advantage (trừ trung bình, chia độ lệch chuẩn). Điều đó giúp gì, và nếu không làm thì chuyện gì xảy ra khi reward có thang rất lớn hoặc rất nhỏ?",
+    "tag": "advantage-normalization",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Nó đưa advantage về thang cỡ 1 (trung bình 0, độ lệch chuẩn 1) nên độ lớn gradient của policy không phụ thuộc thang reward, và learning rate hợp lý chạy được qua nhiều môi trường và qua các giai đoạn của việc học; trung bình 0 còn giảm phương sai (như một baseline). Không chuẩn hóa: reward thang lớn làm bước cập nhật quá lớn (và bị cắt ratio, gradient clip chi phối), thang nhỏ làm học rất chậm; policy loss cũng bị value loss lấn át ở hệ số cố định. CartPole vẫn học được vì thang vừa phải, nhưng nhạy hơn."
+  },
+  {
+    "q": "PPO của bạn đạt return 200 chỉ sau vài chục nghìn bước và khá ổn định, còn DQN trên cùng môi trường dao động nhiều. Nêu hai khác biệt trong thiết kế giải thích phần nào điều đó (không cần kết luận PPO luôn hơn).",
+    "tag": "ppo-vs-dqn",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "(1) PPO học trực tiếp một policy và cập nhật nó bị giới hạn gần policy cũ (cắt), nên mỗi bước thay đổi hành vi một lượng nhỏ có kiểm soát; DQN học Q bằng bootstrapping qua max, dễ đánh giá quá cao và mục tiêu dịch chuyển (cần mạng target). (2) PPO dùng dữ liệu mới của chính policy hiện tại mỗi vòng (on-policy), không có buffer chứa dữ liệu cũ gây 'quên' hay lệch phân phối; DQN off-policy trộn dữ liệu cũ. Đổi lại PPO tốn dữ liệu hơn (mỗi mẫu dùng ít lần), và nhạy với các siêu tham số khác (T, epoch, ε, ent_coef)."
+  },
+  {
+    "q": "Máy chấm báo mean_return (lấy mẫu) = 185 trong khi greedy_return = 200. Vì sao chính sách tham lam thường cao hơn, và vì sao thí nghiệm lại chọn đo bằng lấy mẫu?",
+    "tag": "sampled-vs-greedy-eval",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Policy PPO còn ngẫu nhiên: ở trạng thái mà một hành động rõ ràng tốt hơn, nó vẫn chọn hành động kém với xác suất nhỏ (entropy chưa về 0), và những cú đẩy nhầm cộng lại làm gậy đổ sớm một số episode. Greedy bỏ nhiễu đó nên cao hơn. Đo bằng lấy mẫu vì đó chính là chính sách mà PPO tối ưu và dùng lúc thu dữ liệu, và vì nó khắt khe hơn: CartPole dễ đến mức greedy có thể đạt 200 sau rất ít vòng (khi argmax đã đúng nhưng policy còn chưa chắc chắn), nên greedy che mất việc policy đã học chưa thật sự."
+  }
+]

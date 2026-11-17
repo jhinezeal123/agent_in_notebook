@@ -1,0 +1,14 @@
+{
+  "id": "q-sample",
+  "title": "DDPM: nhiễu ảnh tới bước t trong một lần tính (Eq. 4)",
+  "star": "ddpm",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1650,
+  "minutes": 20,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["q_sample"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["noise-schedule"]
+}

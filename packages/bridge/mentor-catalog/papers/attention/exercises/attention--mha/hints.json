@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_parameters",
+    "text": "Máy chấm chép trọng số vào module của bạn theo tên tham số. Trong __init__, bốn phép chiếu của bạn tên là gì và mỗi cái là loại layer nào, shape bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_self_attention",
+    "text": "Điểm attention của bạn đang chia cho căn của số nào: số chiều của cả vector d_model, hay số chiều mà mỗi head thật sự dùng để tính tích vô hướng?"
+  },
+  {
+    "level": 0,
+    "test": "test_cross_attention",
+    "text": "Trong cross-attention, phép chiếu nào áp vào q, phép chiếu nào áp vào k và v? Tq và Tk nằm ở trục nào của điểm attention, và softmax chạy dọc trục nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_padding_mask",
+    "text": "Một key bị che phải có trọng số đúng bằng 0 mà các key còn lại vẫn cộng thành 1. Bạn che trước hay sau softmax? Và mask True nghĩa là \"được nhìn\" hay \"bị che\"?"
+  },
+  {
+    "level": 0,
+    "test": "test_causal_mask",
+    "text": "Mask (T, T) không có trục batch hay head. Nó broadcast với điểm attention (B, n_heads, Tq, Tk) thế nào, và hàng i của mask nên có bao nhiêu ô True?"
+  },
+  {
+    "level": 0,
+    "test": "test_heads",
+    "text": "Với d_model = 24 và 6 head thì mỗi head có bao nhiêu feature? Con số đó bạn tính ở đâu, và khi d_model = 10 chia 3 thì chương trình của bạn làm gì?"
+  },
+  {
+    "level": 1,
+    "text": "Chiếu q, k, v bằng ba phép biến đổi tuyến tính, rồi tách trục feature thành hai trục (số head, d_k) và đưa trục head lên trước trục thời gian để mọi phép nhân ma trận chạy cho tất cả head cùng lúc. Sau đó: tích vô hướng q với k theo hai trục cuối, chia cho căn d_k, che những key không được nhìn, softmax theo trục của key, nhân với v. Cuối cùng ghép các head lại thành d_model feature rồi cho qua phép chiếu đầu ra."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "1. q, k, v = chiếu tuyến tính của q, k, v          # mỗi cái (B, T, d_model)\n2. mỗi cái: (B, T, d_model) -> (B, n_heads, T, d_k)\n3. scores = q nhân k chuyển vị hai trục cuối, chia căn d_k    # (B, n_heads, Tq, Tk)\n4. nơi mask = False: điền -inf; weights = softmax theo trục cuối\n5. out = weights nhân v                             # (B, n_heads, Tq, d_k)\n6. đưa trục head về sau trục thời gian, gộp (n_heads, d_k) -> d_model, rồi qua phép chiếu đầu ra"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc tách và ghép head",
+    "text": "Tách: (B, T, d_model) -> (B, T, n_heads, d_k) -> hoán trục 1 và 2 -> (B, n_heads, T, d_k).\nGhép là đảo ngược từng bước đó: hoán trục lại, rồi gộp hai trục cuối. Hoán trục xong thì tensor không còn liên tục trong bộ nhớ: gộp bằng thứ gì chịu được điều đó?"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở tách head",
+    "text": "```python\nB, T, _ = x.shape\nx = x.view(B, T, self.n_heads, self.d_k).transpose(1, 2)   # (B, h, T, d_k)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở mask",
+    "text": "```python\nscores = scores.masked_fill(~mask, float(\"-inf\"))   # mask True = được nhìn\nweights = torch.softmax(scores, dim=-1)\n```"
+  }
+]

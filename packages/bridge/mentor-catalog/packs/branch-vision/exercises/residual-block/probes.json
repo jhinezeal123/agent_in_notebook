@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Bài báo ResNet cho thấy một mạng plain 56 lớp có lỗi TRAIN cao hơn một mạng plain 20 lớp (không phải lỗi test). Đó không phải overfitting. Hiện tượng đó tên là gì, và việc cộng đường tắt $y = F(x) + x$ làm cho việc học \"không làm gì cả\" dễ đến mức nào (F phải bằng gì)?",
+    "tag": "resnet-degradation",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Đó là degradation (suy giảm): mạng sâu hơn lẽ ra ít nhất làm được bằng mạng nông (thêm các lớp đồng nhất) nhưng bộ tối ưu không tìm ra điều đó, lỗi train tăng lên (không phải overfitting vì lỗi train cao chứ không chỉ lỗi test). Với đường tắt, học \"không làm gì\" chỉ cần đẩy F(x) về 0 (trọng số về 0), việc dễ hơn nhiều so với tự học một ánh xạ đồng nhất bằng chồng conv + ReLU."
+  },
+  {
+    "q": "Với đường tắt đồng nhất, $y = F(x) + x$, đạo hàm của $y$ theo $x$ là gì? Qua 20 khối, vì sao gradient từ lớp cuối vẫn tới được lớp đầu mà không bị nhân lên liên tiếp bởi các số nhỏ?",
+    "tag": "resnet-gradient-highway",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "dy/dx = dF/dx + I. Phần I luôn có mặt: gradient truyền ngược qua mỗi khối là (I + dF/dx) chứ không phải chỉ dF/dx. Khi tích qua nhiều khối, khai triển ra có một số hạng chỉ gồm các I (đường tắt thuần túy), nên gradient có một \"xa lộ\" từ đầu ra về đầu vào, không bị co lại theo lũy thừa của các Jacobian nhỏ như ở mạng plain."
+  },
+  {
+    "q": "Nếu bạn đặt ReLU ngay sau $F(x)$ (trước phép cộng) rồi cộng $x$ và không có ReLU nào sau đó, khối này có thể xuất ra giá trị âm không, khi nào? Và vì sao ResNet gốc đặt ReLU sau phép cộng?",
+    "tag": "resnet-relu-after-add",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Có: nhánh sau ReLU không âm nhưng x (đường tắt) có thể âm (nếu x là đầu ra của một lớp không có ReLU cuối, hoặc của một BN), nên tổng có thể âm. Đặt ReLU sau phép cộng thì mọi khối xuất ra giá trị không âm và đầu vào của khối tiếp theo có phân phối đúng kiểu nó quen (nhận qua ReLU); còn ReLU trước phép cộng làm đường tắt không thể mang giá trị âm và nhánh chính chỉ có thể cộng thêm, nên F chỉ được phép \"đẩy lên\" tín hiệu. (Bản ResNet v2 với pre-activation lại đặt BN, ReLU trước conv để đường tắt hoàn toàn sạch.)"
+  },
+  {
+    "q": "Khi in_ch ≠ out_ch hoặc stride ≠ 1, vì sao projection 1×1 có stride lại là cách hợp lý để biến x thành shape của F(x)? Có cách rẻ hơn không có tham số nào không (tên ít nhất một cách), và vì sao ResNet vẫn thường dùng projection ở các khối đổi shape?",
+    "tag": "resnet-projection",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Conv 1×1 stride s lấy mẫu mỗi s điểm và trộn các kênh (in_ch → out_ch) bằng một ma trận học được, nên cho đúng shape (B, out_ch, H/s, W/s) với chi phí in_ch·out_ch tham số. Không tham số: giảm độ phân giải bằng stride hoặc pooling và thêm kênh bằng đệm số 0 (option A trong paper ResNet gốc trên CIFAR). Projection cho độ chính xác nhỏ nhưng tốt hơn và thường được dùng khi đổi shape; đường đồng nhất vẫn giữ cho phần còn lại để tiết kiệm tham số."
+  },
+  {
+    "q": "Vì sao conv1 và conv2 của khối được tạo với bias=False, và BatchNorm đứng ngay sau mỗi conv? Chuyện gì xảy ra với bias của conv nếu để bias=True?",
+    "tag": "bn-bias-redundant",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Batch Norm trừ đi trung bình của batch theo từng kênh, nên mọi hằng số cộng thêm vào cả kênh (đúng việc của bias của conv) bị xóa; phần dịch có tác dụng thật là β của Batch Norm. bias=True chỉ tốn tham số: gradient của nó về mặt lý thuyết bằng 0 và nó không đổi đầu ra."
+  },
+  {
+    "q": "Với stride = 2 và đầu vào 7×7, kích thước đầu ra của conv 3×3 (padding 1) và của conv 1×1 (không padding) là bao nhiêu? Nếu bạn thêm padding=1 cho conv 1×1 của shortcut thì chuyện gì xảy ra?",
+    "tag": "resnet-shortcut-shape",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Conv 3×3, padding 1, stride 2: floor((7 + 2 − 3)/2) + 1 = 4. Conv 1×1, padding 0, stride 2: floor((7 − 1)/2) + 1 = 4: hai nhánh khớp nhau (đây là lý do kernel 1×1 không có padding). Thêm padding=1 cho 1×1: floor((7 + 2 − 1)/2) + 1 = 5, shape lệch (5 so với 4) và phép cộng báo lỗi."
+  }
+]

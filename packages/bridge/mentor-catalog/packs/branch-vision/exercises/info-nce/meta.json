@@ -1,0 +1,21 @@
+{
+  "id": "info-nce",
+  "title": "NT-Xent của SimCLR: loss contrastive trên 2N view",
+  "star": "contrastive",
+  "skills": [
+    "formula",
+    "tensor"
+  ],
+  "difficulty": 1750,
+  "minutes": 25,
+  "requires": [
+    "numpy",
+    "torch"
+  ],
+  "order": 1,
+  "functions": [
+    "nt_xent"
+  ],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

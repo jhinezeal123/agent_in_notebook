@@ -1,0 +1,16 @@
+{
+  "id": "lora-merge",
+  "title": "Gộp adapter LoRA vào trọng số gốc (biến thể của lora-linear)",
+  "star": "lora",
+  "skills": ["tensor", "theory"],
+  "difficulty": 1700,
+  "minutes": 15,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["merge"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["lora-linear"],
+  "variantOf": "lora-linear",
+  "predict": "Một lớp $\\mathrm{nn.Linear}(4096, 4096)$ có bias, gắn LoRA với $r = 8$, $\\alpha = 16$, đang dùng để suy luận. Trước khi code, dự đoán: (a) với một token, phần adapter tốn bao nhiêu phép nhân (con số) so với $4096^2$ của Linear gốc, tức khoảng bao nhiêu phần trăm? Cả lớp (gốc + $A$ + $B$) có bao nhiêu tham số? (b) Sau khi gộp $B A$ vào $W$, lớp có bao nhiêu tham số và chi phí mỗi token đổi thế nào? Độ trễ thật có giảm nhiều hơn tỷ lệ phần trăm ở (a) không, và vì sao? (c) Hai adapter $(A_1, B_1)$, $(A_2, B_2)$ cùng $r$, học riêng trên cùng một $W$ rồi gộp cả hai: hạng tối đa của độ lệch tổng cộng là bao nhiêu? (d) Nếu sau khi gộp bạn chỉ giữ $W'$, có tách riêng được adapter thứ nhất ra không?"
+}

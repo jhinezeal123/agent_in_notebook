@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Ở ví dụ số cuối của lab: r = -1, gamma = 0.9, Q(s', ·) = (-3, -2, -4, -5). Target khi bước KHÔNG kết thúc episode là bao nhiêu, và khi bước kết thúc episode (s' là đích) là bao nhiêu? Vì sao hai số khác nhau, và khi nào chúng bằng nhau?",
+    "tag": "terminal-bootstrap",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Không kết thúc: -1 + 0.9 * max(-3, -2, -4, -5) = -1 + 0.9 * (-2) = -2.8. Kết thúc: chỉ r = -1. Khác nhau vì sau một bước kết thúc không còn tương lai để thu thêm thưởng: giá trị của trạng thái cuối là 0 theo định nghĩa. Hai cách bằng nhau khi max Q(s', ·) = 0, ví dụ ô đích chưa từng được cập nhật và Q toàn 0 (nên lỗi quên done có thể bị che đi trong bảng khởi tạo 0)."
+  },
+  {
+    "q": "Agent đi hoàn toàn ngẫu nhiên mất trung bình cả trăm bước để tới đích, nhưng Q-learning học được chính sách đi đường ngắn nhất 6 bước dù trong lúc học nó vẫn hay đi lung tung (eps > 0). Điều gì cho phép học chính sách tốt từ dữ liệu của một chính sách khác?",
+    "tag": "off-policy",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Q-learning là off-policy: target dùng max theo hành động ở s' (hành động tốt nhất), không phải hành động mà hành vi thực sự sẽ chọn. Nên nó học giá trị của chính sách tham lam tối ưu bất kể dữ liệu đến từ hành vi nào, miễn mọi cặp (s, a) được thử đủ nhiều. Đó là lý do chạy với eps = 1 (hoàn toàn ngẫu nhiên) vẫn hội tụ về Q*."
+  },
+  {
+    "q": "Đổi max_a' Q(s', a') thành Q(s', a'), với a' là hành động mà vòng lặp sẽ thực sự chọn tiếp theo (epsilon-greedy). Thuật toán đó tên gì, và học ra giá trị của chính sách nào? Trên một lưới có vách đá, hai thuật toán cho đường đi khác nhau ra sao?",
+    "tag": "q-vs-sarsa",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "SARSA (on-policy). Nó học giá trị của chính sách epsilon-greedy đang chạy, kể cả những lần khám phá ngẫu nhiên, nên tính cả rủi ro ngã khi đi sát mép. Q-learning học giá trị của chính sách tham lam tối ưu nên đi sát mép vách đá (đường ngắn nhất, nguy hiểm khi còn khám phá); SARSA chọn đường an toàn xa mép hơn."
+  },
+  {
+    "q": "TD error delta = target - Q(s, a) có dấu dương, dấu âm, và gần 0 thì lần lượt nói lên điều gì về dự đoán cũ? Khi học xong và chính sách ổn định, delta kỳ vọng tiến tới đâu (trong môi trường tất định như lưới này)?",
+    "tag": "td-error",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Dương: trải nghiệm tốt hơn dự đoán (Q cũ thấp quá, bị đẩy lên). Âm: tệ hơn dự đoán (Q cũ cao quá, bị kéo xuống). Gần 0: dự đoán đã khớp. Khi Q đã bằng Q*, mọi bước trong môi trường tất định có delta = 0, nên Q đứng yên: Q* là điểm bất động của phương trình Bellman. Alpha chỉ quyết định bước đi về phía target nhanh hay chậm, không đổi nơi nó dừng."
+  },
+  {
+    "q": "Với alpha = 1 trong môi trường tất định thì cập nhật làm gì với Q(s, a)? Còn trong môi trường ngẫu nhiên (cùng (s, a) có thể rơi vào s' khác nhau) alpha = 1 có gây hại không, và vì sao thường dùng alpha nhỏ?",
+    "tag": "learning-rate",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "alpha = 1: Q(s, a) bị thay hẳn bằng target mới nhất. Tất định thì target luôn như nhau nên ổn. Ngẫu nhiên thì Q nhảy theo từng mẫu nhiễu, không bao giờ trung bình hóa kỳ vọng; alpha nhỏ (hoặc giảm dần) làm Q thành trung bình mượt của nhiều mẫu, đánh đổi bằng học chậm hơn. (Nối với bài bandit: 1/N là trung bình cộng, hằng số alpha là trung bình mũ.)"
+  },
+  {
+    "q": "Bảng Q ở bài này cần S * A ô. Với một trò chơi có 10^20 trạng thái (hoặc trạng thái liên tục như vị trí của một xe), bảng thất bại ở đâu, và ý tưởng nào thay thế nó (nối tới bài sau)?",
+    "tag": "tabular-limits",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Không đủ bộ nhớ và không đủ dữ liệu: mỗi trạng thái phải được ghé nhiều lần mới học được, và trạng thái gần giống nhau không chia sẻ gì cho nhau. Giải pháp: xấp xỉ hàm, thay bảng bằng một mạng nơ-ron Q(s, ·; theta) nhận trạng thái và cho giá trị mọi hành động, để các trạng thái tương tự khái quát hóa lẫn nhau. Đó là DQN, với những thêm thắt (replay buffer, target network) vì cập nhật bây giờ làm đổi cả hàm."
+  }
+]

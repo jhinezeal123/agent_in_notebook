@@ -1,0 +1,14 @@
+[
+  {"level": 0, "test": "test_returns_linear", "text": "Hàm của bạn trả về loại đối tượng nào, và nó có còn nhánh A, B không? Với base có bias và không có bias, bản gộp cần có hay không có bias?"},
+  {"level": 0, "test": "test_same_output", "text": "Nếu gộp đúng thì merged(x) và lora(x) phải bằng nhau cho mọi x. Hãy tự tính tay với một x nhỏ: phần cộng thêm của adapter đóng vai trò gì nếu nhìn nó như một ma trận nhân với x?"},
+  {"level": 0, "test": "test_weight_formula", "text": "W có shape (out, in); B có shape (out, r) và A có shape (r, in). Tích nào của B và A cho ra một ma trận shape (out, in), và hệ số α/r đứng ở đâu? Nếu in và out khác nhau, cách nhân sai có chạy được không?"},
+  {"level": 0, "test": "test_lora_untouched", "text": "Sau khi gọi merge, trọng số của LoRALinear gốc có còn y nguyên không? Phép cộng bạn viết đang ghi kết quả vào tensor nào?"},
+  {"level": 0, "test": "test_independent_copy", "text": "Nếu bạn sửa weight của lớp trả về, lora.base.weight có đổi theo không? Bias của bản gộp được sao chép hay chỉ gán lại cùng một đối tượng?"},
+  {"level": 0, "test": "test_inference_ready", "text": "Phép W + (α/r)·B·A dùng A và B là hai tham số cần gradient: kết quả của nó mang theo gì? Và bản gộp dùng để suy luận thì các tham số của nó nên có requires_grad bằng gì?"},
+  {"level": 1, "text": "Tạo một nn.Linear mới cùng kích thước (và có bias hay không giống base). Tính trọng số gộp từ trọng số gốc và độ lệch hạng thấp có hệ số α/r, rồi chép nó vào Linear mới mà không để autograd ghi lại; chép bias nếu có; cuối cùng đóng băng mọi tham số của bản gộp."},
+  {"level": 1, "text": "Muốn chép giá trị vào một tham số đang có requires_grad mà không bị autograd phàn nàn, bạn cần một ngữ cảnh tắt việc ghi đồ thị quanh phép chép. Muốn bản gộp không chia sẻ bộ nhớ với base, hãy chép giá trị chứ đừng gán lại cùng đối tượng."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "1. base = lora.base\n2. merged = Linear mới (in, out lấy từ base; bias hay không theo base)\n3. trong ngữ cảnh không ghi đồ thị:\n     merged.weight ← base.weight + scale * (B nhân A)      # (out,r) nhân (r,in) = (out,in)\n     nếu có bias: merged.bias ← bản sao của base.bias\n4. mọi tham số của merged: tắt requires_grad\n5. trả về merged"},
+  {"level": 2, "when": "kẹt ở thứ tự nhân B và A", "text": "Độ lệch cần có shape (out, in), cùng shape với W. B có (out, r), A có (r, in): chỉ một thứ tự nhân cho ra shape đó. Với lớp vuông (in = out) cả hai thứ tự đều chạy nhưng cho kết quả khác nhau: kiểm bằng shape trung gian, không bằng việc có báo lỗi hay không."},
+  {"level": 3, "when": "kẹt ở lỗi autograd khi copy", "text": "```python\nwith torch.no_grad():\n    merged.weight.copy_(base.weight + lora.scale * lora.B @ lora.A)\n```"},
+  {"level": 3, "when": "kẹt ở việc đóng băng", "text": "```python\nfor p in merged.parameters():\n    p.requires_grad_(False)\n```"}
+]

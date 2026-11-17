@@ -1,0 +1,17 @@
+{
+  "id": "attention--transformer",
+  "title": "Ráp Transformer encoder-decoder (§3)",
+  "star": "attention--transformer",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1900,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 5,
+  "functions": ["Transformer"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "attention",
+  "role": "component",
+  "cites": "§3, §3.4, §5.4, Figure 1",
+  "uses": ["attention--posenc-embed", "attention--encoder-layer", "attention--decoder-layer"]
+}

@@ -1,0 +1,15 @@
+[
+  {"level": 0, "test": "test_state_field", "text": "Với v = −x và N = 1 bước thì x_1 bằng bao nhiêu? Với N = 2 thì sao? Mỗi bước bạn cộng dt nhân với vận tốc tính tại x hiện tại hay tại x cũ của lần đầu?"},
+  {"level": 0, "test": "test_time_field", "text": "Với v = t và 5 bước, bạn cộng những giá trị t nào (liệt kê từng bước)? Bước đầu tiên dùng t = 0 hay t = 0.2? Vận tốc được đo ở đầu hay cuối mỗi bước?"},
+  {"level": 0, "test": "test_calls_and_times", "text": "In danh sách t mà model nhận qua từng lần gọi. Có đúng 4 lần cho steps = 4 không, và dãy t có bắt đầu ở 0 và kết thúc ở (steps − 1)/steps không?"},
+  {"level": 0, "test": "test_no_inplace_dtype", "text": "Sau khi gọi hàm, x0 của người gọi còn nguyên không? Bạn cập nhật trạng thái bằng phép cộng tạo tensor mới hay cộng thẳng lên chính x0? Kết quả có cùng kiểu số với x0 không?"},
+  {"level": 0, "test": "test_no_grad", "text": "Hãy in out.requires_grad. Khi model được gọi trong vòng lặp, PyTorch có đang ghi đồ thị gradient không, và lấy mẫu có cần nó không?"},
+  {"level": 0, "test": "test_converges_first_order", "text": "Khi bạn gấp đôi số bước từ 40 lên 80, sai số so với nghiệm chính xác giảm mấy lần? Euler có bậc mấy, và bạn có đang dùng đúng một lần gọi model mỗi bước (không phải hai)?"},
+  {"level": 0, "test": "test_straight_field", "text": "Trường (c − x)/(1 − t) chia cho 0 khi t = 1. Ở bước cuối cùng bạn đưa vào model t bằng bao nhiêu? Nó có nhỏ hơn 1 không?"},
+  {"level": 1, "text": "Lặp `steps` lần: ở bước k, tạo tensor t gồm B bản sao của thời gian đầu bước k/steps, hỏi model vận tốc tại trạng thái hiện tại và t đó, rồi tiến trạng thái một đoạn bằng vận tốc nhân dt. Bọc cả vòng lặp trong ngữ cảnh tắt gradient và trả về trạng thái cuối."},
+  {"level": 1, "when": "chưa biết tạo tensor t", "text": "Cần một tensor shape (B,) mà mọi phần tử bằng cùng một số thực k/steps, với đúng kiểu số và thiết bị của x: PyTorch có hàm tạo tensor chứa đầy một giá trị (tên bắt đầu bằng \"full\") nhận shape, giá trị, kiểu số và thiết bị."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "dt = 1 chia steps\nx = x0 (nhưng không sửa tại chỗ: mỗi bước gán x thành một tensor mới)\ntrong ngữ cảnh tắt gradient, lặp k = 0 .. steps-1:\n    t = tensor shape (B,) toàn giá trị k / steps, cùng kiểu số và thiết bị với x\n    v = model(x, t)\n    x = x cộng v nhân dt\ntrả x"},
+  {"level": 2, "when": "kẹt ở không sửa x0 tại chỗ", "text": "Phép cộng viết dạng `x = x + ...` tạo tensor mới và gán lại tên x, còn dạng cộng dồn tại chỗ (`+=`) ghi thẳng vào bộ nhớ của tensor cũ. Nếu x và x0 đang là cùng một tensor thì dạng sau làm hỏng x0 của người gọi."},
+  {"level": 3, "when": "kẹt ở tạo t và cập nhật", "text": "```python\nt = torch.full((x.shape[0],), k / steps, dtype=x.dtype, device=x.device)\nx = x + model(x, t) * dt\n```"},
+  {"level": 3, "when": "kẹt ở tắt gradient", "text": "```python\nwith torch.no_grad():\n    for k in range(steps):\n        ...  # mỗi bước như trên\nreturn x\n```"}
+]

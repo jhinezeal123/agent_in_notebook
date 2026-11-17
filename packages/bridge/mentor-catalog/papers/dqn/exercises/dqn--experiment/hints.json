@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_q_net_defined",
+    "text": "Sau khi cell train chạy xong, biến q_net có tồn tại không, và nó là mạng bạn đã train hay một mạng khác (ví dụ target_net, hay một QNet mới tạo sau vòng lặp)?"
+  },
+  {
+    "level": 0,
+    "test": "test_weights_finite",
+    "text": "Loss trong lúc train có lúc nào thành NaN hay vọt lên rất lớn không? Learning rate của bạn là bao nhiêu, và mạng target có được chép lại định kỳ không?"
+  },
+  {
+    "level": 0,
+    "test": "test_greedy_return",
+    "text": "Chính sách tham lam của q_net đạt return trung bình bao nhiêu? Nếu chỉ khoảng 10 đến 20, bạn đã train bao nhiêu bước thật sự (dqn_train_step có được gọi mỗi bước sau LEARN_START không), và đường return lúc train có đi lên không? Nếu lúc train có đoạn return cao mà mạng cuối lại thấp: bạn có giữ bản trọng số tốt nhất không?"
+  },
+  {
+    "level": 0,
+    "test": "test_beats_random",
+    "text": "Mạng của bạn có hơn chính sách ngẫu nhiên không? Hãy so return lúc train với return của chính sách tham lam trên q_net: chúng khác nhau thế nào và vì sao?"
+  },
+  {
+    "level": 0,
+    "test": "test_q_values_sane",
+    "text": "Giá trị Q lớn nhất ở trạng thái đầu của bạn là bao nhiêu, và con số tối đa có thể có (mỗi bước thưởng 1, gamma = 0,99) là bao nhiêu? Nếu Q vượt xa, cờ done và mạng target của bạn đang làm gì?"
+  },
+  {
+    "level": 1,
+    "text": "Ghép vòng lặp theo đúng thứ tự mỗi bước môi trường: chọn hành động theo ε hiện tại; bước môi trường; cất transition (với cờ kết thúc thật) vào buffer; nếu hết episode thì reset; một bước học (sau khi buffer có đủ dữ liệu); sao chép mạng target mỗi C bước. Các mảnh bạn đã viết làm hầu hết việc, vòng lặp chỉ nối chúng với môi trường."
+  },
+  {
+    "level": 1,
+    "when": "return lúc train không tăng",
+    "text": "Kiểm từng khâu riêng: ε có giảm theo bước không; dqn_train_step có trả về số (không phải None) sau khi buffer đủ dữ liệu; loss có giảm hoặc ít nhất không nổ; target_net có được chép định kỳ; và `done` bạn cất vào buffer là cờ kết thúc thật hay là `done or truncated`."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết cấu trúc vòng lặp",
+    "text": "dựng env, q_net, target_net (chép cứng từ q_net), optimizer, buffer, rng\nobs = env.reset(seed=...)\nlặp step từ 0 tới TOTAL_STEPS − 1:\n    eps = lịch ε theo step; a = select_action(q_net, obs, eps, rng)\n    obs2, r, done, truncated = env.step(a); đẩy (obs, a, r, obs2, done) vào buffer\n    cộng r vào return của episode; obs = obs2\n    nếu done hoặc truncated: ghi return, reset, return = 0\n    nếu step >= LEARN_START: một bước dqn_train_step\n    nếu step chia hết cho SYNC_EVERY: sync_target\n    mỗi EVAL_EVERY bước: đo evaluate(chính sách tham lam, 5, seed riêng); nếu cao nhất thì chép state_dict\nsau vòng lặp: nạp bản tốt nhất vào q_net"
+  },
+  {
+    "level": 2,
+    "when": "Q phát nổ hoặc không học",
+    "text": "Đối chiếu từng giá trị với bảng gợi ý: lr cỡ 5e-4 (không phải 5 hay 5e-2), gamma 0,99, batch 64, mạng target chép mỗi 250 bước và lúc đầu, buffer cất đúng thứ tự (s, a, r, s', done)."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khâu reset sau khi hết episode",
+    "text": "```python\nif done or truncated:\n    episode_returns.append(episode_return)\n    episode_return = 0.0\n    obs = env.reset()\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khâu dựng mạng target",
+    "text": "```python\nq_net = QNet()\ntarget_net = QNet()\nsync_target(q_net, target_net)\noptimizer = torch.optim.Adam(q_net.parameters(), lr=5e-4)\n```"
+  }
+]

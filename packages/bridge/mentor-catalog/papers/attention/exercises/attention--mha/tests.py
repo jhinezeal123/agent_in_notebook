@@ -94,7 +94,9 @@ def test_no_builtin(user, ref):
     """Tự tính attention theo Eq. 1, không gọi F.scaled_dot_product_attention"""
     m, _ = _pair(user, ref, seed=12)
     x = torch.randn(1, 4, D, generator=_g(13))
-    original = F.scaled_dot_product_attention
+    original = getattr(F, "scaled_dot_product_attention", None)
+    if original is None:
+        return
     calls = []
 
     def spy(*args, **kwargs):

@@ -1,0 +1,11 @@
+{
+  "id": "ddpm",
+  "title": "Denoising Diffusion Probabilistic Models",
+  "authors": "Ho, Jain, Abbeel",
+  "year": 2020,
+  "url": "https://arxiv.org/abs/2006.11239",
+  "arxiv": "2006.11239",
+  "closes": "generative",
+  "goal": "Ráp vòng lấy mẫu của DDPM từ các bài bạn đã làm (lịch nhiễu, loss L_simple, một bước reverse), rồi train một DDPM tí hon với U-Net cho sẵn trên chữ số MNIST (T = 200) và đo loss đơn giản trên tập kiểm tra. Ảnh mẫu sinh ra từ nhiễu thuần túy phải đọc được thành chữ số.",
+  "status": "ready"
+}

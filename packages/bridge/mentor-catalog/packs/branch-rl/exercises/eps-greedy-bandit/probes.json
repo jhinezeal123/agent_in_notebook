@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Lúc đầu mọi Q = 0 nên cả K tay đồng hạng. Nếu bạn luôn chọn tay đầu tiên trong số tay đồng hạng (như argmax), và thưởng thật của mọi tay đều dương, thì với eps = 0 chuyện gì xảy ra với phần còn lại của lượt chơi, và vì sao?",
+    "tag": "greedy-lock-in",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Tay 0 được kéo trước; thưởng dương làm q[0] > 0 = các tay khác, nên từ đó greedy chọn tay 0 mãi mãi, không bao giờ thử tay khác dù tay khác có thể tốt hơn nhiều. Greedy thuần không khám phá thì kẹt vào lựa chọn đầu tiên; ngay cả chọn ngẫu nhiên lúc hòa chỉ làm tay bị kẹt là ngẫu nhiên chứ vẫn kẹt."
+  },
+  {
+    "q": "Nhìn hình: eps = 0.1 học nhanh hơn eps = 0.01 ở đầu nhưng nếu chạy rất lâu thì eps = 0.01 có thể vượt. Vì sao có sự đổi chỗ đó, và epsilon cố định có gì chưa tối ưu khi đã biết rõ tay nào tốt?",
+    "tag": "explore-exploit",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Epsilon lớn khám phá nhiều nên tìm ra tay tốt sớm hơn, nhưng sau đó vẫn tiêu eps lượt vào tay ngẫu nhiên nên trần thưởng thấp hơn (tay tốt nhất chỉ được chọn 1 - eps + eps/K lần). Epsilon nhỏ chậm tìm nhưng cuối cùng khai thác nhiều hơn. Epsilon cố định lãng phí khi đã biết chắc; nên giảm epsilon dần theo thời gian (hoặc dùng phương pháp khám phá thông minh hơn như UCB)."
+  },
+  {
+    "q": "Công thức Q ← Q + (r − Q)/n. Chứng minh (hoặc giải thích) vì sao nó luôn bằng trung bình cộng của n thưởng đã thấy. Và nếu thay 1/n bằng một hằng số 0.1 thì Q còn là trung bình cộng không? Nó trở thành gì?",
+    "tag": "incremental-mean",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Từ Q_{n-1} = tổng_{n-1}/(n-1): Q_n = Q_{n-1} + (r_n − Q_{n-1})/n = ((n−1)Q_{n-1} + r_n)/n = tổng_n/n, nên mỗi thưởng có trọng số 1/n bằng nhau. Với hằng số alpha = 0.1 thì Q là trung bình mũ (exponential moving average): thưởng mới nhất có trọng số 0.1, thưởng cũ giảm dần theo (0.9)^k; nó quên quá khứ, hợp với bandit không dừng (giá trị thật đổi theo thời gian) nhưng không hội tụ về giá trị thật vì luôn dao động theo nhiễu."
+  },
+  {
+    "q": "Trong update, nếu bạn tính Q += (r − Q)/n rồi mới tăng n (hoặc chia cho n khi n còn bằng 0) thì lần kéo đầu tiên của một tay hỏng thế nào? Còn nếu khởi tạo Q = 5 (lạc quan) thay vì 0, lần kéo đầu của đúng công thức đã xóa giá trị 5 chưa?",
+    "tag": "update-order",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Chia khi n = 0 cho vô cùng hoặc nan (hoặc phải chặn thành 1 mới đúng), và nếu dùng n cũ thì ở mọi lần sau đều lệch một bậc: trung bình bị chia cho n−1 thay vì n. Phải tăng n trước, rồi dùng n mới: lần đầu trọng số là 1/1 nên Q = r, giá trị khởi tạo 5 bị xóa hoàn toàn (đó là lý do khởi tạo lạc quan trong sample-average chỉ có tác dụng đến lần kéo đầu, chứ không kéo dài như khi dùng bước hằng số)."
+  },
+  {
+    "q": "Bạn muốn hai lần chạy cùng seed cho cùng kết quả và muốn debug được. Vì sao hàm nhận rng làm tham số thay vì tự gọi np.random.choice bên trong? Điều gì sẽ hỏng khi chạy nhiều thí nghiệm song song hoặc khi người khác gọi np.random.seed ở chỗ khác?",
+    "tag": "explicit-rng",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "rng truyền vào là trạng thái ngẫu nhiên rõ ràng, thuộc về người gọi: cùng seed ra cùng chuỗi, mỗi thí nghiệm có dòng ngẫu nhiên riêng, nên tái lập được và không ảnh hưởng nhau. np.random toàn cục là trạng thái chung: bất kỳ code nào khác gọi seed hoặc rút số cũng làm chuỗi của bạn lệch, thí nghiệm song song giẫm lên nhau và không tái lập được."
+  },
+  {
+    "q": "Với K = 4, eps = 0.4, tay tốt nhất được chọn bao nhiêu phần trăm số lần? Nếu khi khám phá bạn chỉ chọn trong các tay không phải tay tốt nhất thì con số đó là bao nhiêu?",
+    "tag": "explore-includes-best",
+    "stage": "defend",
+    "kind": "shape",
+    "answer": "1 − eps + eps/K = 0.6 + 0.1 = 0.7 (khám phá chọn đều trong cả K tay nên vẫn có thể trúng tay tốt nhất). Nếu loại tay tốt nhất khỏi khám phá thì chỉ còn 1 − eps = 0.6, các tay khác mỗi tay 0.4/3 ≈ 0.133 thay vì 0.1."
+  }
+]

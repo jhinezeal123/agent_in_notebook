@@ -1,0 +1,14 @@
+{
+  "id": "gpt-mini",
+  "title": "GPT thu nhỏ: ráp embedding, khối Transformer và lm head",
+  "star": "gpt",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1800,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["Block", "GPT"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["causal-attention"]
+}

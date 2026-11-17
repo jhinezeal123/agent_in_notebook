@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trước khi train: một QNet vừa khởi tạo ngẫu nhiên, chơi tham lam (luôn chọn hành động có Q lớn nhất), đạt return cỡ bao nhiêu trên CartPole? Con số đó cao hơn hay thấp hơn chính sách chọn hành động ngẫu nhiên (khoảng 20), và vì sao?",
+    "tag": "untrained-greedy-baseline",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Thấp hơn: cỡ 9–10 bước. Mạng khởi tạo cho Q gần như không đổi theo trạng thái nên argmax chọn gần như cùng một hành động ở mọi bước: xe bị đẩy mãi một phía, gậy đổ rất nhanh. Chính sách ngẫu nhiên đẩy xen kẽ hai phía nên đỡ nghiêng hơn (khoảng 20). Vì vậy 'chưa train' không bằng 'ngẫu nhiên', và là mốc dưới thật sự."
+  },
+  {
+    "q": "Trong lúc train, return mỗi episode (khi ε còn lớn) có phải thước đo tốt cho chất lượng của q_net không? Vì sao máy chấm đo bằng chính sách tham lam trên các seed mới thay vì lấy đường return lúc train?",
+    "tag": "eval-vs-train-return",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Không: lúc train agent còn chọn ngẫu nhiên với xác suất ε (và ε chỉ giảm dần), nên return lúc train thấp hơn năng lực thật của q_net và còn phụ thuộc lịch ε. Đo đúng chính sách mà ta muốn dùng (tham lam, ε = 0) trên các seed chưa dùng khi train mới trả lời 'mạng này chơi tốt đến đâu'; seed mới còn kiểm tra nó không chỉ nhớ một vài trạng thái đầu."
+  },
+  {
+    "q": "Đường học của DQN trên CartPole thường dao động mạnh, có khi tụt từ 200 xuống vài chục rồi lên lại. Nêu hai nguyên nhân khiến việc học bằng bootstrapping với mạng nơ-ron không ổn định như vậy.",
+    "tag": "dqn-instability",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "(1) Mục tiêu TD dựa trên chính ước lượng của mạng nên sai số tự khuếch đại (bootstrapping + xấp xỉ hàm + học off-policy, 'bộ ba chết người'); mạng target chỉ làm dịu bớt. (2) Phân phối dữ liệu đổi theo chính sách: khi agent chơi giỏi, buffer chứa ít trạng thái xấu, mạng 'quên' chúng (catastrophic forgetting), chính sách tụt, rồi dữ liệu xấu quay lại. Cũng có: một mạng chung cho mọi trạng thái nên cập nhật ở chỗ này làm đổi Q ở chỗ khác."
+  },
+  {
+    "q": "Buffer của bạn đủ lớn để chứa mọi bước đã chơi. Nếu đổi thành dung lượng 1 000 thì điều gì xảy ra với đường học, và vì sao paper cần buffer lớn (1 triệu transition)?",
+    "tag": "replay-capacity",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Buffer nhỏ chỉ giữ vài episode gần nhất: dữ liệu mất đa dạng và tương quan mạnh với chính sách hiện tại, nên mạng quên những trạng thái cũ (nhất là trạng thái xấu khi chính sách đã khá hơn) và đường học dao động hoặc tụt. Buffer lớn trộn dữ liệu từ nhiều giai đoạn của chính sách, làm các batch giống i.i.d. hơn và ổn định hơn; paper dùng 1 triệu transition vì mỗi game có rất nhiều khung hình khác nhau."
+  },
+  {
+    "q": "Nếu đặt gamma = 0 thì Q học được cái gì, và chính sách tham lam sẽ chơi ra sao trên CartPole (mỗi bước thưởng 1)? Còn gamma rất gần 1?",
+    "tag": "gamma-effect",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "gamma = 0: mục tiêu chỉ là thưởng tức thời r = 1 ở mọi trạng thái và hành động, nên Q ≈ 1 ở khắp nơi, không phân biệt hành động tốt xấu; chính sách tham lam tùy tiện và return chỉ cỡ 10. Cần gamma đủ lớn để 'gậy đổ sau 30 bước' ảnh hưởng tới Q hiện tại. gamma rất gần 1 (ví dụ 0,999): Q có thể lên tới nghìn, mục tiêu rất nhạy với sai số, học chậm và dễ phân kỳ; 0,99 là thỏa hiệp (tầm nhìn cỡ 100 bước)."
+  },
+  {
+    "q": "Bạn chạy một lần với một seed và mean_return = 190. Có kết luận được 'cấu hình này giải được CartPole' không? Cần làm gì để tin được?",
+    "tag": "single-run-conclusion",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Chưa: DQN rất nhạy với seed (khởi tạo, thứ tự khám phá), và mạng ở bước cuối có thể đang ở đỉnh hay đáy của dao động. Cần chạy nhiều seed (ví dụ 5–10) và báo trung bình cùng độ lệch hoặc min/max; đo trên nhiều episode đủ để trung bình ổn; có thể thêm đường học theo thời gian để xem nó ổn định hay chỉ vừa chạm 190 một lần."
+  }
+]

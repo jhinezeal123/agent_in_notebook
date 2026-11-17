@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trước khi train: nếu mô hình đoán đều trên 13 token thì loss cross-entropy là bao nhiêu? Với label smoothing 0.1, loss có thể về 0 không, và nếu không thì sàn của nó ở khoảng nào?",
+    "tag": "loss-floor",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "Đoán đều: loss = ln 13 ≈ 2.56. Với label smoothing, phân phối đích không còn one-hot (token đúng có xác suất 0.9 + 0.1/13, mỗi token sai 0.1/13), nên ngay cả mô hình hoàn hảo cũng có loss bằng entropy của phân phối đích đó, khoảng 0.5; loss không thể về 0. Do đó loss ≈ 0.5 mới là \"đã học xong\", và token_acc mới là con số đáng nhìn."
+  },
+  {
+    "q": "Lúc train bạn đưa tgt_in = [BOS, đảo...] và so với tgt_out = [đảo..., EOS]. Nếu đưa nhầm tgt_out vào decoder, loss lúc train đẹp thế nào và token_acc lúc đo ra sao? Vì sao hai con số đó mâu thuẫn?",
+    "tag": "shift-teacher-forcing",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Đưa tgt_out vào decoder thì mỗi vị trí đã thấy sẵn đáp án của chính nó nên mô hình chỉ học chép: loss train rơi rất thấp. Lúc đo bằng greedy_decode, mô hình phải tự sinh từng token mà không có đáp án để chép nên token_acc gần ngẫu nhiên. Loss train chỉ tin được khi thông tin đưa vào lúc train giống thông tin có sẵn lúc suy luận."
+  },
+  {
+    "q": "Teacher forcing lúc train khác greedy decode lúc đo ở điểm nào? Nếu mô hình sai token đầu tiên thì các token sau chịu ảnh hưởng thế nào?",
+    "tag": "exposure-bias",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Lúc train decoder luôn thấy tiền tố đúng (teacher forcing); lúc đo nó thấy tiền tố do chính nó sinh. Sai một token thì tiền tố từ đó trở đi lệch khỏi những gì nó từng gặp, lỗi có thể lan sang các token sau (exposure bias); vì thế exact_match thấp hơn nhiều so với tích của xác suất từng vị trí theo lý thuyết teacher forcing, và token_acc ≥ exact_match."
+  },
+  {
+    "q": "Lịch learning rate Eq. 3 có warmup rồi giảm theo bước^-0.5. Điều gì có thể xảy ra với post-LN Transformer + Adam nếu dùng ngay lr đỉnh từ bước đầu? Con số lr đỉnh của bạn là bao nhiêu và suy ra từ đâu?",
+    "tag": "lr-warmup",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Lúc mới khởi tạo, ước lượng moment bậc hai của Adam còn nhiễu và gradient qua post-LN (LayerNorm nằm trên đường residual) lớn và không ổn định, nên bước nhảy lớn ngay từ đầu dễ làm loss phát nổ hoặc kẹt ở nghiệm xấu. Warmup tăng tuyến tính lr trong warmup_steps bước đầu cho mô hình ổn định, sau đó giảm theo bước^-0.5. Lr đỉnh = hệ số · d_model^-0.5 · warmup^-0.5 (= 0.5 · 0.125 · 0.05 ≈ 3·10^-3 với cấu hình gợi ý)."
+  },
+  {
+    "q": "Mô hình chỉ thấy chuỗi dài 8 lúc train. Trên chuỗi dài 12 token_acc_len12 ra sao so với token_acc, và điều đó nói gì về cách mô hình học việc đảo: nó đã học một quy tắc theo vị trí tương đối, hay thuộc lòng các vị trí tuyệt đối từng thấy?",
+    "tag": "length-generalization",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Thường token_acc_len12 thấp hơn nhiều (có thể gần ngẫu nhiên ở các vị trí mà mô hình chưa từng thấy), dù sinusoid về lý thuyết cho phép ngoại suy. Mô hình đã học ánh xạ \"vị trí đích t lấy vị trí nguồn 7 - t\" gắn với độ dài 8 (hằng số 7 nằm trong trọng số), không phải quy tắc \"lấy đối xứng qua chuỗi\" tổng quát. Học một quy tắc thuộc phân phối train không đảm bảo nó ngoại suy ngoài phân phối đó."
+  },
+  {
+    "q": "Vì sao lúc đo bắt buộc model.eval() (greedy_decode làm sẵn)? Điều gì đổi ở dropout, và token_acc nhiều khả năng đổi theo hướng nào nếu quên?",
+    "tag": "eval-mode",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Ở chế độ train dropout bỏ ngẫu nhiên 10% đầu ra các sublayer và của embedding: dự đoán trở nên nhiễu và ngẫu nhiên giữa các lần chạy. Ở eval dropout tắt, kết quả tất định và dùng đủ năng lực của mô hình. Quên eval thì token_acc thường thấp hơn một chút và dao động, đặc biệt exact_match vì chỉ cần một token sai là sai cả chuỗi."
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Bảng merge là [(\"a\",\"b\"), (\"b\",\"c\")]. Mã hoá \"abc\" ra gì? Nếu đảo thứ tự hai merge trong bảng thì ra gì, và vì sao thứ tự học phải được giữ nguyên khi mã hoá?",
+    "tag": "merge-order",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Thứ tự đúng cho [\"ab\", \"c\"] (merge đầu tiên chiếm chữ b); đảo thứ tự cho [\"a\", \"bc\"]. Mỗi merge được học trên chuỗi đã bị các merge trước biến đổi: (\"ab\",\"c\") chỉ tồn tại sau khi token \"ab\" đã có. Encoder phải tái hiện đúng quá trình đó thì mới ra đúng những token mà mô hình đã thấy lúc train."
+  },
+  {
+    "q": "Với bảng [(\"a\",\"a\")], mã hoá \"aaa\" và \"aaaa\" ra gì? Thêm merge (\"aa\",\"a\") sau đó thì \"aaaaa\" ra gì?",
+    "tag": "overlap-apply",
+    "stage": "lab",
+    "kind": "edge",
+    "answer": "\"aaa\" là [\"aa\",\"a\"]; \"aaaa\" là [\"aa\",\"aa\"]. Với \"aaaaa\": sau merge đầu là [\"aa\",\"aa\",\"a\"], merge (\"aa\",\"a\") chỉ khớp ở hai token cuối nên ra [\"aa\",\"aaa\"]. Mỗi merge quét một lượt từ trái sang phải, không dùng một token hai lần."
+  },
+  {
+    "q": "Văn bản có một ký tự chưa từng xuất hiện lúc học bảng merge (ví dụ một emoji). Encoder của bạn làm gì với nó, và vì sao decode(encode(x)) == x vẫn đúng?",
+    "tag": "lossless-roundtrip",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Nó thành một token đơn của riêng nó, không bị bỏ và không bị gộp; merge chỉ ghép các token liền kề lại nên không làm mất ký tự nào, và decode chỉ nối các token lại theo thứ tự, nên khôi phục đúng văn bản. (BPE cấp byte còn bảo đảm mọi ký tự đều có token vì từ vựng gốc là 256 byte.)"
+  },
+  {
+    "q": "Encode áp lần lượt từng merge qua cả chuỗi: chi phí cỡ bao nhiêu khi bảng có hàng chục nghìn merge? Cách nào nhanh hơn mà cho cùng kết quả?",
+    "tag": "encode-cost",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "O(n × số merge): mỗi merge quét cả chuỗi. Cách nhanh hơn: gán cho mỗi merge một hạng (thứ tự học), rồi lặp lại: tìm trong chuỗi cặp liền kề có hạng nhỏ nhất có trong bảng và gộp nó, tới khi không còn cặp nào trong bảng; và làm riêng từng từ (cache kết quả theo từ). Kết quả như áp tuần tự vì merge hạng thấp luôn được ưu tiên."
+  },
+  {
+    "q": "Hai merge khác nhau (\"a\",\"bc\") và (\"ab\",\"c\") cùng tạo chuỗi \"abc\". Chuyện đó có làm hỏng decode không? Có làm hỏng encode không nếu bạn so khớp merge bằng chuỗi nối?",
+    "tag": "token-string-ambiguity",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Decode không bị ảnh hưởng vì chỉ nối chuỗi. Encode thì có: nếu so khớp theo chuỗi nối (\"abc\") thì không phân biệt được hai merge, có thể gộp nhầm các token khác chia. Phải so khớp theo cặp token (trái, phải); thực tế các tokenizer lưu merge theo cặp hoặc theo id token để tránh nhập nhằng."
+  },
+  {
+    "q": "Vì sao tokenizer dùng bảng merge đã học, thay vì cứ tìm các token dài nhất khớp được trong từ vựng (longest match)? Hai cách có thể cho kết quả khác nhau không?",
+    "tag": "merges-vs-longest-match",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Có thể khác nhau. Áp merge theo thứ tự học tái hiện đúng cách văn bản huấn luyện đã được cắt, nên mô hình gặp lại đúng những token nó đã học. Longest match là một thuật toán khác (như WordPiece) và có thể chọn một cách cắt dài hơn nhưng hiếm hoặc chưa từng thấy lúc train."
+  }
+]

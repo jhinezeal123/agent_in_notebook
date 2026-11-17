@@ -1,0 +1,13 @@
+{
+  "id": "causal-attention",
+  "title": "Causal self-attention (mask tam giác)",
+  "star": "gpt",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1650,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["CausalSelfAttention"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

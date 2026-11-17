@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Hai sublayer attention dùng chung một đối tượng hay mỗi cái một đối tượng riêng? Và có bao nhiêu LayerNorm, vì sao?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward_eval",
+    "text": "Ba sublayer chạy theo thứ tự nào, và sublayer nào nhận memory? Mỗi sublayer có residual riêng không?"
+  },
+  {
+    "level": 0,
+    "test": "test_depends_on_memory",
+    "text": "Trong cross-attention của bạn, đối số nào của MultiHeadAttention nhận x và đối số nào nhận memory? Cái nào đóng vai query?"
+  },
+  {
+    "level": 0,
+    "test": "test_causal_mask",
+    "text": "tgt_mask được truyền vào sublayer nào, và có sublayer khác cũng đang dùng nó không?"
+  },
+  {
+    "level": 0,
+    "test": "test_memory_mask",
+    "text": "memory_mask che các vị trí của chuỗi nào, và nó nằm ở trục nào của điểm attention: query hay key?"
+  },
+  {
+    "level": 0,
+    "test": "test_both_masks",
+    "text": "Khi gọi self_attn và cross_attn, mỗi lời gọi nhận mask nào? Bạn có thể nói được vì sao hai mask có shape khác nhau không?"
+  },
+  {
+    "level": 0,
+    "test": "test_dropout",
+    "text": "Với dropout = 1.0 thì cả ba đầu ra sublayer bằng bao nhiêu? Lúc đó đầu ra của cả lớp còn lại gì?"
+  },
+  {
+    "level": 1,
+    "text": "Trong __init__ tạo hai attention riêng, một FFN, ba LayerNorm và một Dropout. forward chạy ba sublayer liên tiếp, mỗi sublayer theo cùng một công thức: tính đầu ra sublayer, qua dropout, cộng với đầu vào của chính sublayer đó, rồi LayerNorm. Sublayer 1 là self-attention của chuỗi đích với tgt_mask; sublayer 2 là cross-attention, query lấy từ chuỗi đích còn key và value lấy từ memory, với memory_mask; sublayer 3 là FFN."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "forward(x, memory, tgt_mask, memory_mask):\n  x = norm1( x + dropout( self_attn(q=x, k=x, v=x, mask=tgt_mask) ) )\n  x = norm2( x + dropout( cross_attn(q=x, k=memory, v=memory, mask=memory_mask) ) )\n  x = norm3( x + dropout( ffn(x) ) )\n  trả về x"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở shape của cross-attention",
+    "text": "q: (B, T, d_model) từ decoder; k, v: (B, S, d_model) từ memory. Điểm attention (B, n_heads, T, S); đầu ra (B, T, d_model): mất trục S, giữ trục T. Do đó phép cộng residual với x (B, T, d_model) hợp lệ."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở sublayer cross-attention",
+    "text": "```python\nx = self.norm2(x + self.drop(self.cross_attn(x, memory, memory, memory_mask)))\n```"
+  }
+]

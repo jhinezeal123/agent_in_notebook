@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab: khi D rất tự tin ảnh là giả (logit ≪ 0), loss −log D của G lớn hay nhỏ, và độ dốc của nó theo logit bằng khoảng bao nhiêu? Đó có phải thứ bạn muốn G nhận khi G đang thua nặng không?",
+    "tag": "nonsat-gradient",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Loss lớn (≈ -ℓ, tăng gần tuyến tính khi logit càng âm) và độ dốc theo logit tiến tới -1, tức gradient KHÔNG tắt: G vẫn nhận tín hiệu mạnh đúng lúc nó tệ nhất. Đó chính là lý do dùng dạng non-saturating: đầu training G sinh ảnh rất xấu, D dễ dàng phân biệt, và ta cần G học nhanh lúc đó."
+  },
+  {
+    "q": "Khi D đoán 0.5 cho mọi ảnh (logit 0 ở mọi nơi), loss của D và loss non-saturating của G bằng bao nhiêu? Vì sao con số của D là một mốc đáng nhớ khi theo dõi train GAN?",
+    "tag": "gan-equilibrium-value",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "Mỗi hạng của D là ln 2 nên loss D = 2 ln 2 ≈ 1.386; loss G = ln 2 ≈ 0.693. Ở điểm cân bằng lý thuyết, p_g = p_data thì D tối ưu không phân biệt được và cho 0.5 ở mọi nơi, nên loss D tiến về 2 ln 2: nếu train thấy loss D rớt xa dưới 1.386 thì D đang thắng (G thua), còn nếu D loss dao động quanh 1.386 thì hai bên cân sức (hoặc cả hai đều vô dụng)."
+  },
+  {
+    "q": "Tại sao khi cập nhật D người ta đưa ảnh giả vào dưới dạng fake.detach(), còn khi cập nhật G thì logits của D tính trên ảnh giả không được detach? Nếu quên detach ở bước của D thì chuyện gì xảy ra?",
+    "tag": "gan-detach",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Bước của D chỉ được cập nhật tham số của D: detach ảnh giả cắt đường gradient trước G, nên loss của D không đẩy gradient về G (và đỡ tính toán). Nếu quên, backward của loss D vẫn tính gradient vào tham số G (tích lũy vào .grad); nếu optimizer của G dùng chúng ở bước sau mà không zero_grad, G bị cập nhật bằng mục tiêu của D (làm G \"giúp\" D phân biệt tốt hơn), còn nếu chỉ tốn bộ nhớ thì vẫn phí. Bước của G ngược lại cần gradient đi từ loss, qua D, về ảnh giả, về G: nên logits của D không được detach."
+  },
+  {
+    "q": "Bạn tính −log(sigmoid(ℓ)) thay vì dùng BCE-with-logits. Với ℓ = -150 trong float32 ra gì, và với hạng −log(1 − sigmoid(ℓ)) và ℓ = +30 thì sao? Tại sao hai chiều này đối xứng nhau?",
+    "tag": "bce-logits-stability",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "sigmoid(-150) ≈ 7e-66 trong float32 là 0 chính xác, nên −log(0) = inf. Ở chiều ngược, sigmoid(30) = 1 chính xác trong float32 (ngưỡng ≈ 17), nên 1 − sigmoid(30) = 0 và −log(0) = inf. Hai chiều đối xứng vì 1 − σ(ℓ) = σ(−ℓ): chúng đều là log của một xác suất bị làm tròn về 0. BCE-with-logits dùng dạng softplus: max(ℓ, 0) − ℓ·y + log(1 + e^−|ℓ|), không bao giờ lấy log của số bằng 0."
+  },
+  {
+    "q": "Vì sao loss của D trung bình theo từng nhóm (thật, giả) riêng rồi cộng, thay vì gộp hai nhóm vào một tensor rồi lấy trung bình? Hai cách khác nhau ra sao nếu số ảnh thật và ảnh giả khác nhau?",
+    "tag": "gan-batch-mean",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Loss gốc là −E_data[log D] − E_z[log(1 − D)]: hai kỳ vọng độc lập, mỗi cái trung bình trên nhóm của nó. Gộp rồi trung bình thì mỗi ảnh có trọng số 1/(Br + Bf): nhóm đông hơn áp đảo, và với cỡ bằng nhau thì cả hàm nhỏ đi một nửa. Cách đúng cho phép hai nhóm có cỡ khác nhau mà không đổi tỉ trọng giữa \"nhận ra ảnh thật\" và \"nhận ra ảnh giả\"."
+  },
+  {
+    "q": "GAN không có một con số loss duy nhất cho biết ảnh sinh ra đẹp đến đâu. Vì sao loss của G giảm chưa chắc là G tốt lên?",
+    "tag": "gan-loss-meaning",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Loss của G đo \"D đang bị lừa tới đâu\", nhưng D cũng thay đổi theo: loss G có thể giảm vì D yếu đi (không còn phân biệt được), hoặc tăng vì D mạnh lên dù G vẫn đang cải thiện. Hai loss ràng buộc nhau nên không đơn điệu và không là thước đo tuyệt đối chất lượng ảnh; chất lượng phải đo ngoài mạng (nhìn ảnh, FID…). Đó là một khác biệt lớn so với VAE hay DDPM, nơi có một mục tiêu cố định để theo dõi."
+  }
+]

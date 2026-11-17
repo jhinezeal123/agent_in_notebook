@@ -1,0 +1,14 @@
+{
+  "id": "p-sample",
+  "title": "DDPM: một bước reverse p_sample (Alg. 2)",
+  "star": "ddpm",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1850,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 4,
+  "functions": ["p_sample"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["noise-schedule"]
+}

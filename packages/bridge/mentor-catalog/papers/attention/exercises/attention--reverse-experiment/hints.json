@@ -1,0 +1,46 @@
+[
+  {
+    "level": 0,
+    "test": "test_model_defined",
+    "text": "Sau khi cell train chạy xong, biến tên model có đang giữ Transformer của bạn không? Bạn có đặt tên khác, hoặc chạy lại một cell khác ghi đè nó?"
+  },
+  {
+    "level": 0,
+    "test": "test_weights_finite",
+    "text": "Loss trong lúc train có lúc nào thành NaN không? Learning rate ở những bước đầu tiên của bạn là bao nhiêu: tăng dần hay lớn ngay?"
+  },
+  {
+    "level": 0,
+    "test": "test_reverse_eight",
+    "text": "Loss cuối của bạn xuống tới đâu? Nếu loss thấp mà token_acc vẫn thấp: lúc train bạn đưa gì vào decoder, và lúc đo greedy_decode đưa gì vào decoder?"
+  },
+  {
+    "level": 0,
+    "test": "test_reverse_eight",
+    "text": "Bạn đã gọi model.train() trước vòng lặp chưa, và mỗi bước có lấy một batch mới hay lặp một batch cố định?"
+  },
+  {
+    "level": 1,
+    "text": "Dựng model, rồi optimizer Adam (đúng β và ε của paper) với lr cơ sở 1.0 và một scheduler đặt lr mỗi bước theo Eq. 3 (hệ số nhân của scheduler chính là giá trị lrate, tính từ step đếm từ 1). Mỗi bước của vòng lặp: lấy một batch mới từ make_batch; forward với src và tgt_in; cross-entropy giữa logits và tgt_out (với label smoothing 0.1); xóa gradient; backward; bước optimizer; bước scheduler. Chú ý F.cross_entropy nhận logits (N, C) và nhãn (N): trục batch và trục thời gian phải gộp lại."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "model = Transformer(VOCAB_SIZE, d_model=64, n_heads=4, d_ff=128, n_layers=2, dropout=0.1)\noptimizer = Adam(tham số của model, lr=1.0, betas=(0.9, 0.98), eps=1e-9)\nscheduler = LambdaLR(optimizer, hàm của step trả hệ số lrate của Eq. 3 nhân 0.5)\nmodel.train()\nlặp 4000 lần:\n  src, tgt_in, tgt_out = make_batch(128, SEQ_LEN, generator)\n  logits = model chạy trên (src, tgt_in)       # (B, T, VOCAB_SIZE)\n  loss = cross_entropy(logits làm phẳng thành (B*T, VOCAB_SIZE), tgt_out làm phẳng thành (B*T,), label_smoothing=0.1)\n  optimizer.zero_grad(); loss.backward(); optimizer.step(); scheduler.step()"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở lịch learning rate",
+    "text": "LambdaLR gọi hàm của bạn với số bước bắt đầu từ 0 và nhân kết quả với lr cơ sở. Eq. 3 cần step bắt đầu từ 1 (step^-0.5 không xác định ở 0): trong hàm, dùng step + 1. Hai nhánh của min là nhánh giảm theo step^-0.5 và nhánh tăng tuyến tính theo step · warmup^-1.5; chúng bằng nhau đúng ở step = warmup."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở lịch learning rate",
+    "text": "```python\nnoam = lambda step: 0.5 * D_MODEL ** -0.5 * min((step + 1) ** -0.5, (step + 1) * WARMUP ** -1.5)\nscheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, noam)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở loss",
+    "text": "```python\nloss = F.cross_entropy(logits.reshape(-1, VOCAB_SIZE), tgt_out.reshape(-1), label_smoothing=0.1)\n```"
+  }
+]

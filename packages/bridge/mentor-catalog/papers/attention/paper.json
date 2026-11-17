@@ -6,6 +6,6 @@
   "url": "https://arxiv.org/abs/1706.03762",
   "arxiv": "1706.03762",
   "closes": "foundation",
-  "goal": "Tự dựng lại Transformer encoder-decoder của paper (multi-head attention, positional encoding, các lớp post-LN) rồi train bản thu nhỏ trên CPU vài phút để nó học đảo ngược chuỗi chữ số, một bài \"dịch\" đồ chơi.",
+  "goal": "Tự dựng lại Transformer encoder-decoder của paper (multi-head attention, positional encoding, các lớp post-LN) rồi train bản thu nhỏ vài phút trên GPU của Kaggle để nó học đảo ngược chuỗi chữ số, một bài \"dịch\" đồ chơi.",
   "status": "ready"
 }

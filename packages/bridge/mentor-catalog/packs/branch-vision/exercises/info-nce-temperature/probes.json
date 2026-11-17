@@ -1,0 +1,37 @@
+[
+  {
+    "q": "So dự đoán của bạn với kết quả thật: khi mọi embedding giống hệt nhau, loss và gradient theo log_scale là bao nhiêu? Chỗ nào làm bạn đoán lệch, và con số đó có phụ thuộc temperature không?",
+    "tag": "predict-vs-reality",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Loss = log(2N − 1) cho mọi τ, và gradient theo log_scale bằng 0: mọi logit trong một hàng bằng nhau nên softmax đều và đổi thang đo (temperature) không đổi gì. Khi τ → ∞ cũng ra log(2N − 1) với embedding bất kỳ (mọi s/τ → 0). Khi các view trùng nhau và trực giao với ảnh khác, loss = log(1 + (2N − 2)e^{-s}) giảm theo s và tiến tới 0 khi s → ∞."
+  },
+  {
+    "q": "Với các ảnh trực giao và hai view trùng nhau, gradient của loss theo log_scale âm. Nếu để log_scale tự do mà không chặn, điều gì xảy ra theo thời gian, và vì sao đó là vấn đề dù loss giảm?",
+    "tag": "temperature-runaway",
+    "kind": "break",
+    "stage": "lab",
+    "answer": "Loss giảm khi s tăng nên bộ tối ưu mãi đẩy log_scale lên, τ → 0. Loss tiến tới 0 nhưng chỉ nhờ phóng đại độ giống, không nhờ cải thiện embedding; softmax thành gần one-hot, gradient bị chi phối bởi vài hard negative (có thể là false negative), tính toán trở nên không ổn định và độ lớn gradient lên rất cao. Chặn s ≤ 100 (τ ≥ 0.01) giữ cho việc học thang đo không chạy mất."
+  },
+  {
+    "q": "Vì sao tham số học là log(1/τ) mà không phải τ? Nếu học thẳng τ bằng gradient descent thì sẽ gặp rắc rối gì (nghĩ tới τ gần 0 và dấu của τ)?",
+    "tag": "log-parametrization",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "τ phải dương: học thẳng thì một bước gradient có thể đẩy nó âm hoặc về 0 (chia cho 0, nghịch dấu). log_scale tự do trên toàn trục thực, và exp luôn dương. Hơn nữa loss phụ thuộc τ qua 1/τ nên nhạy rất mạnh ở τ nhỏ; trong không gian logarit bước cập nhật có tỷ lệ đều (tác động nhân), phù hợp hơn với một đại lượng thang đo."
+  },
+  {
+    "q": "Nếu bạn chặn bằng cách sửa tham số tại chỗ (đưa log_scale về ln 100 sau mỗi bước optimizer) thay vì clamp trong forward, thì gradient lúc s đang ở ngoài ngưỡng và giá trị tham số lưu lại khác nhau thế nào giữa hai cách?",
+    "tag": "clamp-gradient",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Clamp trong forward: ngoài ngưỡng, đầu ra không phụ thuộc tham số nên gradient bằng 0, tham số không bị kéo thêm gì (và giá trị lưu lại đúng là số người gọi đặt, có thể nằm ngoài ngưỡng); gradient được định nghĩa sạch. Sửa tại chỗ (cách CLIP làm, sau optimizer): tham số luôn bị đưa về biên, nhưng vì loss tính ở s thật nằm trong khoảng nên gradient vẫn khác 0 và mỗi bước lại đẩy nó ra ngoài rồi bị ép về: hai thứ giằng co nhau. Bài này chọn clamp trong forward để gradient và tham số đều nhất quán."
+  },
+  {
+    "q": "Với N = 256 và mọi embedding như nhau, loss là bao nhiêu? Khi loss lúc bắt đầu huấn luyện gần số đó, nó nói gì về embedding của mô hình, và nó có phụ thuộc temperature không?",
+    "tag": "nt-xent-collapse-loss",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "log(2·256 − 1) = log(511) ≈ 6,24, không phụ thuộc τ. Nếu loss lúc đầu quanh giá trị đó, embedding gần như không phân biệt được các mẫu (mô hình đang đoán đều giữa 511 ứng viên): đó là điểm xuất phát bình thường, và loss tụt dưới nó nghĩa là mô hình đã bắt đầu phân biệt được positive."
+  }
+]

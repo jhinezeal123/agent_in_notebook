@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_return_type",
+    "text": "Bảng merge bạn trả về là gì: list của loại phần tử nào? Mỗi phần tử có mấy thành phần và chúng thuộc kiểu gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_hand_examples",
+    "text": "Sau khi thay một cặp bằng token mới, vòng sau bạn đếm trên chuỗi nào: chuỗi ký tự ban đầu hay chuỗi vừa thay?"
+  },
+  {
+    "level": 0,
+    "test": "test_recount_after_merge",
+    "text": "Token \"ab\" vừa tạo ra có thể đứng cạnh token nào? Cặp nào mới hình thành mà bảng đếm của vòng trước chưa có?"
+  },
+  {
+    "level": 0,
+    "test": "test_tie_break",
+    "text": "Khi hai cặp có cùng số lần xuất hiện, bạn chọn cái nào, và lựa chọn đó có đổi khi văn bản có cùng các cặp nhưng xuất hiện theo thứ tự khác không?"
+  },
+  {
+    "level": 0,
+    "test": "test_overlap",
+    "text": "Trong \"aaaaa\" cặp (\"a\", \"a\") được đếm mấy lần? Khi thay, bạn quét từ đầu hay từ cuối, và sau khi gộp hai ký tự đầu thì quét tiếp từ vị trí nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_short_and_empty",
+    "text": "Khi chuỗi chỉ còn một token hoặc rỗng, không còn cặp nào để chọn: chương trình của bạn làm gì ở vòng đó?"
+  },
+  {
+    "level": 1,
+    "text": "Viết thành hai việc nhỏ lặp lại num_merges lần. Việc một: duyệt chuỗi token hiện tại, đếm số lần của từng cặp hai token liền kề, rồi chọn cặp có đếm lớn nhất, hòa thì chọn cặp nhỏ nhất theo so sánh tuple. Việc hai: dựng chuỗi mới bằng cách duyệt từ trái sang phải, chỗ nào gặp cặp vừa chọn thì thay hai token bằng một token nối lại và nhảy qua cả hai. Nhớ dừng sớm khi không còn cặp nào."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "seq = danh sách ký tự của text; merges = []\nlặp num_merges lần:\n    counts = từ điển cặp -> số lần, đếm trên seq hiện tại\n    nếu counts rỗng: dừng\n    best = cặp có (số lần lớn nhất, rồi cặp nhỏ nhất)\n    thêm best vào merges\n    seq = seq với mọi best được thay bằng một token nối lại\ntrả về merges"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở bước thay cặp trong chuỗi",
+    "text": "Dùng một con trỏ i chạy từ 0 và một danh sách kết quả. Tại i: nếu còn token i+1 và (seq[i], seq[i+1]) là cặp cần thay thì thêm token nối của hai cái vào kết quả và tăng i thêm 2; ngược lại thêm seq[i] và tăng i thêm 1. Vì sao phải tăng thêm 2 chứ không phải 1?"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở luật hòa",
+    "text": "```python\nbest = min(counts, key=lambda p: (-counts[p], p))\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở bước thay cặp trong chuỗi",
+    "text": "```python\nout, i = [], 0\nwhile i < len(seq):\n    if i + 1 < len(seq) and (seq[i], seq[i + 1]) == best:\n        out.append(seq[i] + seq[i + 1])\n        i += 2\n    else:\n        out.append(seq[i])\n        i += 1\n```"
+  }
+]

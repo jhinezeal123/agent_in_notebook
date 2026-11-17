@@ -1,0 +1,13 @@
+{
+  "id": "ppo-clip-loss",
+  "title": "PPO: loss thay thế có cắt (clipped surrogate)",
+  "star": "ppo",
+  "skills": ["formula", "theory"],
+  "difficulty": 1900,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["ppo_clip_loss"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

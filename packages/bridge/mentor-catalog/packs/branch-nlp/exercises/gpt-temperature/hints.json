@@ -1,0 +1,91 @@
+[
+  {
+    "level": 0,
+    "test": "test_shapes",
+    "text": "Softmax chạy theo trục nào của logits (B, V) hoặc (B, T, V)? Và sau khi cộng các số hạng của entropy, những trục nào còn lại trong kết quả?"
+  },
+  {
+    "level": 0,
+    "test": "test_values",
+    "text": "Temperature đi vào công thức ở đâu: nhân hay chia logits, và trước hay sau khi đổi sang xác suất? Với temperature = 1 thì kết quả của bạn phải trùng hàm softmax quen thuộc nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_sharper_flatter",
+    "text": "Chia logits cho một số nhỏ hơn 1 làm các logit xa nhau hơn hay gần nhau hơn? Khi đó phân phối nhọn hơn hay phẳng hơn, và entropy đổi theo chiều nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_zero_temperature",
+    "text": "Nếu tính z / T với T = 0 thì mỗi phần tử ra gì (để ý dấu của z)? Softmax của vector gồm các giá trị đó ra gì? Giới hạn của softmax(z / T) khi T tiến tới 0 là gì, và có thể viết thẳng nó ra không cần chia?"
+  },
+  {
+    "level": 0,
+    "test": "test_high_temperature",
+    "text": "Khi T cực lớn thì z / T tiến tới đâu? Phân phối softmax khi đó trông thế nào, và entropy của nó bằng bao nhiêu (theo số token còn xác suất khác 0)?"
+  },
+  {
+    "level": 0,
+    "test": "test_masked_logits",
+    "text": "Một token bị che bằng -inf có xác suất bao nhiêu sau softmax? Khi tính p nhân log p cho phần tử đó, bạn nhân hai giá trị nào, và tích của chúng trong máy ra gì? Quy ước toán học 0·ln 0 bằng bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_entropy_values",
+    "text": "Entropy của phân phối đều trên 6 token phải bằng bao nhiêu? Của phân phối one-hot? Bạn đang dùng logarit tự nhiên hay cơ số khác, và có đặt dấu trừ đúng chỗ không?"
+  },
+  {
+    "level": 0,
+    "test": "test_large_logits",
+    "text": "exp(1000) trong float32 bằng bao nhiêu? Làm sao tính softmax của các logit cỡ hàng nghìn mà không bị tràn số, và vì sao cách đó không làm đổi kết quả?"
+  },
+  {
+    "level": 0,
+    "test": "test_negative_temperature",
+    "text": "Chia logits cho một số âm thì thứ tự xếp hạng các token ra sao? Hàm của bạn có nên chấp nhận điều đó không, và nếu không thì nên báo lỗi bằng cách nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_input_unchanged",
+    "text": "Phép chia logits cho temperature của bạn tạo ra tensor mới hay ghi đè lên chính logits của người gọi? Bạn viết nó dưới dạng a / b hay a /= b?"
+  },
+  {
+    "level": 1,
+    "text": "Hai hàm độc lập. temperature_probs chia ba trường hợp theo temperature: âm thì báo lỗi; đúng bằng 0 thì trả thẳng giới hạn, một phân phối dồn hết vào vị trí logit lớn nhất theo trục cuối; dương thì chia logits cho temperature rồi softmax theo trục cuối. entropy: lấy từng số hạng p nhân ln p (đặt đúng 0 ở nơi p = 0), cộng theo trục cuối rồi đổi dấu."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "temperature_probs(z, tau):\n  nếu tau < 0: báo ValueError\n  nếu tau == 0: one-hot của vị trí lớn nhất theo trục cuối, cùng kiểu số với z\n  còn lại: softmax(z / tau) theo trục cuối\nentropy(p):\n  mỗi phần tử: p * ln(p), nhưng bằng 0 nếu p = 0\n  cộng theo trục cuối, đổi dấu"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở temperature = 0",
+    "text": "Tìm vị trí của logit lớn nhất theo trục cuối: ra tensor chỉ số shape (...,). Rồi đổi chỉ số thành vector one-hot dài V: PyTorch có một hàm nhận tensor chỉ số và số lớp. Kết quả có kiểu số nguyên, nên đổi về cùng kiểu số thực với logits."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở 0·ln 0 ra nan",
+    "text": "Với p = 0, log(p) = -inf và 0 · (-inf) = nan nên cả hàng bị nhiễm nan. Hai hướng sửa: (a) dùng hàm PyTorch tính x·ln(y) có sẵn quy ước kết quả bằng 0 khi x = 0; (b) chỉ giữ số hạng ở nơi p > 0 (ví dụ chọn bằng điều kiện), các nơi khác đặt bằng 0 trước khi cộng."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở logits rất lớn",
+    "text": "Hàm softmax của PyTorch đã ổn định sẵn. Nếu tự viết bằng exp: trừ đi logit lớn nhất của từng hàng (giữ chiều) trước khi lấy exp; kết quả không đổi vì tử và mẫu cùng nhân một hệ số, nhưng số lớn nhất sau khi trừ là 0 nên exp không tràn."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở temperature = 0",
+    "text": "```python\nif temperature == 0:\n    idx = logits.argmax(dim=-1)\n    return F.one_hot(idx, logits.size(-1)).to(logits.dtype)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở entropy với phần tử bằng 0",
+    "text": "```python\nreturn -torch.xlogy(probs, probs).sum(dim=-1)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khung ba nhánh",
+    "text": "```python\nif temperature < 0:\n    raise ValueError(\"temperature phải >= 0\")\nif temperature == 0:\n    ...  # one-hot ở logit lớn nhất\nreturn F.softmax(logits / temperature, dim=-1)\n```"
+  }
+]

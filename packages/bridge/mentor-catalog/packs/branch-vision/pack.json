@@ -1,0 +1,6 @@
+{
+  "protocol": 1,
+  "id": "branch-vision",
+  "name": "Nhánh thị giác (CV)",
+  "description": "Bài cho các sao Khối ResNet, Patch embedding, Contrastive loss (đợt 4)."
+}

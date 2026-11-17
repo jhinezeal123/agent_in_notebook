@@ -1,6 +1,6 @@
 # Mentor — spec thiết kế đợt 3 (Reproduce paper) và đợt 4 (Bốn nhánh)
 
-Trạng thái: **đã duyệt, đang làm** (16/11/2026). Năm quyết định ở G.3 theo đề xuất. Phần máy của đợt 3 (3a, 3b, 3c) đã cài; nội dung (bài PyTorch căn bản, paper mốc, các bài đợt 4) đang soạn.
+Trạng thái: **đã duyệt; nội dung đã soạn xong và đã kiểm đủ trên Kaggle** (17/11/2026). Năm quyết định ở G.3 theo đề xuất. Phần máy của đợt 3 (3a, 3b, 3c) đã cài. Nội dung: 4 bài PyTorch căn bản, 35 bài đợt 4 (bốn gói `packs/branch-*`), bảy paper mốc (`papers/attention`, `lora`, `ddpm`, `resnet`, `vit`, `dqn`, `ppo`). Bài chỉ cần numpy qua `ainb mentor check` trên máy; **mọi bài cần PyTorch đã qua `ainb mentor verify` trên Kaggle (2 × T4)** và có dấu trong `verified.json`, nên đã tới tay người học (`ainb mentor reload`: 79 bài). Lỗi gặp và đã sửa trong lúc kiểm: `docs/mentor-verify-kernel-busy.md`.
 
 Tài liệu này nối tiếp "Spec: Mentor" (đã duyệt cho cả bốn đợt ở mức trải nghiệm, mục 3.11 và mục 5) và `docs/architecture.md` § Mentor (cách đợt 1–2 đang chạy). Phần A–C viết cho người dùng; phần D–G là thiết kế kỹ thuật, đường dẫn tính từ `packages\`.
 

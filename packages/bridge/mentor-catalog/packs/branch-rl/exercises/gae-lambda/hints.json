@@ -1,0 +1,46 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_example",
+    "text": "Với lambda = 0, ngoặc vuông còn lại số hạng nào? Với lambda = 1, còn số hạng nào? Hai số hạng đó ở bước cuối của rollout lần lượt bằng bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_last_step_does_not_depend_on_lambda",
+    "text": "Khi bắt đầu vòng lặp ngược, bạn mang theo hai thứ cho 'bước sau': giá trị V và return G. Cả hai khởi đầu bằng bao nhiêu? Nếu chúng bằng nhau thì lambda có còn ảnh hưởng gì ở bước cuối?"
+  },
+  {
+    "level": 0,
+    "test": "test_done_blocks_both_terms",
+    "text": "Bước t là bước cuối episode: số hạng nào trong ngoặc vuông còn có nghĩa? Hệ số (1 - done) của bạn bao trùm cả ngoặc hay chỉ một trong hai số hạng?"
+  },
+  {
+    "level": 0,
+    "test": "test_equals_returns_of_compute_gae",
+    "text": "Bài gae của bạn cho returns = A + V. Thử tính tay một rollout hai bước bằng cả hai cách: hai dạng đệ quy có cho cùng số không? Nếu lệch, thứ nào bạn cập nhật sau khi dùng nó: V hay G của bước sau?"
+  },
+  {
+    "level": 0,
+    "test": "test_exact_values_make_lambda_irrelevant",
+    "text": "Nếu V_t đúng bằng r_t + gamma * V_(t+1) với mọi t thì (1 - lambda) * V_(t+1) + lambda * G_(t+1) bằng bao nhiêu nếu G_(t+1) cũng bằng V_(t+1)?"
+  },
+  {
+    "level": 1,
+    "text": "Duyệt ngược từ bước cuối, mang theo hai số cho bước sau: V (khởi đầu là last_value) và return G (cũng khởi đầu là last_value). Ở mỗi bước: pha trộn hai số đó theo tỉ lệ (một trừ lambda) cho V và lambda cho G, nhân với gamma và với (một trừ done), rồi cộng thưởng hiện tại để được G của bước này. Ghi nó vào mảng kết quả, rồi cập nhật: G bước sau trở thành G vừa tính, V bước sau trở thành V của bước này (sau khi đã dùng nó). Dùng bản đã detach của values."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "values = values đã detach; out = mảng 0 cùng shape với rewards\nnext_return = last_value; next_value = last_value\nvới t từ T-1 xuống 0:\n    trộn = (1 - lam) * next_value + lam * next_return\n    next_return = rewards[t] + gamma * (1 - dones[t]) * trộn\n    out[t] = next_return\n    next_value = values[t]"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chỗ dùng sai V",
+    "text": "V của bước sau phải được dùng trước khi bạn ghi đè nó bằng V của bước hiện tại. Đặt dòng cập nhật next_value ở cuối thân vòng lặp, sau khi đã tính return của bước này."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở thân vòng lặp",
+    "text": "```python\nnonterminal = 1.0 - dones[t]\nbootstrap = (1.0 - lam) * next_value + lam * next_return\nnext_return = rewards[t] + gamma * nonterminal * bootstrap\nout[t] = next_return\nnext_value = values[t]\n```"
+  }
+]

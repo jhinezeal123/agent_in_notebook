@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Trong lab: sai số MỘT bước Euler tỉ lệ với luỹ thừa nào của dt (độ dốc log-log)? Vậy khi đi hết [0, 1] bằng N = 1/dt bước, sai số tổng tỉ lệ với luỹ thừa nào, và gấp đôi số bước làm sai số cuối giảm mấy lần?",
+    "tag": "euler-first-order",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Một bước sai cỡ dt² (độ dốc ≈ 2) vì tiếp tuyến chỉ đúng ở điểm xuất phát và nghiệm cong đi, sai số là phần cong ∝ dt². N = 1/dt bước cộng dồn cho sai số tổng cỡ N·dt² = dt, tức bậc MỘT: gấp đôi số bước giảm sai số khoảng một nửa. Vì vậy Euler muốn chính xác gấp 10 lần phải tốn gấp 10 lần số lần gọi mô hình."
+  },
+  {
+    "q": "Trong lab: cuối bước đoạn đỏ nằm trên hay dưới nghiệm thật khi trường là v = −x, và vì sao? Điều này gợi ra gì về dấu của sai số khi nghiệm lồi hay lõm?",
+    "tag": "euler-tangent-bias",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Nằm dưới nghiệm thật: nghiệm x₀e^{−t} (x > 0) là đường lồi hướng lên (đạo hàm bậc hai dương), nên tiếp tuyến luôn nằm dưới đường cong, và Euler đi theo tiếp tuyến thì đi quá thấp (đã trừ quá nhiều). Euler dùng độ dốc ở đầu bước, vốn là độ dốc dốc nhất của đoạn, nên trừ quá nhiều. Dấu của sai số do hướng cong (đạo hàm bậc hai) của nghiệm quyết định."
+  },
+  {
+    "q": "Dùng vận tốc đo ở ĐẦU bước (t_k = k/N) hay ở CUỐI bước ((k+1)/N): với trường v = (c − x)/(1 − t) của các đường thẳng tới điểm dữ liệu c, chuyện gì xảy ra ở bước cuối với cách đo ở cuối bước?",
+    "tag": "euler-step-time",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Với đo ở cuối bước, bước cuối có t = (N−1+1)/N = 1 và mẫu số 1 − t = 0: vận tốc chia cho 0 ra inf hoặc nan, hỏng cả quỹ đạo. Đo ở đầu bước thì t_k luôn < 1 (lớn nhất (N−1)/N) nên luôn hữu hạn. Quy tắc Euler tiến (explicit) dùng thông tin ở điểm đã biết (đầu bước) để đi sang điểm kế; dùng cuối bước là một phương pháp khác (ngầm), cần giải phương trình tại điểm chưa biết."
+  },
+  {
+    "q": "Vì sao hàm sinh mẫu phải chạy trong ngữ cảnh tắt gradient? Nếu không, với 100 bước Euler trên một mạng lớn, bộ nhớ và kết quả bị ảnh hưởng ra sao?",
+    "tag": "sampling-no-grad",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Lấy mẫu là suy luận: không cập nhật tham số nên không cần gradient. Nếu bật gradient, PyTorch phải lưu đồ thị tính toán của cả 100 lần gọi mạng và mọi activation trung gian để backward (bộ nhớ cỡ 100 lần một lần forward), dễ tràn bộ nhớ GPU, chậm hơn, và kết quả trả về còn dính vào đồ thị (requires_grad = True) nên lỡ dùng làm đầu vào tiếp ở chỗ khác thì giữ đồ thị sống mãi. Tắt gradient (no_grad) làm điều đó biến mất mà không đổi giá trị."
+  },
+  {
+    "q": "Nếu đường đi từ nhiễu tới dữ liệu là đường thẳng hoàn hảo và trường vận tốc không đổi dọc đường, thì Euler cần bao nhiêu bước? Vì sao thực tế vẫn cần nhiều bước dù ta huấn luyện bằng đường thẳng?",
+    "tag": "flow-few-steps",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Một bước là đủ (Euler chính xác với vận tốc hằng số). Thực tế mô hình học trường 'biên': trung bình có điều kiện của vận tốc trên mọi cặp (x0, x1) đi qua một điểm, và các đoạn thẳng của những cặp khác nhau CẮT nhau nên trường biên không còn là hằng số dọc quỹ đạo mà cong; Euler một bước sẽ trượt khỏi. Quỹ đạo càng thẳng (rectified flow lặp, chưng cất) thì càng ít bước. Đó là lý do flow matching sinh được ảnh bằng khoảng chục bước thay vì hàng trăm như DDPM."
+  }
+]

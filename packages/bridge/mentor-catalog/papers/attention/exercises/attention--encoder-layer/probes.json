@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Nếu Sublayer(x) xấp xỉ 0 thì lớp encoder làm gì với x? Vì sao tính chất đó giúp xếp được nhiều lớp chồng lên nhau mà vẫn train được?",
+    "tag": "residual-identity",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Khi Sublayer(x) ≈ 0 thì x + Sublayer(x) ≈ x: lớp mặc định là phép đồng nhất, đầu vào đi thẳng qua. Đạo hàm của x + f(x) theo x có số hạng I nên gradient có một đường đi thẳng ngược về các lớp đầu, không bị nhân qua mọi f. Mỗi lớp chỉ phải học phần hiệu chỉnh, nên xếp sâu vẫn train được."
+  },
+  {
+    "q": "Chồng 12 sublayer chỉ có phép cộng residual (không LayerNorm): độ lớn của x đi đâu theo độ sâu? LayerNorm sau mỗi phép cộng sửa điều đó thế nào?",
+    "tag": "layernorm-scale",
+    "kind": "break",
+    "stage": "lab",
+    "answer": "Mỗi lần cộng x + f(x), nếu f(x) độc lập cỡ x thì phương sai nhân lên (hai lần), nên độ lớn của x tăng theo cấp số nhân với độ sâu. LayerNorm sau mỗi phép cộng chuẩn hóa mỗi vị trí về trung bình 0 phương sai 1 nên mỗi lớp luôn nhận đầu vào cùng cỡ."
+  },
+  {
+    "q": "Post-LN (LayerNorm(x + Sublayer(x))) khác Pre-LN (x + Sublayer(LayerNorm(x))) ở đâu? Với post-LN, đường residual có còn là một đường \"đi thẳng\" không, và điều đó liên quan gì đến việc paper cần warmup cho learning rate?",
+    "tag": "post-vs-pre-ln",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Post-LN chuẩn hóa sau phép cộng nên LayerNorm nằm trên chính đường residual: gradient về các lớp đầu phải đi qua mọi LayerNorm, không còn đường thẳng sạch, và gradient ở các lớp gần đầu vào dễ nhỏ hoặc không ổn định khi mới train. Vì vậy post-LN nhạy với learning rate lớn lúc đầu và cần warmup (§5.3). Pre-LN giữ đường residual trơn (x + ...), ổn định hơn và thường không cần warmup."
+  },
+  {
+    "q": "Dropout đặt ở đâu trong một sublayer và vì sao ở đó mà không phải sau LayerNorm hay trên cả x của đường residual? Điều gì xảy ra nếu dropout cả x?",
+    "tag": "dropout-placement",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Paper đặt dropout trên đầu ra của Sublayer, trước khi cộng với x và chuẩn hóa. Nhờ vậy đường residual của x luôn nguyên vẹn: đầu vào không bao giờ bị mất, mạng chỉ bị làm nhiễu ở phần nó học thêm. Nếu dropout cả x (hoặc cả tổng) thì thông tin đi thẳng qua các lớp cũng bị đứt ngẫu nhiên, và gradient trên đường residual bị nhiễu."
+  },
+  {
+    "q": "Bỏ hàm ReLU giữa hai Linear của FFN thì FFN thành gì? Và attention với FFN mỗi cái làm việc gì: cái nào trộn thông tin giữa các vị trí?",
+    "tag": "ffn-role",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Hai Linear liên tiếp không có phi tuyến gộp thành một Linear duy nhất (W1·W2), mất khả năng biểu diễn hàm phi tuyến. Attention là chỗ trộn thông tin giữa các vị trí (mỗi vị trí nhìn các vị trí khác); FFN chạy riêng, giống nhau trên từng vị trí và không trộn gì giữa các vị trí, nó biến đổi phi tuyến vector của từng vị trí (§3.3)."
+  }
+]

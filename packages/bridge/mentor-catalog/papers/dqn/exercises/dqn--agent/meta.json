@@ -1,0 +1,17 @@
+{
+  "id": "dqn--agent",
+  "title": "Ráp agent DQN: Q-network, ε-greedy, mạng target và một bước học",
+  "star": "dqn--agent",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1900,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["QNet", "epsilon_by_step", "select_action", "sync_target", "dqn_train_step"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "dqn",
+  "role": "component",
+  "cites": "Algorithm 1, Methods (Nature 2015)",
+  "uses": ["replay-buffer", "dqn-td-loss"]
+}

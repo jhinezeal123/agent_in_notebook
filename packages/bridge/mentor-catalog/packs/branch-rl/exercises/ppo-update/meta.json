@@ -1,0 +1,14 @@
+{
+  "id": "ppo-update",
+  "title": "PPO: bước cập nhật với minibatch, value loss và entropy",
+  "star": "ppo",
+  "skills": ["train", "formula"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["ppo_update"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["ppo-clip-loss"]
+}

@@ -10,4 +10,4 @@ def pick_logprobs(logits, targets):
 
 def batched_scores(q, k):
     d = q.shape[-1]
-    return torch.einsum("bhtd,bhsd->bhst", q, k)
+    return torch.einsum("bhtd,bhsd->bhts", q, k)

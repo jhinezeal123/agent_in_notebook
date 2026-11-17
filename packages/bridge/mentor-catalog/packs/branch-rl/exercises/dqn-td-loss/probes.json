@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab, bảng Q của mạng chính có shape (B, A). Để lấy ra Q của hành động đã chọn cho mỗi hàng, kết quả có shape gì, và thao tác đó chạy theo trục nào? Còn thao tác lấy giá trị lớn nhất cho target thì chạy theo trục nào, shape ra sao? Nếu nhầm trục ở cái thứ hai (B không bằng A) chuyện gì xảy ra?",
+    "tag": "gather-axis",
+    "stage": "lab",
+    "kind": "shape",
+    "answer": "Lấy Q của hành động đã chọn: chọn theo trục hành động (trục 1, cột) bằng chỉ số hành động shape (B, 1), ra (B, 1), thường bỏ chiều thừa thành (B,). Giá trị lớn nhất cho target: cũng theo trục hành động (trục 1) nên ra (B,): max trên mỗi hàng. Nhầm sang trục 0 thì lấy max trên batch, ra shape (A,), trộn lẫn các transition: nếu B khác A thì lỗi broadcast, nếu B bằng A thì lặng lẽ ra số sai (rất nguy hiểm)."
+  },
+  {
+    "q": "Với sai số TD bằng 20, gradient của MSE lớn gấp bao nhiêu lần của Huber, và vì sao điều đó nguy hiểm khi target cũng đang bị nhiễu ở đầu quá trình học?",
+    "tag": "huber-vs-mse",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Gradient MSE theo x là x = 20, Huber bị chặn ở 1: gấp 20 lần. Ở đầu học target còn rất nhiễu (mạng chưa tốt), một vài transition có sai số khổng lồ; với MSE chúng chi phối gradient và đẩy mạng đi những bước lớn và mất ổn định, làm target tiếp theo còn nhiễu hơn. Huber coi sai số lớn như L1 (gradient bị chặn) nên bền hơn với ngoại lai, giữ bình phương cho sai số nhỏ để hội tụ mượt gần điểm tối ưu."
+  },
+  {
+    "q": "Một transition có done = 1. Target của nó là gì, và next_states (cũng như target_net) của transition đó có ảnh hưởng gì? Nếu bạn quên mặt nạ done, điều gì sai đi trong thế giới của agent (ví dụ trò chơi kết thúc khi thua)?",
+    "tag": "terminal-bootstrap",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Target chỉ là r: sau bước kết thúc không còn tương lai, next_states thường là trạng thái rác (đã reset hoặc giữ nguyên) nên không được ảnh hưởng. Quên done thì target cộng thêm gamma * giá trị của trạng thái rác đó, tức mạng tưởng rằng thua rồi vẫn còn phần thưởng tương lai; giá trị của các trạng thái gần kết thúc bị thổi phồng, agent không học được rằng kết thúc là chấm dứt (mất ý nghĩa 'tránh thua'). Tệ nhất là lỗi này im lặng: loss vẫn ra số bình thường."
+  },
+  {
+    "q": "Vì sao target tính bằng target_net chứ không phải chính q_net, và vì sao phải chặn gradient (no_grad hoặc detach) qua target? Hai việc đó giải quyết hai vấn đề khác nhau: hãy phân biệt.",
+    "tag": "target-network",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Dùng target_net (bản sao cũ, cập nhật chậm) làm mục tiêu đứng yên: nếu dùng chính q_net thì mỗi bước cập nhật vừa đổi dự đoán vừa đổi mục tiêu, tạo vòng phản hồi gây dao động/phân kỳ (bài toán mục tiêu di động). Chặn gradient là việc khác: nó bảo đảm ta tối ưu đúng loss L = (Q - y)² với y là hằng số (semi-gradient), thay vì cũng kéo y về phía Q. Không chặn thì gradient chảy vào target_net (nếu dùng nó) hoặc thêm một đường gradient sai vào q_net (nếu dùng chính nó), và còn tốn bộ nhớ."
+  },
+  {
+    "q": "Tại sao dùng max trên Q của target_net thường làm giá trị bị ước lượng quá cao (overestimation), và Double DQN sửa điều đó bằng cách đổi chỗ nào trong công thức target?",
+    "tag": "overestimation",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Max của các ước lượng có nhiễu thì lệch lên (kỳ vọng của max lớn hơn max của kỳ vọng): nhiễu dương ở một hành động được chọn và đọc bằng cùng một mạng, và sai lệch đó được lan truyền qua bootstrap. Double DQN tách hai việc: dùng q_net chọn hành động tốt nhất a* = argmax Q_theta(s', a), rồi dùng target_net đánh giá Q_target(s', a*), nên nhiễu của hai mạng không cùng dương một lúc."
+  },
+  {
+    "q": "gamma = 0 thì dqn_loss làm gì, và nó có còn cần target_net không? Nếu hai mạng giống hệt nhau thì gradient của hàm bạn có khác gradient của phiên bản dùng q_net cho target (không detach) không?",
+    "tag": "semi-gradient",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "gamma = 0: target = r, mạng chỉ hồi quy phần thưởng tức thời (bài toán bandit), target_net không còn ảnh hưởng tới giá trị loss. Khi hai mạng giống hệt nhau, giá trị loss như nhau nhưng gradient khác: phiên bản không detach có thêm số hạng gradient qua target (tức là cả hai phía của sai số đều được kéo lại), ra gradient khác, và là gradient của loss không ai muốn (residual gradient). Vì thế phải có cả hai: dùng target_net và chặn gradient."
+  }
+]

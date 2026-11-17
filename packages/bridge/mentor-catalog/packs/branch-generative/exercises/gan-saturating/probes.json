@@ -1,0 +1,37 @@
+[
+  {
+    "q": "So dự đoán của bạn với kết quả thật. Khi D rất tự tin ảnh là giả (logit -10), gradient theo logit của loss bão hòa log(1 − D) cỡ bao nhiêu, và của loss non-saturating −log D cỡ bao nhiêu? Chỗ nào bạn đoán lệch?",
+    "tag": "saturation-gradient",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Bão hòa: gradient theo logit là −σ(ℓ) = −σ(−10) ≈ -4.5e-5, tức gần 0: G gần như không nhận tín hiệu dù nó đang thua nặng. Non-saturating: −σ(−ℓ) = −σ(10) ≈ -0.99995, gần -1: G nhận gradient đầy đủ. Hai gradient tỉ lệ với nhau bằng e^ℓ = D/(1 − D) ≈ 4.5e-5. Điều dễ đoán nhầm: loss bão hòa có giá trị gần 0 và nhìn \"bằng phẳng\" ở đó (log(1 − D) ≈ 0 khi D ≈ 0), nhưng điều quyết định việc học là độ dốc theo logit, không phải độ lớn của giá trị loss."
+  },
+  {
+    "q": "Ở đầu train, G sinh ảnh gần như nhiễu và D dễ dàng nhận ra. Nếu G dùng loss bão hòa thì học ra sao? Và ở cuối train khi D bị lừa nhiều (logit lớn), loss nào có gradient mạnh hơn: vì sao điều đó không đáng lo bằng điều ở đầu train?",
+    "tag": "gan-early-training",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Ở đầu train, D phân biệt dễ (logit ảnh giả rất âm) nên gradient của loss bão hòa tiến về 0: G gần như đứng yên đúng lúc nó cần học nhiều nhất, và training dễ kẹt từ đầu. Loss non-saturating giữ gradient gần -1 ở vùng đó. Ngược lại ở cuối train khi D bị lừa (logit lớn dương), loss bão hòa có gradient mạnh (−σ(ℓ) ≈ -1) còn non-saturating thì yếu, nhưng đó là lúc G đã làm khá tốt nên cần cập nhật nhẹ hơn, không phải thiếu tín hiệu; điểm cân bằng của hai dạng là như nhau, chỉ đường đi khác nhau."
+  },
+  {
+    "q": "Loss bão hòa và non-saturating có cùng điểm cân bằng, cùng hướng cập nhật G (đều muốn D(G(z)) tăng) nhưng khác độ lớn gradient. Vậy khác nhau ở đâu về mặt tối ưu hóa, và đây có phải chỉ là chuyện đổi learning rate không?",
+    "tag": "gan-same-direction-different-scale",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Với mỗi ảnh giả, hai gradient theo logit cùng dấu (đều âm) nhưng độ lớn khác nhau bởi hệ số e^ℓ = D/(1 − D), thay đổi theo từng mẫu: khuếch đại các mẫu D bị lừa, nén các mẫu D biết rõ là giả. Đó là một trọng số khác nhau cho từng mẫu chứ không phải một hằng số toàn cục, nên đổi learning rate không bù được: với learning rate lớn để cứu đầu train thì cuối train bước cập nhật quá lớn, còn nhỏ thì đầu train đứng yên."
+  },
+  {
+    "q": "Bạn viết log(1 − sigmoid(ℓ) + 1e-8) để tránh log(0). Với ℓ = +20 và ℓ = +200 (float32) hàm đó cho giá trị và gradient gì, và nó sai ở đâu so với giá trị thật −ℓ?",
+    "tag": "eps-hides-saturation",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Với ℓ ≥ ~17, sigmoid(ℓ) = 1 trong float32 nên 1 − sigmoid = 0, cộng ε thành 1e-8 và log ra −18.4 cho MỌI ℓ lớn: giá trị bị cắt (thật là −ℓ, tức -20 hoặc -200), và gradient bằng 0 vì (1 − y)·y = 0 ở sigmoid bão hòa. Nên ε che được -inf nhưng đổi bài toán: G ngừng nhận tín hiệu đúng khi D bị lừa nhiều. Cách đúng là dùng đồng nhất thức log(1 − σ(ℓ)) = −softplus(ℓ), tính không qua bước làm tròn."
+  },
+  {
+    "q": "Với D tối ưu D*(x) = p_data/(p_data + p_g), loss minimax của G tương ứng với khoảng cách giữa hai phân phối nào (tới một hằng số)? Vì sao đó không giải quyết được vấn đề gradient ở đầu train?",
+    "tag": "gan-jsd",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Thay D* vào, tổng loss của hai bên bằng 2·JSD(p_data ‖ p_g) − 2 log 2 (Jensen–Shannon divergence), nên minimax tối thiểu hóa JSD khi D tối ưu. Nhưng khi hai phân phối có giá đỡ gần như rời nhau (đầu train, ảnh G còn rất khác ảnh thật), JSD gần như hằng số (≈ log 2) theo tham số của G và D phân biệt hoàn hảo, nên gradient của loss bão hòa gần 0: lý thuyết đúng ở điểm cực tiểu nhưng không đảm bảo đường đi tới đó có gradient hữu ích."
+  }
+]

@@ -1,0 +1,60 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Máy chấm chép trọng số theo tên. Mỗi thuộc tính trong bảng của đề có kiểu gì (nn.Parameter, module, danh sách module) và shape gì? pos_embed có bao nhiêu hàng khi chuỗi gồm N patch và token cls?"
+  },
+  {
+    "level": 0,
+    "test": "test_block_values",
+    "text": "nn.MultiheadAttention hiểu trục đầu của đầu vào là batch hay là chiều dài chuỗi? Bạn đã bảo nó dùng trục nào, và hàm trả về một giá trị hay một cặp?"
+  },
+  {
+    "level": 0,
+    "test": "test_block_residual",
+    "text": "Nếu nhánh attention và nhánh MLP đều cho ra 0 thì đầu ra của khối pre-LN bằng gì? LayerNorm đứng trước nhánh con hay sau chỗ cộng vào đường residual?"
+  },
+  {
+    "level": 0,
+    "test": "test_cls_readout",
+    "text": "Nếu không có khối nào, token đứng đầu chuỗi gồm những gì (hãy kể từng thành phần cộng lại)? Bạn đang đọc token nào ở cuối, và token đó có phụ thuộc vào nội dung ảnh khi không có attention không?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward_values",
+    "text": "token cls có batch bằng 1 nhưng các token patch có batch B. Muốn ghép chúng lại, cls phải có shape gì, và nên dùng phép nào để nhân bản mà không tốn thêm tham số? Trục nào của chuỗi dùng để ghép?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients",
+    "text": "Tham số nào không nhận gradient nào? Trong những thứ bạn tạo ở __init__ (cls_token, pos_embed, norm, head ...), cái nào chưa được gọi trong forward?"
+  },
+  {
+    "level": 1,
+    "text": "Block: tính LayerNorm của x, cho nó đi qua attention (query, key, value cùng là kết quả đó), cộng kết quả vào x; rồi tính LayerNorm khác của x mới, cho qua MLP, cộng vào x. ViT: biến ảnh thành token, đặt token cls vào đầu chuỗi, cộng positional embedding cho cả chuỗi, chạy qua các khối, chuẩn hóa, rồi lấy token đứng đầu và đưa vào lớp phân loại."
+  },
+  {
+    "level": 1,
+    "text": "Về shape: token patch là (B, N, dim); cls_token là (1, 1, dim) và phải thành (B, 1, dim) trước khi ghép dọc theo trục chuỗi (trục 1). Sau khi ghép, chuỗi là (B, N + 1, dim), đúng khớp với pos_embed shape (1, N + 1, dim) qua broadcasting theo batch."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "Block.forward(x):\n  h = ln1(x)\n  x = x + attn(h, h, h)[0]      # self-attention\n  x = x + mlp(ln2(x))\n  trả về x\nViT.forward(x):\n  tokens = patch_embed(x)                     # (B, N, dim)\n  cls = cls_token nhân bản theo B             # (B, 1, dim)\n  tokens = ghép [cls, tokens] theo trục 1 rồi cộng pos_embed   # (B, N+1, dim)\n  cho tokens đi qua từng block\n  tokens = norm(tokens)\n  trả về head(tokens[:, 0])"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở nn.MultiheadAttention",
+    "text": "nn.MultiheadAttention(embed_dim, num_heads, batch_first=True) khi gọi attn(q, k, v) trả về cặp (đầu ra, trọng số attention). Muốn self-attention thì đưa cùng một tensor cho q, k, v. Có thể truyền need_weights=False để khỏi tính trọng số trung bình, và chỉ lấy phần tử số 0 của cặp trả về."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở nhân bản và ghép cls",
+    "text": "```python\ncls = self.cls_token.expand(x.size(0), -1, -1)\ntokens = torch.cat([cls, tokens], dim=1) + self.pos_embed\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở nn.MultiheadAttention",
+    "text": "```python\nh = self.ln1(x)\nx = x + self.attn(h, h, h, need_weights=False)[0]\n```"
+  }
+]

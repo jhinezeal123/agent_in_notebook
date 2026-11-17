@@ -1,0 +1,38 @@
+{
+  "id": "attention--reverse-experiment",
+  "title": "Thí nghiệm: train Transformer thu nhỏ đảo chuỗi chữ số",
+  "star": "attention--reverse-experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 6,
+  "functions": ["model"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "attention",
+  "role": "experiment",
+  "cites": "§5.3 (Eq. 3), §5.4, Table 2",
+  "uses": ["attention--transformer"],
+  "judge": "kernel",
+  "judgeSeconds": 120,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) loss lúc bắt đầu cỡ bao nhiêu (gợi ý: mô hình đoán đều trên 13 token), và sau khi train xong nó có về 0 không khi dùng label smoothing 0.1? (2) token_acc sẽ \"bật\" lên cao từ từ hay đột ngột, và khoảng bao nhiêu bước? (3) Trên chuỗi dài 12 (lúc train chỉ thấy dài 8), token_acc_len12 sẽ cao như token_acc, thấp hơn nhiều, hay gần ngẫu nhiên? Vì sao?",
+  "metrics": [
+    {
+      "name": "token_acc",
+      "paper": "BLEU 28.4 trên WMT14 en-de (bài toán khác, không so trực tiếp)",
+      "unit": "tỷ lệ token đúng",
+      "target": { "op": ">=", "value": 0.9 }
+    },
+    {
+      "name": "exact_match",
+      "paper": "—",
+      "unit": "tỷ lệ chuỗi đúng hoàn toàn"
+    },
+    {
+      "name": "token_acc_len12",
+      "paper": "—",
+      "unit": "tỷ lệ token đúng, chuỗi dài 12"
+    }
+  ]
+}

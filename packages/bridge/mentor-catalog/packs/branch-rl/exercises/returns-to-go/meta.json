@@ -1,0 +1,13 @@
+{
+  "id": "returns-to-go",
+  "title": "Return còn lại (reward-to-go) qua nhiều episode",
+  "star": "reinforce",
+  "skills": ["formula", "blank"],
+  "difficulty": 1450,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 1,
+  "functions": ["returns_to_go"],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

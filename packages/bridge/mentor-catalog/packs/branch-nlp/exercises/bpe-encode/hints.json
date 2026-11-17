@@ -1,0 +1,66 @@
+[
+  {
+    "level": 0,
+    "test": "test_single_merge",
+    "text": "Với một merge, bạn thay hai token liền kề bằng gì? Còn những token không thuộc cặp đó: chúng đi đâu trong kết quả?"
+  },
+  {
+    "level": 0,
+    "test": "test_merge_order",
+    "text": "Trong bảng [(a,b), (ab,c)], token \"ab\" chỉ có sau một merge nào đó. Nếu bạn đi qua bảng theo thứ tự khác thì merge thứ hai có thấy token để gộp không?"
+  },
+  {
+    "level": 0,
+    "test": "test_overlap",
+    "text": "Trong \"aaa\" với merge (a,a), nếu bạn gộp hai ký tự đầu rồi, ký tự thứ hai còn được dùng cho cặp thứ hai không? Vị trí tiếp theo bạn xét là bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_learned_table",
+    "text": "Một merge của bạn được áp trong bao nhiêu lượt qua chuỗi: một lượt hay chỉ tới lần khớp đầu tiên? Mỗi lượt xét hết chuỗi chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_unknown_characters",
+    "text": "Một ký tự không nằm trong bất kỳ merge nào: bước đầu của bạn tạo danh sách token từ đâu, và ký tự đó có chắc chắn nằm trong đó không?"
+  },
+  {
+    "level": 0,
+    "test": "test_empty",
+    "text": "Với text rỗng, dòng đầu tiên của encode truy cập gì? Dòng đó có an toàn khi chuỗi không có phần tử nào không?"
+  },
+  {
+    "level": 0,
+    "test": "test_roundtrip",
+    "text": "Hai token \"ab\" và \"c\" được decode thành chuỗi nào? Có thứ gì khác ngoài các token mà decode cần thêm vào không?"
+  },
+  {
+    "level": 0,
+    "test": "test_pure",
+    "text": "Bạn có đang lấy phần tử ra khỏi danh sách merges (pop, remove) hay sắp xếp nó không? Người gọi dùng lại danh sách đó sau lời gọi đầu tiên thì sao?"
+  },
+  {
+    "level": 1,
+    "text": "Bắt đầu từ danh sách các ký tự của text. Duyệt bảng merge theo đúng thứ tự của nó; với mỗi cặp, đi qua toàn bộ danh sách token hiện tại từ trái sang phải và dựng danh sách mới trong đó mỗi chỗ khớp cặp được thay bằng một token nối, còn token khác giữ nguyên. decode chỉ cần nối các token."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "tokens = danh sách ký tự của text\nvới mỗi (trái, phải) trong merges, theo thứ tự:\n    out = []; i = 0\n    chừng nào i còn trong tokens:\n        nếu tokens[i], tokens[i+1] là (trái, phải): thêm trái+phải vào out; i += 2\n        ngược lại: thêm tokens[i] vào out; i += 1\n    tokens = out\ntrả về tokens"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở ca chồng lấn như 'aaa'",
+    "text": "Sau khi gộp token i và i+1 thành một, token tiếp theo cần xét là token nào? Nếu bạn chỉ tăng i thêm 1, token i+1 sẽ bị xét lại như đầu của một cặp mới. Hãy so sánh kết quả cho \"aaa\" khi tăng 1 và khi tăng 2."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở một lượt thay một merge",
+    "text": "```python\nout, i = [], 0\nwhile i < len(tokens):\n    if i + 1 < len(tokens) and tokens[i] == left and tokens[i + 1] == right:\n        out.append(left + right)\n        i += 2\n    else:\n        out.append(tokens[i])\n        i += 1\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở decode",
+    "text": "```python\nreturn \"\".join(tokens)\n```"
+  }
+]

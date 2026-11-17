@@ -1,0 +1,44 @@
+[
+  {
+    "q": "CartPole thưởng 1 mỗi bước và bạn dùng gamma = 0,99. Nếu gậy đứng mãi thì Q của một trạng thái tốt tối đa là bao nhiêu? Nếu QNet của bạn in ra Q = 300 cho trạng thái đầu, bạn nghi điều gì?",
+    "tag": "q-value-scale",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "Tổng thưởng chiết khấu tối đa là 1 + γ + γ² + … = 1/(1 − γ) = 100 (với episode vô hạn; cắt ở 200 bước thì thấp hơn chút). Q = 300 vượt trần lý thuyết nên mạng đang phân kỳ hoặc đang đánh giá quá cao (overestimation): kiểm tra mạng target, learning rate, cờ done, hoặc có đang học trên dữ liệu sai không."
+  },
+  {
+    "q": "Episode bị cắt ở bước 200 chứ không phải gậy đổ. Khi cất transition cuối vào buffer, cờ done của nó nên là True hay False? Nếu bạn đặt True thì Q của các trạng thái gần bước 200 bị dạy giá trị gì, và vì sao đó là sai?",
+    "tag": "truncation-vs-termination",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Nên là False: bị cắt vì hết thời gian không có nghĩa tương lai bằng 0, trạng thái đó vẫn rất tốt. Đặt True thì mục tiêu TD là r mà không có phần γ·max Q(s'), nên Q của các trạng thái gần bước 200 bị dạy thấp hơn nhiều so với giá trị thật (cỡ 1 − γ^k thay vì 100); mạng thấy các trạng thái 'tốt' ở cuối episode là kém, làm nhiễu việc học. Chỉ khi gậy thật sự đổ (kết thúc thật) mới đặt done = True."
+  },
+  {
+    "q": "Vì sao paper dùng một mạng target riêng, chép từ mạng chính mỗi C bước, thay vì tính mục tiêu bằng chính mạng đang học? Và nếu sync_target chỉ chạy một lần ở đầu rồi không bao giờ chạy lại thì chuyện gì xảy ra với Q và với return?",
+    "tag": "target-network",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Mục tiêu y = r + γ max Q(s') phụ thuộc vào chính tham số đang đổi, nên mỗi bước cập nhật làm mục tiêu dịch theo (đuổi theo cái bóng của mình), gây dao động hoặc phân kỳ. Mạng target đóng băng trong C bước cho mục tiêu đứng yên tương đối. Nếu không bao giờ sync lại, target mãi là mạng khởi tạo (Q ≈ 0), nên y ≈ r = 1 ở mọi nơi: Q hội tụ về xấp xỉ 1 cho mọi trạng thái và hành động, chính sách tham lam gần như tùy tiện, return chỉ cỡ 10 (như chính sách ngẫu nhiên hoặc tệ hơn)."
+  },
+  {
+    "q": "ε-greedy: điều gì xảy ra nếu ε = 0 ngay từ bước đầu tiên (không khám phá chút nào), với mạng vừa khởi tạo? Và nếu ε giữ 1,0 suốt quá trình train thì buffer chứa dữ liệu kiểu gì?",
+    "tag": "exploration-exploitation",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Mạng khởi tạo cho Q gần như hằng, nên argmax thường chọn cùng một hành động ở mọi trạng thái: xe bị đẩy một phía, gậy đổ sau cỡ 9–10 bước, và buffer chỉ chứa các cảnh đầu episode gần giống nhau, nên khó học được gì tốt hơn (kẹt tại một chính sách tồi). Nếu ε = 1 mãi: dữ liệu toàn của chính sách ngẫu nhiên, episode ngắn (cỡ 20 bước), không bao giờ thấy các trạng thái xa mà chính sách tốt sẽ tới, nên Q học được cho trạng thái hiếm đó rất thiếu. Cần ε lớn ban đầu rồi giảm."
+  },
+  {
+    "q": "Khi khám phá bạn chọn ngẫu nhiên đều trong TẤT CẢ hành động, kể cả hành động tham lam, chứ không loại nó ra. Với 2 hành động và ε = 0,2 thì xác suất chọn hành động tham lam thực ra là bao nhiêu? Nếu loại nó ra khỏi lựa chọn ngẫu nhiên thì sao?",
+    "tag": "eps-greedy-uniform",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Xác suất tham lam là (1 − ε) + ε/A = 0,8 + 0,1 = 0,9. Nếu loại hành động tham lam ra thì khi khám phá luôn chọn hành động khác: xác suất tham lam thành 0,8 và với 2 hành động, ε = 1 nghĩa là luôn chọn hành động kém, không còn là 'ngẫu nhiên đều'. Định nghĩa chuẩn là ε-greedy rút đều trong mọi hành động, và ε là xác suất của việc 'rút ngẫu nhiên'."
+  },
+  {
+    "q": "Cập nhật cứng (chép mỗi 250 bước) khác cập nhật mềm (tau = 0,005 mỗi bước) thế nào về hành vi của mạng target theo thời gian? Cái nào làm mục tiêu thay đổi đột ngột hơn?",
+    "tag": "soft-vs-hard-update",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Cập nhật cứng giữ mạng target đứng yên rồi nhảy một lần mỗi C bước: mục tiêu đứng yên trong nhiều bước nhưng đổi đột ngột lúc sync. Cập nhật mềm cho target trượt mượt như trung bình trượt mũ của mạng chính với hằng thời gian cỡ 1/tau = 200 bước: mục tiêu luôn đổi nhưng đổi nhỏ và liên tục, không có bước nhảy. Cả hai nhằm cùng việc làm mục tiêu chậm hơn mạng chính; paper dùng cập nhật cứng, nhiều cài đặt hiện đại dùng mềm."
+  }
+]

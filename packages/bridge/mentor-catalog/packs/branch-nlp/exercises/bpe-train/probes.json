@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Văn bản \"aaa\": có bao nhiêu cặp (\"a\", \"a\") liền kề? Nếu thay cặp đó bằng token \"aa\" thì chuỗi mới là gì, và vì sao không thể là [\"aa\", \"aa\"]?",
+    "tag": "overlap-pairs",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Có hai cặp chồng lấn (vị trí 0-1 và 1-2), nên khi đếm mỗi vị trí đóng góp một lần. Nhưng hai cặp dùng chung chữ a ở giữa, nên khi thay chỉ thay được một: quét trái sang phải thì ra [\"aa\", \"a\"]. Một ký tự không thể thuộc hai token mới cùng lúc."
+  },
+  {
+    "q": "Hai cặp cùng xuất hiện 5 lần. Nếu bạn chọn \"cặp gặp trước\" thay vì một luật hòa cố định, chuyện gì có thể sai khi cùng một văn bản được học bảng merge hai lần, hay trên hai máy?",
+    "tag": "tie-break",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Kết quả phụ thuộc thứ tự duyệt (thứ tự chèn của dict, thứ tự các tập hợp, cách chạy song song), nên cùng văn bản có thể cho hai bảng merge khác nhau và vì thế hai bộ token khác nhau. Luật hòa xác định (ví dụ cặp nhỏ nhất theo thứ tự từ điển) làm bảng tái lập được; bảng merge là một phần của mô hình nên phải tái lập."
+  },
+  {
+    "q": "Sau khi merge xong một cặp, vì sao phải đếm lại cặp trên chuỗi mới, mà không dùng lại bảng đếm của vòng trước? Cụ thể: cặp nào mới xuất hiện, cặp nào giảm?",
+    "tag": "recount-after-merge",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Token mới tạo ra cặp mới với hàng xóm của nó (ví dụ sau khi gộp (a,b) thành ab thì có (ab, c), (x, ab)), và các cặp cũ chứa a hoặc b ở chỗ vừa gộp mất đi hoặc giảm số lần ((b, c), (x, a)). Bảng đếm cũ không biết chuyện đó nên sẽ chọn cặp không còn tồn tại hoặc bỏ lỡ cặp mới tốt hơn."
+  },
+  {
+    "q": "Mỗi vòng bạn quét cả chuỗi dài n để đếm; có num_merges vòng. Tổng chi phí là bao nhiêu? Triển khai thực tế làm gì để rẻ hơn?",
+    "tag": "bpe-cost",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "O(n × num_merges). Triển khai thực tế (a) tách văn bản thành từ trước (pre-tokenize) và đếm tần suất từ, nên chỉ làm việc trên từ khác nhau, hoặc (b) cập nhật bảng đếm tăng dần chỉ quanh các vị trí vừa gộp thay vì đếm lại cả chuỗi."
+  },
+  {
+    "q": "Kích thước từ vựng sau num_merges vòng là bao nhiêu? Thêm nhiều merge thì được và mất gì?",
+    "tag": "vocab-size",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Số ký tự khác nhau ban đầu cộng số merge (mỗi merge thêm đúng một token). Nhiều merge hơn thì cùng một văn bản ngắn đi (ít token hơn, mô hình nhìn được ngữ cảnh xa hơn), nhưng bảng embedding to hơn và các token cuối bảng hiếm, ít được học; lợi ích giảm dần."
+  },
+  {
+    "q": "Vì sao BPE bắt đầu từ ký tự (hoặc byte) không bao giờ gặp từ lạ (out-of-vocabulary) trong khi từ điển theo từ thì có?",
+    "tag": "oov",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Mọi chuỗi đều tách được thành các ký tự (byte), và các token đơn đó luôn nằm trong từ vựng; merge chỉ gộp bớt. Từ lạ vì thế vẫn mã hoá được, thành nhiều token nhỏ hơn. Từ điển theo từ không có token cho từ chưa gặp."
+  }
+]

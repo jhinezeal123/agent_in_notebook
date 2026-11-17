@@ -1,0 +1,6 @@
+{
+  "protocol": 1,
+  "id": "branch-nlp",
+  "name": "Nhánh NLP/LLM",
+  "description": "Bài cho các sao BPE, GPT thu nhỏ, LoRA (đợt 4): tokenizer, causal attention, GPT mini, LoRA."
+}

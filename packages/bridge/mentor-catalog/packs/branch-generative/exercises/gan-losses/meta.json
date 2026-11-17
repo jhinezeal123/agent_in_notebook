@@ -1,0 +1,13 @@
+{
+  "id": "gan-losses",
+  "title": "GAN: loss của D và loss non-saturating của G",
+  "star": "gan",
+  "skills": ["formula", "theory"],
+  "difficulty": 1700,
+  "minutes": 20,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["d_loss", "g_loss_nonsat"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

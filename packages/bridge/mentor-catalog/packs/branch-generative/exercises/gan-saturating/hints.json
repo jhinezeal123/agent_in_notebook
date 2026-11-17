@@ -1,0 +1,15 @@
+[
+  {"level": 0, "test": "test_values", "text": "Với logit 0, D(G(z)) bằng bao nhiêu và log(1 − D) bằng bao nhiêu? Dấu của loss này là âm hay dương, và con số bạn nhận được có khớp không?"},
+  {"level": 0, "test": "test_direction", "text": "G giảm loss. Khi D bị lừa nhiều hơn (logit tăng), log(1 − D) tiến về đâu, tức loss đi lên hay đi xuống? Gradient theo logit phải mang dấu nào?"},
+  {"level": 0, "test": "test_saturation", "text": "Khi D rất chắc ảnh là giả (logit rất âm), D gần 0 thì log(1 − D) thay đổi nhanh hay chậm khi logit đổi một chút? Vậy độ lớn gradient theo logit ở đó phải gần 0 hay gần 1? Bạn có đang dùng nhầm công thức non-saturating không?"},
+  {"level": 0, "test": "test_extreme_logits", "text": "Với logit 200, 1 trừ sigmoid(200) bằng bao nhiêu trong float32, và log của nó ra gì? Có cách viết log(1 − σ(ℓ)) bằng một hàm của chính ℓ mà không qua bước làm tròn đó không (gợi ý: 1 − σ(ℓ) = σ(−ℓ), và log của σ là gì)?"},
+  {"level": 0, "test": "test_mean_over_elements", "text": "Loss của bạn là trung bình hay tổng trên các phần tử? Nếu lặp đôi logits thì nó phải đổi hay giữ nguyên?"},
+  {"level": 0, "test": "test_vs_nonsat", "text": "Gradient theo logit của loss non-saturating là −σ(−ℓ)/B. Gradient của loss bão hòa là −σ(ℓ)/B. Tỉ số giữa chúng bằng gì? Bài này của bạn có khớp tỉ số đó không?"},
+  {"level": 0, "test": "test_flows_to_generator", "text": "Hãy in loss.requires_grad. Trong hàm của bạn có chỗ nào gọi detach, đổi sang số Python, hoặc bọc trong no_grad không?"},
+  {"level": 1, "text": "Dùng đồng nhất thức: 1 − σ(ℓ) = σ(−ℓ), và log σ(−ℓ) là một hàm trơn của ℓ mà PyTorch có sẵn dưới dạng ổn định số (một hàm log-sigmoid, hoặc dạng softplus với dấu đổi). Viết loss như âm của một trung bình của softplus hoặc như trung bình của log-sigmoid(−ℓ); đừng đi qua sigmoid rồi trừ 1 rồi log."},
+  {"level": 1, "text": "Hai cách kiểm tra bản thân: (a) giá trị phải ≤ 0 ở mọi nơi và đạt gần −ℓ khi ℓ lớn dương; (b) gradient theo logit phải là −σ(ℓ) chia cho số phần tử, nên ≈ 0 ở vùng rất âm và ≈ −1/B ở vùng rất dương. Nếu bạn thấy gradient khác, bạn có thể đang viết loss non-saturating."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "g_loss_saturating(logits):\n  mỗi phần tử: log(1 − sigmoid(ℓ)) = log_sigmoid(−ℓ) = −softplus(ℓ)\n  lấy trung bình trên mọi phần tử\n  trả số đó (≤ 0), không detach"},
+  {"level": 2, "when": "kẹt ở ổn định số", "text": "PyTorch có hàm softplus ổn định (cho ℓ lớn nó chuyển sang tuyến tính, cho ℓ rất âm nó cho đúng gần 0), và hàm log-sigmoid ổn định. Dùng một trong hai thay vì tự ghép sigmoid, log, và phép trừ."},
+  {"level": 3, "when": "kẹt ở công thức", "text": "```python\nreturn -F.softplus(d_fake_logits).mean()\n```"},
+  {"level": 3, "when": "kẹt ở công thức, cách khác", "text": "```python\nreturn F.logsigmoid(-d_fake_logits).mean()\n```"}
+]

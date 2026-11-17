@@ -1,0 +1,76 @@
+[
+  {
+    "level": 0,
+    "test": "test_parameters",
+    "text": "Máy chấm chép trọng số vào module của bạn theo tên tham số. Trong __init__, bạn có đúng hai phép chiếu tên gì, mỗi cái nn.Linear từ bao nhiêu chiều ra bao nhiêu chiều? Và bạn có tạo thêm gì ngoài chúng không?"
+  },
+  {
+    "level": 0,
+    "test": "test_values",
+    "text": "Đầu ra của qkv có 3C feature. Bạn cắt nó thành q, k, v theo thứ tự nào, và trong mỗi phần, head i lấy những feature nào? Điểm attention chia cho căn của số nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_no_future",
+    "text": "Đổi một token ở vị trí p thì đầu ra ở vị trí nhỏ hơn p vẫn đổi: attention của vị trí đó còn nhìn tới p ở đâu? Bạn che trước hay sau softmax, và che bằng giá trị gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradient_no_future",
+    "text": "Một key bị che thì trọng số của nó sau softmax bằng bao nhiêu, và vì sao khi đó gradient tới token tương ứng cũng bằng đúng 0?"
+  },
+  {
+    "level": 0,
+    "test": "test_first_token_sees_itself",
+    "text": "Hàng đầu tiên của mask của bạn có bao nhiêu ô được nhìn? Nếu bằng 0 thì softmax của hàng đó ra gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_single_token",
+    "text": "Với T = 1, mask của bạn có shape gì và có ô nào được nhìn không? Trọng số attention duy nhất bằng bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_heads",
+    "text": "Với n_embd = 24 và 6 head thì mỗi head có bao nhiêu feature? Con số đó bạn tính ở đâu, và với n_embd = 10, n_head = 3 chương trình của bạn làm gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_varied_length",
+    "text": "Mask của bạn được tạo khi nào và với kích thước nào? Gọi module với T = 40 sau khi đã gọi với T = 5 thì nó có dùng đúng T = 40 không?"
+  },
+  {
+    "level": 0,
+    "test": "test_no_builtin",
+    "text": "Phần tính điểm, mask và softmax của bạn có đang gọi một hàm dựng sẵn làm hết việc đó trong một lệnh không? Bài này muốn bạn tự viết phần nào?"
+  },
+  {
+    "level": 1,
+    "text": "Chiếu x một lần bằng qkv rồi cắt thành ba khối q, k, v theo trục feature. Tách mỗi khối thành các head và đưa trục head lên trước trục thời gian để mọi phép nhân ma trận chạy cho tất cả head cùng lúc. Tính điểm là tích vô hướng q với k theo hai trục cuối, chia cho căn d_h; dựng mask tam giác dưới theo T và che các ô tương lai trước softmax; softmax theo trục của key; nhân với v; ghép các head lại và cho qua proj."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "1. q, k, v = cắt qkv(x) thành ba khối C feature          # mỗi cái (B, T, C)\n2. mỗi cái: (B, T, C) -> (B, n_head, T, d_h)\n3. scores = q nhân k chuyển vị hai trục cuối, chia căn d_h   # (B, n_head, T, T)\n4. mask = tam giác dưới (T, T), True = được nhìn; nơi mask = False điền -inf\n5. weights = softmax theo trục cuối; y = weights nhân v     # (B, n_head, T, d_h)\n6. đưa trục head về sau trục thời gian, gộp (n_head, d_h) -> C, rồi qua proj"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc dựng mask",
+    "text": "Cần một ma trận (T, T) kiểu bool, True ở các ô (hàng t, cột s) với s <= t, kể cả s = t. PyTorch có một hàm lấy phần tam giác dưới của ma trận; nó có tham số quyết định đường chéo có được giữ hay không. Mask (T, T) tự broadcast với điểm (B, n_head, T, T). Và masked_fill sẽ che những ô ứng với True hay với False?"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc tách và ghép head",
+    "text": "Tách: (B, T, C) -> (B, T, n_head, d_h) -> hoán trục 1 và 2 -> (B, n_head, T, d_h). Ghép là đảo ngược từng bước: hoán trục lại rồi gộp hai trục cuối. Sau khi hoán trục, tensor không còn liên tục trong bộ nhớ: gộp bằng thứ gì chịu được điều đó?"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở tách qkv",
+    "text": "```python\nq, k, v = self.qkv(x).split(C, dim=-1)                  # ba khối (B, T, C)\nq = q.view(B, T, self.n_head, hd).transpose(1, 2)        # (B, h, T, hd)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở mask",
+    "text": "```python\ncausal = torch.tril(torch.ones(T, T, dtype=torch.bool))   # True = được nhìn\nscores = scores.masked_fill(~causal, float(\"-inf\"))\nweights = torch.softmax(scores, dim=-1)\n```"
+  }
+]

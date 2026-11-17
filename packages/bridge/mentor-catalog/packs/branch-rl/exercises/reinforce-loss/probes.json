@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab, return luôn dương (cỡ 11-12) và hai hình có cùng trung bình nhưng khác độ rộng. Giải thích vì sao trừ baseline giảm phương sai mà KHÔNG làm lệch gradient kỳ vọng. (Gợi ý: kỳ vọng của score function (onehot - pi) theo hành động bằng bao nhiêu?) Điều kiện nào baseline b phải thỏa?",
+    "tag": "baseline-variance",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Kỳ vọng của score function E_a[grad log pi(a|s)] = sum_a pi(a) * grad log pi(a) = sum_a grad pi(a) = grad 1 = 0. Nên E[b * grad log pi(a|s)] = b * 0 = 0 với bất kỳ b không phụ thuộc hành động a: trừ b không đổi kỳ vọng của gradient. Phương sai giảm vì khi return luôn dương, mọi hành động bị đẩy lên (đẩy ít hay nhiều khác nhau), nhiễu của return nhân vào score tạo ra các mẫu rất rộng; trừ b đưa trọng số về quanh 0 nên hành động tốt hơn trung bình đẩy lên, tệ hơn trung bình đẩy xuống. Điều kiện: b không được phụ thuộc vào hành động a_t (được phép phụ thuộc trạng thái s_t, ví dụ V(s_t))."
+  },
+  {
+    "q": "Trong hình ổn định số, log(softmax) bằng cách thẳng tay hỏng từ khoảng x nào trong float32, và loss REINFORCE trở thành gì khi hành động đã chọn có xác suất tính ra bằng 0? Cách tính ổn định dựa vào mẹo đại số nào (dạng logit trừ một đại lượng)?",
+    "tag": "log-softmax-stability",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Float32 có exp(x) làm tròn xuống 0 khoảng x < -103 (và exp(x) tràn lên inf khi x > 88), nên xác suất tính ra 0 thì log = -inf; loss = -inf * A là +-inf (hoặc nan nếu A = 0), gradient thành nan và huấn luyện hỏng. Cách ổn định: log pi(a) = logit_a - log(sum_j exp(logit_j)), tính log-sum-exp bằng cách trừ max trước (m + log sum exp(logit - m)), nên không bao giờ lấy log của số 0. PyTorch làm sẵn trong log_softmax."
+  },
+  {
+    "q": "Trong thực tế baseline thường là đầu ra V(s_t) của một mạng giá trị đang được huấn luyện cùng lúc. Vì sao trong loss của policy phải tách nó khỏi đồ thị (detach), và loss nào mới được cập nhật mạng giá trị?",
+    "tag": "baseline-detach",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Nếu không detach, gradient của loss policy chảy vào mạng giá trị và đẩy V theo hướng làm giảm loss policy (tức làm cho A = G - V có dấu 'lợi' cho policy), chứ không phải theo hướng dự đoán G đúng: V bị kéo đi sai mục đích. Baseline chỉ để giảm phương sai: nó là hằng số ở bước policy. Mạng giá trị có loss riêng (ví dụ MSE giữa V(s_t) và G_t) và chỉ loss đó mới cập nhật nó; ở PPO hai loss được cộng nhưng mỗi loss vẫn giữ đúng vai."
+  },
+  {
+    "q": "Normalize advantage (trừ trung bình, chia độ lệch chuẩn) làm gì với thang đo của loss, và nó đổi gì về mặt lý thuyết so với gradient REINFORCE gốc? Khi nào bạn KHÔNG muốn dùng nó (ví dụ batch chỉ có một hai mẫu, hoặc mọi return bằng nhau)?",
+    "tag": "advantage-normalization",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Chuẩn hóa đưa A về thang cố định (trung bình 0, std 1) nên độ lớn của gradient không phụ thuộc đơn vị thưởng, learning rate ổn định hơn giữa các môi trường; trừ trung bình hoạt động như một baseline phụ. Về lý thuyết nó hơi đổi gradient (lệch nhẹ: chia cho std tính từ cùng batch, và các mẫu phụ thuộc nhau) nhưng thực tế ít hại và rất hữu ích. Không dùng khi batch rất nhỏ (T = 1: std vô nghĩa/nan), khi mọi return bằng nhau (std = 0: chỉ còn nhiễu, eps giữ khỏi nan nhưng A = 0 nên không có tín hiệu), hoặc khi độ lớn thưởng chính là thông tin cần giữ."
+  },
+  {
+    "q": "Loss REINFORCE lấy trung bình theo T bước hay cộng tổng thì gradient khác nhau thế nào, và điều đó ảnh hưởng gì khi bạn đổi độ dài rollout hoặc số episode gom mỗi lần cập nhật? Vì sao cũng cần dấu âm trước tổng?",
+    "tag": "loss-reduction-sign",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Tổng thì gradient (và vì vậy bước cập nhật) tỉ lệ với T: rollout dài gấp đôi thì bước cập nhật to gấp đôi, phải chỉnh lại learning rate mỗi lần đổi T. Trung bình giữ độ lớn gradient ổn định theo T, hợp với các optimizer như Adam và với việc so sánh giữa các lần chạy. Dấu âm: REINFORCE là gradient ASCENT trên J = E[G] (muốn tăng log pi của hành động có A dương) nhưng optimizer của PyTorch giảm loss, nên loss = -J-surrogate; quên dấu âm thì policy học ngược: tránh hành động tốt, ưa hành động xấu."
+  },
+  {
+    "q": "Gradient theo logits của loss này có dạng đơn giản -(1/T) * A_t * (onehot(a_t) - pi_t). Nếu A_t > 0, logit của hành động đã chọn thay đổi thế nào sau một bước giảm loss, và logit của các hành động khác thay đổi theo hướng nào? Có phải xác suất của hành động đã chọn luôn tăng không (xét cả softmax)?",
+    "tag": "score-function-gradient",
+    "stage": "defend",
+    "kind": "shape",
+    "answer": "Bước giảm loss đi ngược gradient: logit của hành động đã chọn tăng một lượng tỉ lệ A_t * (1 - pi_a), các hành động khác giảm một lượng tỉ lệ A_t * pi_j (nên tổng thay đổi logit bằng 0). Vì softmax chỉ nhạy với chênh lệch logits, xác suất của hành động đã chọn tăng (và các xác suất khác giảm). Nếu pi_a đã gần 1 thì (1 - pi_a) nhỏ nên thay đổi rất nhỏ: bước đẩy tự giảm khi policy đã chắc chắn. Nếu A_t < 0 thì mọi chiều đảo lại."
+  }
+]

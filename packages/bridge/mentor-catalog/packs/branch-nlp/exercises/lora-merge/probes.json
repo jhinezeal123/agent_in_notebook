@@ -1,0 +1,44 @@
+[
+  {
+    "q": "So dự đoán của bạn với con số thật: trước khi gộp, phần adapter thêm bao nhiêu phép nhân cho mỗi token so với phần Linear gốc, và sau khi gộp thì chi phí và số tham số của lớp ra sao? Chỗ nào bạn đoán lệch, và vì sao?",
+    "tag": "merge-predict",
+    "kind": "compare",
+    "stage": "lab",
+    "answer": "Với Linear(4096, 4096) và r = 8: Linear gốc 4096² ≈ 16,8 triệu phép nhân mỗi token, adapter r · (in + out) = 65 536 (≈ 0,39%). Tham số: ≈ 16,78 triệu + 65 536. Sau khi gộp: số tham số và chi phí đúng bằng một Linear thường (không còn phần cộng thêm). Điểm hay đoán lệch: về số phép nhân adapter rất nhỏ, nhưng nó là hai phép nhân ma trận tuần tự thêm và một phép cộng, nên độ trễ thật thường tăng nhiều hơn 0,39%."
+  },
+  {
+    "q": "B và A đều có requires_grad = True. Nếu bạn tính W + (α/r)·B·A rồi gán thẳng vào weight của một nn.Linear mới, hoặc copy_ vào đó, chuyện gì có thể xảy ra (lỗi hay kết quả lạ)? Cách đúng là gì?",
+    "tag": "merge-grad-graph",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Kết quả của W + s·B·A mang grad_fn vì B và A cần gradient. copy_ vào một tham số lá đang requires_grad = True ngoài no_grad báo lỗi \"a leaf Variable that requires grad is being used in an in-place operation\"; gán thẳng một tensor có grad_fn vào thuộc tính tham số báo TypeError (không phải nn.Parameter), còn nếu bọc nn.Parameter thì có thể đẹp nhưng dễ giữ đồ thị. Cách đúng: tính trong torch.no_grad() (hoặc detach()), rồi đóng băng tham số của bản gộp vì nó chỉ để suy luận."
+  },
+  {
+    "q": "Giả sử merge sửa tại chỗ lora.base.weight rồi trả về chính lora.base. Gọi lora(x) sau đó cho ra gì? Và gọi merge hai lần liên tiếp thì sao?",
+    "tag": "merge-inplace",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Sau khi sửa tại chỗ, lora.base.weight đã chứa độ lệch ΔW, nhưng lora(x) vẫn cộng thêm nhánh adapter một lần nữa, nên ΔW bị tính hai lần và đầu ra sai. Gọi merge hai lần cộng ΔW hai lần vào base. Ngoài ra mất khả năng tách adapter ra hoặc hoán adapter khác trên cùng base: base gốc đã bị phá. Vì vậy merge phải sinh ra một lớp mới."
+  },
+  {
+    "q": "Phần adapter chỉ chiếm khoảng 0,4% số phép nhân, nhưng vì sao gộp nó vào W vẫn làm suy luận nhanh hơn rõ rệt, nhất là khi batch nhỏ?",
+    "tag": "merge-latency",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Đếm phép nhân không phải toàn bộ chi phí: nhánh adapter là hai phép nhân ma trận nhỏ chạy tuần tự (không chạy song song với Linear gốc) cộng một phép cộng, mỗi phép tốn một lần gọi kernel và đọc ghi bộ nhớ. Khi batch nhỏ (như sinh từng token) suy luận bị giới hạn bởi băng thông bộ nhớ và độ trễ gọi kernel chứ không phải số phép nhân, nên phần thêm này chiếm tỷ lệ độ trễ lớn hơn nhiều so với 0,4%. Gộp rồi thì lớp chỉ còn một phép nhân như cũ."
+  },
+  {
+    "q": "Hai adapter (A₁, B₁) và (A₂, B₂), cùng r và α, học riêng cho hai tác vụ trên cùng một base W. Gộp cả hai vào W thì độ lệch tổng cộng có hạng tối đa bao nhiêu? Sau khi chỉ giữ W' đã gộp, bạn có tách riêng adapter thứ nhất ra được không?",
+    "tag": "merge-rank-sum",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "ΔW = s(B₁A₁ + B₂A₂) là tổng của hai ma trận hạng ≤ r nên hạng ≤ 2r. Chỉ giữ W' thì không tách được: một ma trận có vô số cách viết thành W + (độ lệch), và W không còn lưu lại. Chỉ trừ ngược được nếu giữ riêng A₁, B₁ (W' − s B₁A₁), có sai số làm tròn. Muốn đổi qua lại giữa các tác vụ thì giữ base và adapter tách rời, không gộp."
+  },
+  {
+    "q": "Khi nào bạn không nên gộp adapter vào base để phục vụ?",
+    "tag": "merge-when-not",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Khi một base phục vụ nhiều tác vụ hoặc nhiều người dùng, mỗi người một adapter nhỏ: giữ adapter tách rời, hoán theo từng yêu cầu, tiết kiệm bộ nhớ (một bản base + nhiều adapter vài MB). Khi base được lượng tử hóa thấp bit (QLoRA) thì cộng ΔW dạng số thực vào trọng số đã làm tròn không lưu lại được mà không mất chính xác. Khi còn muốn tiếp tục huấn luyện adapter hoặc điều chỉnh hệ số α lúc chạy."
+  }
+]

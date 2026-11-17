@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab: phương sai thật của hậu nghiệm β̃ ở chỉ số 0 bằng bao nhiêu, và vì sao? Điều đó gợi ý gì về việc có nên thêm nhiễu ở bước reverse cuối cùng?",
+    "tag": "reverse-last-step-noise",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "β̃ ở chỉ số 0 bằng 0: β̃_t = (1 − ᾱ_{t−1})/(1 − ᾱ_t)·β_t và ở chỉ số 0 chưa có bước nào trước đó nên ᾱ_{−1} = 1, tử số bằng 0. Hậu nghiệm ở bước cuối là một điểm duy nhất (chính ảnh sạch x_0): bước cuối phải rơi đúng vào ảnh sạch, không còn nhiễu để khử. Vì vậy Alg. 2 đặt z = 0 ở bước cuối (t = 1 của paper, chỉ số 0 trong code): thêm σ·z ở đó chỉ rắc nhiễu lên ảnh vừa được làm sạch."
+  },
+  {
+    "q": "Trong lab: ở chỉ số 0, phần chỉnh (hệ số của ε_θ) và phần lắc σ lớn cỡ nào so với nhau? Nếu bước cuối vẫn lắc thì ảnh cuối còn dư nhiễu cỡ bao nhiêu mỗi pixel, và vì sao điều đó đáng lo dù chỉ cỡ 0.01?",
+    "tag": "kick-vs-correction",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Cả hai cỡ 0.01 ở chỉ số 0: phần lắc bằng cả phần chỉnh. Nếu vẫn lắc, mỗi pixel của ảnh cuối còn dư nhiễu có độ lệch chuẩn khoảng 0.01 (trên thang ảnh [−1, 1]): mắt nhìn gần như không thấy từng pixel, nhưng đó là một lớp hạt mịn trên toàn ảnh mà mô hình không còn cơ hội khử, và nó làm xấu các thước đo (FID) vì đo thống kê của toàn bộ ảnh. Nhiễu cuối là lỗi tích luỹ cuối cùng, không được phép dư."
+  },
+  {
+    "q": "Từ trung bình hậu nghiệm μ̃_t (Eq. 7, phụ thuộc x_t và x0), làm sao ra công thức dùng ε_θ trong Alg. 2: 1/√α_t·(x_t − β_t/√(1−ᾱ_t)·ε_θ)? Mô hình đoán gì để thay cho x0 chưa biết?",
+    "tag": "reverse-coef-derivation",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Từ Eq. 4 đảo lại, x0 = (x_t − √(1−ᾱ_t)·ε)/√ᾱ_t. Thay x0 đó vào μ̃_t = [√ᾱ_{t−1}·β_t/(1−ᾱ_t)]·x0 + [√α_t·(1−ᾱ_{t−1})/(1−ᾱ_t)]·x_t và rút gọn (dùng ᾱ_t = α_t·ᾱ_{t−1}) thì ra (1/√α_t)·(x_t − β_t/√(1−ᾱ_t)·ε). Vì x0 không biết, mô hình đoán ε (là cái phép đảo cần) và ta thế ε_θ vào chỗ ε: tức dự đoán trung bình hậu nghiệm bằng cách ước lượng x0 gián tiếp qua nhiễu."
+  },
+  {
+    "q": "Nếu mô hình đoán nhiễu chính xác tuyệt đối thì bước reverse cuối (t = 0) trả về gì, bất kể x_t đưa vào là gì? Vậy vì sao ảnh sinh ra phụ thuộc vào chất lượng của ε_θ ở chính bước đó?",
+    "tag": "reverse-oracle-last-step",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Trả về đúng x0: ở t = 0, ᾱ_0 = α_0 nên công thức (x_t − √(1−ᾱ_0)·ε)/√ᾱ_0 chính là Eq. 4 đảo lại, cho x0 chính xác nếu ε là nhiễu thật của x_t đó. Trong thực tế ε_θ chỉ xấp xỉ, nên kết quả là ước lượng x̂0 = (x_t − √(1−ᾱ_0)·ε_θ)/√ᾱ_0 từ x_t, và sai số của ε_θ ở bước cuối truyền thẳng vào ảnh ra (nhân với hệ số √(1−ᾱ_0)/√ᾱ_0 ≈ 0.01, nhỏ nhưng không bị che bởi bước nào nữa); vì thế bước cuối thực chất là một bước khử nhiễu và chất lượng của nó quyết định độ sạch của ảnh."
+  },
+  {
+    "q": "Vì sao model nhận t_batch shape (B,) kiểu int64 (mọi phần tử bằng t), thay vì một số nguyên đơn? Điều gì dễ vỡ nếu bạn đưa torch.tensor(t) (một tensor 0 chiều)?",
+    "tag": "reverse-t-batch",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Khi train mỗi ảnh có t riêng nên mạng được viết để nhận một vector t theo batch (ví dụ một embedding theo t cho từng mẫu); lúc lấy mẫu giữ nguyên giao diện đó và chỉ lặp một giá trị cho cả batch. Một tensor 0 chiều có thể 'ăn may' vì broadcasting ở vài chỗ nhưng làm vỡ những chỗ cần trục batch (embedding trả về shape khác, view(-1, …) sai số chiều), và nó không khớp với cách mạng đã được train."
+  },
+  {
+    "q": "Nếu quên căn, dùng σ_t = β_t thay vì σ_t = √β_t, ở bước cuối chuỗi (β = 0.02) lượng nhiễu thêm vào nhỏ đi bao nhiêu lần, và hệ quả là gì cho ảnh sinh ra?",
+    "tag": "reverse-sigma-sqrt",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "σ_t² = β_t nên độ lệch chuẩn là √β_t ≈ 0.141 (khi β = 0.02), còn dùng β_t cho 0.02: ít hơn khoảng 7 lần. Chuỗi sinh bị 'thiếu nhiễu': phân phối các mẫu nhỏ đi và đa dạng giảm, các mẫu dồn về những ảnh gần trung bình, mờ hoặc lặp lại; mức nhiễu thực tế cũng không khớp với mức mà mô hình được train để chờ ở mỗi bước (x_t có phương sai theo lịch), nên chất lượng xuống dần theo số bước."
+  }
+]

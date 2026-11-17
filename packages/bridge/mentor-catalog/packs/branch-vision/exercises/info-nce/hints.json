@@ -1,0 +1,70 @@
+[
+  {
+    "level": 0,
+    "test": "test_shape_and_inputs",
+    "text": "Loss cuối cùng là một số hay một tensor nhiều phần tử? Nếu bạn dùng phép toán có sẵn để tính cross-entropy, tham số nào quyết định cách gộp các loss thành một số?"
+  },
+  {
+    "level": 0,
+    "test": "test_values_loop",
+    "text": "Với ma trận độ giống 2N×2N, hàng i có những cột nào là ứng viên (mẫu số), và cột nào là positive? Positive của hàng i ở cột số mấy khi z1 đứng trước z2 trong chuỗi ghép?"
+  },
+  {
+    "level": 0,
+    "test": "test_normalization",
+    "text": "Nếu nhân vector z_i với 10 thì độ giống giữa nó và các vector khác của bạn đổi thế nào? Độ giống đó nên đổi không, và cần làm gì trước khi tính tích vô hướng?"
+  },
+  {
+    "level": 0,
+    "test": "test_temperature_division",
+    "text": "Cặp positive có cosine 1 và mọi cặp khác có cosine 0. Với τ = 0.5 thì độ giống của positive sau khi áp temperature là bao nhiêu, và temperature nhỏ làm các độ giống xa nhau hơn hay gần nhau hơn?"
+  },
+  {
+    "level": 0,
+    "test": "test_diagonal_masked",
+    "text": "Nếu mọi vector giống hệt nhau thì mẫu số có bao nhiêu số hạng bằng nhau, và loss của một hàng bằng gì? Cột chéo (so một vector với chính nó) có nên là ứng viên không, và làm sao loại nó khỏi softmax mà không làm hỏng tổng?"
+  },
+  {
+    "level": 0,
+    "test": "test_symmetric_mean",
+    "text": "Nếu hoán đổi z1 và z2 thì tập 2N loss thành phần thay đổi thế nào? Bạn đang trung bình trên bao nhiêu hàng của ma trận độ giống: N hay 2N?"
+  },
+  {
+    "level": 0,
+    "test": "test_stability",
+    "text": "Với τ = 0.01 độ giống lớn nhất là 100: exp(100) trong float32 bằng bao nhiêu? Có phép nào của torch tính log-softmax mà không tự tính exp rồi chia, và nó trừ đi giá trị nào để tránh tràn số?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients",
+    "text": "Gradient có chảy tới z2 không, hay có chỗ nào trong code của bạn cắt nó (detach, hay chuyển sang số Python)? Và phần tử bị loại ở đường chéo có làm gradient bị nan không?"
+  },
+  {
+    "level": 1,
+    "text": "Làm bốn việc: ghép hai view thành một chuỗi 2N vector và chuẩn hóa độ dài; tính ma trận độ giống 2N×2N (tích vô hướng của các vector đã chuẩn hóa) chia cho temperature; loại đường chéo khỏi cuộc chơi (làm sao để softmax không bao giờ chọn nó); rồi coi mỗi hàng là logits của một bài phân loại 2N lớp mà lớp đúng là vị trí của view còn lại, và lấy trung bình cross-entropy."
+  },
+  {
+    "level": 1,
+    "text": "Để loại một phần tử khỏi softmax, hãy đặt logit của nó thành một giá trị mà exp của nó bằng 0: khi đó nó không đóng góp vào mẫu số và cũng không bao giờ được chọn. Nhãn của hàng i là chỉ số của positive, tính từ i bằng một phép cộng rồi lấy dư theo 2N."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "z = chuẩn hóa L2 từng hàng của ghép [z1; z2]       # (2N, D)\nlogits = z @ z^T / temperature                     # (2N, 2N)\nđặt đường chéo của logits thành -vô cùng\nnhãn[i] = (i + N) mod 2N, với i = 0 .. 2N - 1\nloss = cross_entropy(logits, nhãn), trung bình trên 2N hàng"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc loại đường chéo",
+    "text": "Dựng một ma trận bool 2N×2N chỉ có đường chéo là True (ma trận đơn vị kiểu bool), rồi thay các phần tử ứng với True trong logits bằng -vô cùng. Phép thay có điều kiện của tensor nhận mask bool và một giá trị, và trả về tensor mới."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở đường chéo",
+    "text": "```python\nmask = torch.eye(2 * n, dtype=torch.bool, device=z.device)\nlogits = logits.masked_fill(mask, float(\"-inf\"))\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở nhãn",
+    "text": "```python\ntargets = (torch.arange(2 * n, device=z.device) + n) % (2 * n)\nloss = F.cross_entropy(logits, targets)\n```"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "id": "gae-lambda",
+  "title": "lambda-return: GAE nhìn dưới dạng pha trộn (biến thể của gae)",
+  "star": "gae",
+  "skills": ["formula", "theory"],
+  "difficulty": 1750,
+  "minutes": 15,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["lambda_return"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["gae"],
+  "variantOf": "gae",
+  "predict": "Rollout ba bước, một episode (không done), $\\gamma = 0.5$: thưởng $r = [1, 1, 1]$, giá trị mạng $V = [1, 2, 3]$, `last_value` $= 4$. $\\lambda$-return là $G^\\lambda_t = r_t + \\gamma\\,[(1-\\lambda)V_{t+1} + \\lambda G^\\lambda_{t+1}]$ với $V_3 = G_3 = 4$. Trước khi code, dự đoán (tính tay được): (a) $\\lambda = 0$ cho ba mục tiêu $G_0, G_1, G_2$ bằng bao nhiêu, và $\\lambda = 1$ thì sao? Từ đó advantage $A_t = G_t - V_t$ ở hai cực. (b) Bước cuối $G_2$ có đổi theo $\\lambda$ không, và vì sao? (c) Hai cực: cực nào dùng nhiều thưởng thật (nhiều nhiễu), cực nào dựa nhiều vào $V$ (có thể lệch)? (d) Nếu $V$ đã chính xác tuyệt đối (nhất quán với thưởng thật), $\\lambda$ có còn ảnh hưởng đến $G$ không? (e) Một bước cuối rollout là `done`: $\\lambda$-return của bước đó bằng gì?"
+}

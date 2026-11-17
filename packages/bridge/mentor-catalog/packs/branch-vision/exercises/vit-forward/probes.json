@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Nếu bỏ hoàn toàn positional embedding và hoán vị ngẫu nhiên các patch của một ảnh trước khi đưa vào Transformer, logits (đọc từ token cls) thay đổi thế nào? Vì sao?",
+    "tag": "vit-position-blind",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Logits không đổi. PatchEmbed nhúng từng patch độc lập, token cls không mang vị trí, và self-attention là hàm đối xứng theo hoán vị của các token: hoán vị đầu vào chỉ hoán vị đầu ra tương ứng, mà cls đọc tất cả bằng softmax (không phân biệt thứ tự). Mô hình khi đó coi ảnh là một \"túi patch\", không biết patch nào ở đâu: positional embedding là thứ duy nhất đưa cấu trúc không gian vào."
+  },
+  {
+    "q": "Với depth = 0 (không có khối encoder nào), hai ảnh khác nhau cho logits khác nhau hay giống nhau? Điều đó nói gì về cách token cls lấy thông tin về ảnh?",
+    "tag": "vit-cls-reads-via-attention",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Giống nhau: token cls bắt đầu chỉ là một tham số học được (cộng positional embedding), không chứa thông tin gì về ảnh. Thông tin của ảnh chỉ đến cls qua attention trong các khối encoder (cls dùng query của nó để đọc key/value của các patch). Không có khối nào thì không có kênh nào từ patch sang cls."
+  },
+  {
+    "q": "Positional embedding được cộng vào các token (sau khi ghép cls) chứ không ghép thêm chiều. Vì sao cộng chứ không nối? Và vì sao pos_embed có N + 1 hàng chứ không phải N?",
+    "tag": "vit-pos-embed-add",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Cộng giữ nguyên chiều dim (và chi phí của các lớp sau); mạng học để tách thông tin nội dung và vị trí trong không gian dim chiều. Nối làm dim tăng gấp đôi hoặc phải chia nhỏ không gian. Chuỗi có N patch và 1 token cls, mỗi vị trí cần một vector riêng: N + 1 hàng (cls cũng có vị trí, ở đầu chuỗi)."
+  },
+  {
+    "q": "Đọc kết quả từ token cls và đọc bằng cách lấy trung bình các patch token (global average pooling) khác nhau thế nào? Hai cách cho cùng khả năng biểu diễn không, và vì sao bài này chốt dùng token 0?",
+    "tag": "vit-cls-vs-pool",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Cả hai đều hoạt động (nhiều bản ViT dùng trung bình mà vẫn đạt độ chính xác tương đương). Token cls là một vị trí chuyên dụng chưa gắn với patch nào, mô hình học cách gom thông tin vào đó qua attention; trung bình thì dùng thẳng các patch token, không cần thêm token và không cần học việc gom. Bài chốt cls vì đó là thiết kế của paper và để thứ tự ghép (cls ở đầu) và việc lấy đúng token 0 trở thành điều phải làm cho đúng, kiểm được bằng test."
+  },
+  {
+    "q": "Với ảnh 224×224, patch 16, dim 768: tensor đi qua các khối có shape gì, và pos_embed có bao nhiêu số? Nếu lúc suy luận đưa ảnh 384×384 vào cùng mô hình thì điều gì hỏng, và người ta xử lý thế nào?",
+    "tag": "vit-shape-resolution",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Chuỗi (B, 197, 768): 196 patch cộng 1 cls; pos_embed có 197·768 = 151 296 số. Ảnh 384×384 cho 24² = 576 patch, chuỗi 577 token trong khi pos_embed chỉ có 197 hàng: phép cộng báo lỗi shape. Cách xử lý thường dùng: nội suy (bicubic) lưới positional embedding từ 14×14 lên 24×24 (giữ lại hàng của cls), rồi fine-tune ở độ phân giải mới."
+  }
+]

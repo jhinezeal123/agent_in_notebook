@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Với x shape (N, C, H, W), thống kê của Batch Norm gộp theo những trục nào, và running_mean có shape gì? Với N = 8, H = W = 16, mỗi kênh dùng bao nhiêu giá trị để ra một con số trung bình? Nếu thay vào đó gộp theo (C, H, W) của từng ảnh, đó là phép chuẩn hóa nào?",
+    "tag": "bn-axes",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "Gộp theo (N, H, W), giữ trục kênh C: mỗi kênh một trung bình và một phương sai, running_mean shape (C,). Với N = 8, H = W = 16 mỗi kênh dùng 8·16·16 = 2048 giá trị. Gộp theo (C, H, W) của từng ảnh là chuẩn hóa theo mẫu (kiểu LayerNorm/GroupNorm với một nhóm), không phụ thuộc batch: khác hẳn về ý nghĩa vì nó trộn các kênh có thang đo khác nhau."
+  },
+  {
+    "q": "Running_var lấy phương sai chia (n − 1) nhưng chuẩn hóa lúc train lại dùng phương sai chia n. Vì sao mỗi nơi chọn một kiểu? Với n = 8 giá trị mỗi kênh, hai cách chênh nhau bao nhiêu phần trăm, và với n = 2048 thì sao?",
+    "tag": "bn-unbiased-running",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Running_var là ước lượng của phương sai thật của phân phối, nên dùng ước lượng không thiên lệch (chia n − 1): chia n luôn thấp hơn một hệ số (n − 1)/n trung bình. Còn lúc chuẩn hóa, ta chỉ cần làm đúng batch hiện tại có phương sai 1: dùng phương sai của chính batch đó (chia n). Với n = 8 chênh n/(n − 1) = 8/7, tức 14%; với n = 2048 chênh 0,05%, gần như không đáng kể: chuyện này chỉ đáng kể khi n nhỏ (batch nhỏ, kênh cuối của mạng có H = W = 1 hoặc 2)."
+  },
+  {
+    "q": "Một mô hình train xong, lúc suy luận bạn quên gọi model.eval() và đưa vào từng ảnh một. Đầu ra của ảnh đó thay đổi thế nào so với đúng quy trình, và nếu đưa vào một batch gồm ảnh đó cùng 31 ảnh khác thì kết quả của ảnh đó có phụ thuộc 31 ảnh kia không? Lúc eval thì sao?",
+    "tag": "bn-train-vs-eval",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Ở chế độ train, BN chuẩn hóa bằng thống kê của chính batch: với một ảnh, mỗi kênh chỉ có H·W giá trị, chuẩn hóa bằng thống kê của ảnh đó (hoặc, với H = W = 1, lỗi ValueError / chia 0), nên đầu ra khác hẳn và còn cập nhật nhầm running stats. Với batch 32, đầu ra của một ảnh phụ thuộc vào 31 ảnh còn lại (đổi bạn cùng batch là đổi kết quả). Ở eval dùng running stats cố định, mỗi ảnh độc lập, kết quả tất định."
+  },
+  {
+    "q": "Nếu batch size chỉ là 2 (do ảnh độ phân giải lớn) thì Batch Norm gặp vấn đề gì? Với batch size 1 và ảnh 1×1 thì sao? Tên một cách chuẩn hóa không phụ thuộc kích thước batch.",
+    "tag": "bn-small-batch",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "Thống kê của batch nhỏ rất nhiễu (ước lượng từ ít giá trị), và nhiễu đó làm train không ổn định và lệch với thống kê running lúc eval. Với N·H·W = 1 thì không có phương sai (chia n − 1 = 0), đó là lý do bài raise ValueError. Các cách không phụ thuộc batch: LayerNorm, GroupNorm, InstanceNorm (GroupNorm là lựa chọn quen thuộc cho batch nhỏ trong detection/segmentation)."
+  },
+  {
+    "q": "Vì sao lớp Linear hay Conv đứng ngay trước một lớp Batch Norm thường được tạo với bias=False? Cái gì trong công thức của Batch Norm làm bias đó thừa?",
+    "tag": "bn-bias-redundant",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Bias của conv cộng thêm một hằng c vào mọi giá trị của kênh, nên trung bình của kênh lệch đi c; Batch Norm trừ trung bình của batch ngay sau đó và xóa đúng hằng c. Còn lại bias có tác dụng thật là β của chính Batch Norm. Giữ bias ở conv chỉ tốn tham số và gradient của nó luôn bằng 0 (về mặt lý thuyết)."
+  },
+  {
+    "q": "Vì sao Batch Norm vẫn có γ và β học được thay vì để đầu ra luôn có trung bình 0, phương sai 1? Chọn γ và β nào thì lớp này trở thành phép đồng nhất (identity) trên một batch?",
+    "tag": "bn-affine",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Ép trung bình 0 và phương sai 1 làm mất khả năng biểu diễn (ví dụ, trước một sigmoid mạng có thể cần các giá trị lệch về một phía). γ, β cho mạng tự chọn lại thang và độ lệch phù hợp. Chọn γ = sqrt(σ² + ε) và β = μ (của batch) thì đầu ra bằng đúng đầu vào: Batch Norm có thể hoàn tác phép chuẩn hóa nếu việc đó tốt hơn."
+  }
+]

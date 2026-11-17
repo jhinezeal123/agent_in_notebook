@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Trong lab: tín hiệu (trung bình của x_t) tụt xuống một nửa ở khoảng chỉ số bước nào, so với tổng T = 1000? Với β chỉ từ 1e-4 đến 0.02, bạn có ngạc nhiên không, và điều đó nói gì về phần sau của chuỗi?",
+    "tag": "schedule-signal-decay",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Một nửa tín hiệu mất ở khoảng chỉ số 370 (chưa tới 40% chuỗi), không phải ở giữa: tín hiệu giảm theo tích của các hệ số √(1−β) chứ không giảm tuyến tính, và β tăng dần nên đoạn sau mất nhanh hơn. Hệ quả: phần lớn bước sau đó chỉ còn là nhiễu gần như thuần tuý, và cuối chuỗi (ᾱ ≈ 4e-5, √ᾱ ≈ 0.006) x_T gần như N(0, I), đúng điều ta cần để sinh ảnh bắt đầu từ nhiễu."
+  },
+  {
+    "q": "Trong lab: để biết tín hiệu còn lại sau t bước, ta gộp t hệ số (mỗi bước một hệ số cỡ 1 − β) bằng phép cộng hay phép nhân? Vì sao phép đó cũng cho ra \"nhiễu tích luỹ\" có phương sai 1 − ᾱ_t?",
+    "tag": "alpha-bar-product",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Nhân: mỗi bước nhân tín hiệu với √α_s nên sau t bước tín hiệu bị nhân với tích √α_0·…·√α_t = √ᾱ_t, vậy ᾱ_t là tích (cumprod) của α_s chứ không phải tổng. Nhiễu của các bước độc lập, mỗi lượng nhiễu bị các bước sau thu nhỏ, và các phương sai cộng lại thành đúng 1 − ᾱ_t, nên tổng bình phương hệ số tín hiệu và nhiễu luôn bằng ᾱ_t + (1 − ᾱ_t) = 1: x_t giữ phương sai 1 nếu x_0 có phương sai 1."
+  },
+  {
+    "q": "Mảng betas có T phần tử đánh số từ 0. Nếu ta lỡ định nghĩa alpha_bar[0] = 1 (\"chưa thêm nhiễu\") rồi alpha_bar[t] = tích đến α_{t−1}, thì mọi thứ lệch đi đâu, và test nào của bạn sẽ bắt?",
+    "tag": "schedule-indexing",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Đó là lệch một: alpha_bar sẽ là ᾱ_{t−1} chứ không phải ᾱ_t. Hệ quả là bước đầu có √(1−ᾱ) = 0, tức x_t = x_0 hoàn toàn không có nhiễu, và mọi bước sau dùng mức nhiễu của bước trước đó, nên ảnh dùng khi train và lúc lấy mẫu lệch pha nhau một bước. Quy ước đề: alpha_bar[i] là tích α_0…α_i (gồm cả α_i), nên alpha_bar[0] = alphas[0]."
+  },
+  {
+    "q": "Dùng torch.arange(T) rồi chia cho T để dựng β, thay vì linspace, thì sai ở đâu? Chuyện này có ảnh hưởng gì tới việc x_T có đủ nhiễu hay không?",
+    "tag": "schedule-endpoints",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "arange(T)/T chỉ tới (T−1)/T của khoảng, nên không bao giờ chạm beta_end: β cuối nhỏ hơn 0.02 một chút, và với T nhỏ lệch rất nhiều (T = 2 cho β thứ hai bằng khoảng 0.01 thay vì 0.02). linspace(…, T) gồm cả hai đầu mút. Với T = 1000 lệch này làm ᾱ_T lớn hơn một chút nên x_T hơi còn tín hiệu, nhưng điểm chính là lịch của code không còn đúng lịch trong paper."
+  },
+  {
+    "q": "ᾱ_0 = 0.9999 trong float32 chỉ chính xác cỡ 6e-8 (khoảng cách giữa hai số float32 gần 1). Khi đó 1 − ᾱ_0 sai tương đối khoảng bao nhiêu so với giá trị thật 1e-4, và liệu điều đó có làm hỏng sqrt_one_minus_alpha_bar?",
+    "tag": "schedule-float32",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "1 − ᾱ_0 là phép trừ hai số gần nhau nên mất độ chính xác: sai số tuyệt đối khoảng 3e-8 so với giá trị 1e-4, tức tương đối khoảng 3e-4. Sau căn bậc hai sai tương đối còn khoảng 1.5e-4 của 0.01, tức khoảng 1.5e-6 tuyệt đối: đủ nhỏ để không ảnh hưởng, nên float32 chấp nhận được; nếu cần chính xác hơn có thể tính mọi thứ ở float64 rồi mới ép về float32."
+  }
+]

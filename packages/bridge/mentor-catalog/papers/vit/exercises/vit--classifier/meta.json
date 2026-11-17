@@ -1,0 +1,17 @@
+{
+  "id": "vit--classifier",
+  "title": "ViT cho MNIST theo patch size và nội suy positional embedding 2D",
+  "star": "vit--classifier",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1800,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["make_vit", "resize_pos_embed"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "vit",
+  "role": "component",
+  "cites": "§3.1 (Eq. 1–4), §3.2",
+  "uses": ["vit-forward"]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "lora--inject",
+  "title": "Gắn LoRA vào GPT (§4.2) và đếm tham số",
+  "star": "lora--inject",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1850,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["add_lora", "count_params"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "lora",
+  "role": "component",
+  "cites": "§4.1 (Eq. 3), §4.2, §7.1",
+  "uses": ["gpt-mini", "lora-linear"]
+}

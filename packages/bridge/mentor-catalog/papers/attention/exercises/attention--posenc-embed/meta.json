@@ -1,0 +1,17 @@
+{
+  "id": "attention--posenc-embed",
+  "title": "Embedding và positional encoding (§3.4–3.5)",
+  "star": "attention--posenc-embed",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1500,
+  "minutes": 20,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["PositionalEmbedding"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "attention",
+  "role": "component",
+  "cites": "§3.4, §3.5",
+  "uses": []
+}

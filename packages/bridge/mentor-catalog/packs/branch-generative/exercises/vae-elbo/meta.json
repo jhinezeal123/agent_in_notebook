@@ -1,0 +1,14 @@
+{
+  "id": "vae-elbo",
+  "title": "VAE hoàn chỉnh: encoder, decoder và loss -ELBO",
+  "star": "vae",
+  "skills": ["formula", "theory"],
+  "difficulty": 1700,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["VAE", "elbo_loss"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["reparam-kl"]
+}

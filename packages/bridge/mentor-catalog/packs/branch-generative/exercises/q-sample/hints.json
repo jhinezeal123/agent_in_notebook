@@ -1,0 +1,14 @@
+[
+  {"level": 0, "test": "test_shape_and_inputs", "text": "Phép nhân bạn dùng để thu nhỏ x0 có ghi đè lên chính x0 của người gọi không? Hàm của bạn trả về một tensor mới, hay trả lại chính tensor đầu vào đã bị sửa?"},
+  {"level": 0, "test": "test_values_per_sample", "text": "Ảnh số 0 có t = 0 còn ảnh số 3 có t = 99. Bạn lấy ra bao nhiêu hệ số, và có đúng một hệ số cho mỗi ảnh theo bước của riêng ảnh đó không, hay đang dùng chung cho cả batch?"},
+  {"level": 0, "test": "test_batch_axis", "text": "Hệ số có shape (B,) còn ảnh có shape (B, C, H, W). Khi B = 4 và chiều rộng cũng bằng 4, PyTorch căn thẳng hàng hai shape từ trục nào, và vector (B,) khớp với trục nào của ảnh? Đó có phải trục batch không?"},
+  {"level": 0, "test": "test_variance_preserved", "text": "Nếu ᾱ_t = 0.5 thì hệ số của x0 và hệ số của nhiễu lần lượt bằng bao nhiêu? Nếu hai thành phần độc lập, mỗi thành phần phương sai 1, thì phương sai của tổng bằng bao nhiêu?"},
+  {"level": 0, "test": "test_endpoints", "text": "Ở t = 0 hệ số của x0 gần 1 hay gần 0? Bạn đang lấy phần tử nào của lịch khi t = 0: phần tử đầu, hay một phần tử khác (kể cả phần tử cuối)?"},
+  {"level": 0, "test": "test_with_your_schedule", "text": "Khi chạy trên lịch của chính bạn, bạn đọc những khoá nào của dict, và các tensor đó có shape (T,) kiểu float32 như đề đã nói không?"},
+  {"level": 1, "text": "Ba việc: (1) lấy hai hệ số theo t ra khỏi sched, mỗi ảnh một số; (2) đưa hai vector shape (B,) đó về shape mà phép broadcasting ghép được với (B, C, H, W): thêm các trục kích thước 1 NGAY SAU trục batch; (3) nhân hệ số tín hiệu với x0, nhân hệ số nhiễu với noise, rồi cộng."},
+  {"level": 1, "when": "chưa biết lấy hệ số theo t", "text": "Một mảng shape (T,) mà đánh chỉ số bằng tensor số nguyên shape (B,) cho ra tensor shape (B,) chứa các phần tử tương ứng (đó là lý do t phải là int64). Mỗi ảnh nhận đúng phần tử ở vị trí t của nó."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "a = sqrt_alpha_bar lấy theo t -> shape (B,)\nb = sqrt_one_minus_alpha_bar lấy theo t -> shape (B,)\nđổi a và b thành shape (B, 1, 1, 1) (một trục batch rồi các trục 1)\ntrả a * x0 + b * noise  (shape (B, C, H, W))"},
+  {"level": 2, "when": "kẹt ở đổi shape", "text": "Dùng một phép đổi shape (view hoặc reshape) với kích thước trục đầu để PyTorch tự suy ra (đặt -1) và các trục còn lại đặt 1, với số trục bằng số trục của ảnh trừ một."},
+  {"level": 3, "when": "kẹt ở lấy hệ số và đổi shape", "text": "```python\nsab = sched[\"sqrt_alpha_bar\"][t].view(-1, 1, 1, 1)\ns1m = sched[\"sqrt_one_minus_alpha_bar\"][t].view(-1, 1, 1, 1)\n```"},
+  {"level": 3, "when": "kẹt ở bước cuối", "text": "```python\nreturn sab * x0 + s1m * noise\n```"}
+]

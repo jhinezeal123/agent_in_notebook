@@ -1,0 +1,51 @@
+[
+  {
+    "q": "Một chuỗi có 4 token a b c d (vị trí 0..3) đi qua GPT cho 4 vector logits. Mỗi vector logits được chấm bằng token nào? Có vector nào, hoặc token nào, không đi vào loss không? Vậy loss được tính trên bao nhiêu cặp?",
+    "tag": "next-token-shift",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "Logits ở vị trí t dự đoán token ở vị trí t + 1: ba cặp (0→b, 1→c, 2→d). Logits ở vị trí 3 không có token đích trong chuỗi này (token sau d chưa biết) và token a ở vị trí 0 không do vị trí nào dự đoán. Tổng cộng T − 1 = 3 cặp mỗi mẫu. Ghép logits ở t với token ở t (không dịch) là lỗi kinh điển: mô hình học sao chép token vào, loss tụt gần 0 mà không học gì."
+  },
+  {
+    "q": "Mô hình chưa train có vocab_size = 65 và logits gần như bằng nhau ở mọi token. Loss cross-entropy lúc khởi tạo xấp xỉ bao nhiêu? Con số này giúp phát hiện lỗi gì trước khi bắt đầu train?",
+    "tag": "initial-loss",
+    "stage": "lab",
+    "kind": "edge",
+    "answer": "Xấp xỉ ln 65 ≈ 4,17 (phân phối đều: mỗi token xác suất 1/65, loss = −ln(1/65)). Nếu loss khởi tạo lệch xa (ví dụ 20, hoặc gần 0) thì có lỗi: scale khởi tạo quá lớn, nhãn bị rò vào đầu vào, hoặc ghép sai cặp (đầu ra, đích). Đây là bước kiểm nhanh nhất trước khi train."
+  },
+  {
+    "q": "Block của bạn là pre-LN (LayerNorm trước nhánh con). Nếu đổi thành post-LN (cộng rồi mới LayerNorm, như Transformer gốc) thì kết quả đổi ở đâu, và vì sao GPT-2 trở đi chuyển sang pre-LN?",
+    "tag": "pre-ln",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Pre-LN: x + f(LN(x)), đường residual đi thẳng từ đầu tới cuối không qua LayerNorm nào, nên gradient chảy về các lớp sâu ổn định hơn, train được với learning rate lớn hơn và không cần warmup kỹ. Post-LN: LN(x + f(x)) đặt LayerNorm trên chính đường residual, gradient ở lớp sâu dễ nhỏ hoặc không ổn định khi mô hình sâu. Khi pre-LN, tín hiệu cuối cùng chưa được chuẩn hóa nên cần thêm một LayerNorm cuối (ln_f) trước head."
+  },
+  {
+    "q": "Nếu bỏ hẳn embedding vị trí khỏi mô hình này (chỉ còn embedding token), mô hình có phân biệt được \"a b\" với \"b a\" không? Với attention hai chiều (như BERT) thì sao?",
+    "tag": "positional-need",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Attention không có khái niệm thứ tự: với attention hai chiều thì hoán vị token chỉ hoán vị đầu ra, mô hình là một \"túi từ\", nên bắt buộc phải thêm thông tin vị trí. Với mask causal thì vị trí t chỉ thấy t + 1 token nên mô hình vẫn suy ra được vị trí một cách gián tiếp (nhìn có bao nhiêu token), nên vẫn học được phần nào, nhưng tín hiệu yếu và kém ổn định; thực tế vẫn thêm embedding vị trí để chắc chắn."
+  },
+  {
+    "q": "Một Block có n_embd = C. Số tham số của attention (qkv và proj) và của MLP cỡ bao nhiêu theo C (bỏ qua bias)? Phần nào chiếm nhiều hơn, và với vocab 50 000 thì embedding token và head chiếm bao nhiêu so với một khối khi C = 768?",
+    "tag": "param-count",
+    "stage": "defend",
+    "kind": "shape",
+    "answer": "Attention: qkv 3C² + proj C² = 4C². MLP: C·4C + 4C·C = 8C². Một khối cỡ 12C² (MLP nhiều gấp đôi attention). Với C = 768: một khối ≈ 12 · 768² ≈ 7,1 triệu; tok_emb và head mỗi cái 50 000 · 768 ≈ 38 triệu, tức mỗi bảng từ vựng bằng khoảng 5 khối. Vì vậy mô hình nhỏ thường dùng chung trọng số tok_emb và head (weight tying)."
+  },
+  {
+    "q": "Lúc train, một lần forward qua chuỗi T token cho bao nhiêu mẫu huấn luyện (cặp ngữ cảnh → token kế)? Vì sao điều đó làm GPT train nhanh hơn nhiều so với tưởng tượng \"mỗi lần đoán một token\"?",
+    "tag": "parallel-loss",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "T − 1 mẫu cùng lúc: đầu ra ở mỗi vị trí t là dự đoán cho token t + 1 với ngữ cảnh là các token 0..t. Nhờ mask causal, ngữ cảnh của mỗi vị trí không bị lộ tương lai, nên một lượt forward song song cho T − 1 mẫu hợp lệ thay vì T − 1 lượt riêng."
+  },
+  {
+    "q": "Mô hình có block_size = 8 và pos_emb học được. Đưa vào chuỗi 9 token thì chuyện gì xảy ra, và vì sao? Cách nào để sinh văn bản dài hơn block_size?",
+    "tag": "block-size-limit",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Lỗi chỉ số (IndexError): bảng pos_emb chỉ có 8 hàng cho vị trí 0..7, vị trí 8 không có vector. Mô hình chưa từng được train với vị trí đó. Khi sinh, ta chỉ đưa vào block_size token cuối của chuỗi (cửa sổ trượt). Các cách mã hóa vị trí khác (sin/cos, RoPE) ngoại suy được một phần nhưng chất lượng giảm khi vượt xa độ dài lúc train."
+  }
+]

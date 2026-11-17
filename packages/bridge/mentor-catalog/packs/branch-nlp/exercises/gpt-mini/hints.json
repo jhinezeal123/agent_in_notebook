@@ -1,0 +1,85 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Máy chấm chép trọng số vào mô hình của bạn theo tên tham số. Mỗi thuộc tính trong bảng của đề (tok_emb, pos_emb, blocks, ln_f, head, và ln1, attn, ln2, mlp trong Block) bạn đã tạo đúng loại và đúng kích thước chưa? Và bạn có tạo thêm tham số nào không có trong bảng không?"
+  },
+  {
+    "level": 0,
+    "test": "test_logits",
+    "text": "Đi theo đường của một token: những phép nào xảy ra từ idx cho tới logits, theo thứ tự nào? LayerNorm đứng trước hay sau mỗi nhánh con, và nhánh con được cộng vào đâu?"
+  },
+  {
+    "level": 0,
+    "test": "test_positions",
+    "text": "Attention tự nó không biết token đứng ở đâu. Nếu cùng một token lặp lại ở mọi vị trí và mô hình của bạn không có thông tin vị trí, các vị trí có thể cho kết quả khác nhau không? Thông tin vị trí của bạn đi vào mô hình ở đâu?"
+  },
+  {
+    "level": 0,
+    "test": "test_loss_value",
+    "text": "Đầu ra ở vị trí t được dùng để dự đoán token nào? Với T = 4, những cặp (đầu ra, token đích) nào đi vào loss, và có đầu ra hay token đích nào bị bỏ ra ngoài không?"
+  },
+  {
+    "level": 0,
+    "test": "test_target_shift",
+    "text": "Nếu mỗi đầu ra dự đoán token kế tiếp, thì token đích ở vị trí 0 do đầu ra nào dự đoán? Và đầu ra ở vị trí cuối cùng dự đoán token nào trong chuỗi này?"
+  },
+  {
+    "level": 0,
+    "test": "test_loss_mean",
+    "text": "Loss của bạn là tổng hay trung bình? Trung bình trên bao nhiêu phần tử: B·T, B·(T−1), hay thứ khác? Gấp đôi batch thì loss nên đổi thế nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_no_future",
+    "text": "Mỗi khối của bạn đã tách riêng từng vị trí, trừ chỗ attention. Vậy thứ gì khác trong mô hình có thể trộn thông tin giữa các vị trí (ví dụ LayerNorm chuẩn hóa theo trục nào)? Và embedding vị trí của một đoạn ngắn lấy từ vị trí nào của bảng?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients",
+    "text": "Tham số nào của bạn không nằm trên đường từ idx tới loss? Với một đoạn T token, bao nhiêu hàng của bảng embedding vị trí thực sự được dùng, và bạn lấy chúng ra bằng cách nào?"
+  },
+  {
+    "level": 1,
+    "text": "Làm từ nhỏ đến lớn. Block: mỗi nhánh con (attention, rồi MLP) là chuẩn hóa x bằng một LayerNorm riêng, cho qua nhánh con, rồi cộng kết quả vào chính x. GPT: đầu vào của chồng khối là tổng của embedding token và embedding vị trí (vị trí là 0, 1, …, T−1 theo độ dài T của idx); cho qua các khối lần lượt, qua LayerNorm cuối, rồi qua head để ra logits. Loss làm sau cùng và chỉ khi có targets."
+  },
+  {
+    "level": 1,
+    "text": "Đầu ra ở vị trí t dự đoán token ở vị trí t + 1. Vậy ghép mỗi đầu ra (trừ cái cuối cùng) với token đích đứng sau nó (trừ token đầu tiên): hai bên đều còn T − 1 vị trí. Rồi duỗi batch và thời gian thành một trục để cross-entropy nhận logits (N, vocab_size) và nhãn (N,), và lấy trung bình."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "GPT.__init__: lưu block_size; tạo tok_emb, pos_emb, blocks (n_layer khối), ln_f, head\nGPT.forward(idx, targets):\n1. B, T = shape của idx\n2. pos = các số nguyên 0..T-1                        # (T,)\n3. x = emb token của idx + emb vị trí của pos         # (B, T, C)\n4. lần lượt cho x qua từng khối\n5. logits = head(ln_f(x))                              # (B, T, vocab_size)\n6. loss = None; nếu có targets thì tính loss như đề\n7. trả về (logits, loss)\nBlock.forward(x):\n  x ← x + attn(ln1(x))\n  x ← x + mlp(ln2(x))"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở loss lệch một vị trí",
+    "text": "Với T = 4: các đầu ra ở vị trí 0, 1, 2 được chấm bằng token đích ở vị trí 1, 2, 3. Đầu ra ở vị trí 3 và token đích ở vị trí 0 không dùng. Cắt lát theo trục thời gian (trục 1) của logits và của targets mỗi bên thế nào để cả hai còn đúng T − 1 vị trí và thẳng hàng với nhau?"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở duỗi tensor khi tính loss",
+    "text": "Sau khi cắt lát theo trục thời gian, tensor không còn liền mạch trong bộ nhớ, nên phép đổi shape \"nhìn lại cùng vùng nhớ\" sẽ báo lỗi khi B > 1. Dùng phép đổi shape chịu được điều đó. Logits cần thành (B·(T−1), vocab_size), nhãn thành (B·(T−1),), cả hai duỗi theo cùng thứ tự (batch trước, thời gian sau)."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở embedding vị trí",
+    "text": "pos_emb là một bảng (block_size, C): đưa vào nó một tensor số nguyên các vị trí 0..T−1 (cùng device với idx) thì ra (T, C). Cộng với embedding token (B, T, C): broadcasting tự thêm trục batch. Đừng cộng cả bảng (block_size, C) vì T thường nhỏ hơn block_size."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở Block",
+    "text": "```python\nx = x + self.attn(self.ln1(x))\nx = x + self.mlp(self.ln2(x))\nreturn x\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở embedding vị trí",
+    "text": "```python\nB, T = idx.shape\npos = torch.arange(T, device=idx.device)\nx = self.tok_emb(idx) + self.pos_emb(pos)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở loss lệch một vị trí",
+    "text": "```python\nV = logits.size(-1)\nloss = F.cross_entropy(logits[:, :-1].reshape(-1, V), targets[:, 1:].reshape(-1))\n```"
+  }
+]

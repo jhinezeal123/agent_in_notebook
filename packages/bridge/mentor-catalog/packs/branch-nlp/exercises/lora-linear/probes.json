@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Giả sử cả A và B đều khởi tạo bằng 0. Sau lần backward đầu tiên, gradient của A và của B bằng bao nhiêu (nhìn công thức $y = \\operatorname{base}(x) + \\frac{\\alpha}{r} x A^\\top B^\\top$)? Adapter có bao giờ học được không?",
+    "tag": "lora-init",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Gradient của B tỷ lệ với A (qua x Aᵀ) nên bằng 0 khi A = 0; gradient của A tỷ lệ với B nên bằng 0 khi B = 0. Điểm (A, B) = (0, 0) là một điểm yên: mọi gradient đều 0 nên không bước nào đưa nó đi đâu, adapter kẹt mãi. Chỉ cần một trong hai khác 0 là thoát: với A ngẫu nhiên và B = 0, B nhận gradient khác 0 ngay bước đầu (A thì chưa), sang bước hai B đã khác 0 nên A cũng bắt đầu nhận gradient. B = 0 còn bảo đảm ΔW = 0 nên mô hình xuất phát đúng bằng mô hình gốc."
+  },
+  {
+    "q": "Một lớp nn.Linear(4096, 4096) có bias, gắn LoRA với r = 8. Adapter có bao nhiêu tham số học được, và chiếm khoảng bao nhiêu phần trăm số tham số của lớp gốc?",
+    "tag": "lora-param-count",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "A là (8, 4096) và B là (4096, 8): 2 · 4096 · 8 = 65 536 tham số. Lớp gốc có 4096² + 4096 ≈ 16,78 triệu. Tỷ lệ ≈ 0,39%. Số tham số học được tăng tuyến tính theo r và theo (in + out), không theo in · out."
+  },
+  {
+    "q": "Vì sao có hệ số α/r? Nếu bạn giữ α cố định rồi tăng r từ 8 lên 64, hệ số này làm gì cho việc chọn learning rate?",
+    "tag": "lora-scale",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "ΔW = B A là tổng của r tích ngoài, nên khi r lớn lên thì độ lớn của cập nhật có xu hướng lớn theo. Chia cho r bù lại: độ lớn của phần cộng thêm gần như không phụ thuộc r, nên đổi r không buộc phải chỉnh lại learning rate (chỉ cần tinh chỉnh α một lần). Nếu không có hệ số hoặc dùng nhầm α thay vì α/r, đổi r sẽ đổi luôn cường độ của adapter."
+  },
+  {
+    "q": "Nếu bạn quên đóng băng base.bias (chỉ đóng băng weight), một bước optimizer làm gì? Điều đó phá điều gì LoRA hứa với bạn?",
+    "tag": "lora-freeze",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Bias của base bị cập nhật. Tham số tăng thêm không nhiều, nhưng mô hình đã fine-tune không còn bằng \"mô hình gốc + một adapter nhỏ\": muốn lưu hoặc hoán adapter cho tác vụ khác thì phải lưu cả bias đã đổi, và một mô hình gốc dùng chung cho nhiều adapter không còn giữ nguyên. Lỗi tinh vi vì loss vẫn giảm bình thường; chỉ đếm tham số cần gradient hoặc so base trước-sau mới thấy."
+  },
+  {
+    "q": "Vì sao forward tính $(x A^\\top) B^\\top$ chứ không dựng ma trận $\\Delta W = B A$ rồi nhân với $x$? So chi phí với x có N hàng.",
+    "tag": "lora-order-of-mult",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Dựng B A tốn out · in · r phép nhân và tạo một ma trận đầy đủ out × in (kèm gradient của nó) ở mỗi bước, mất hết lợi thế tiết kiệm. Nhân x trước: x Aᵀ tốn N · in · r, rồi nhân Bᵀ tốn N · r · out: tổng N · r · (in + out), chỉ qua các tensor chiều r nhỏ. Khi suy luận thì làm ngược lại một lần: gộp B A vào W (bài lora-merge) để không tốn thêm gì mỗi lần gọi."
+  },
+  {
+    "q": "Một adapter hạng r có thể biểu diễn mọi độ lệch ΔW của một ma trận out × in không? Khi nào hạng thấp là một giả định liều lĩnh?",
+    "tag": "lora-rank-limit",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Không: B A có hạng nhiều nhất r, nên chỉ biểu diễn được độ lệch hạng ≤ r (r = min(in, out) thì mới biểu diễn được mọi ma trận, nhưng khi đó adapter không còn nhỏ). Giả thuyết của paper là thay đổi khi thích nghi với một tác vụ mới có \"hạng nội tại\" thấp; nó đúng khi tác vụ mới gần với điều mô hình đã học, và yếu đi khi tác vụ khác hẳn tiền huấn luyện hoặc cần học nhiều kiến thức mới."
+  }
+]

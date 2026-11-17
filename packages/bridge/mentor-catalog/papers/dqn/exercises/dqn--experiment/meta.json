@@ -1,0 +1,43 @@
+{
+  "id": "dqn--experiment",
+  "title": "Thí nghiệm: train DQN chơi CartPole (20 000 bước)",
+  "star": "dqn--experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["q_net"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "dqn",
+  "role": "experiment",
+  "cites": "Algorithm 1, Hình 2, Hình 3, Bảng Extended Data 1 (siêu tham số)",
+  "uses": ["dqn--agent"],
+  "judge": "kernel",
+  "judgeSeconds": 120,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) Một QNet vừa khởi tạo, chơi tham lam, đạt return cỡ bao nhiêu (chính sách ngẫu nhiên khoảng 20)? (2) Return mỗi episode lúc train đi lên đều đặn hay dao động mạnh, và sau 20 000 bước return tham lam đo riêng cỡ bao nhiêu (tối đa 200): vài chục, hơn một trăm, hay luôn 200? (3) Q lớn nhất ở trạng thái đầu episode của bạn khoảng bao nhiêu, nếu mỗi bước thưởng 1 và gamma = 0,99 (hãy tính trần lý thuyết)? (4) Nếu bỏ việc chép lại mạng target (chỉ chép một lần ở đầu), return cuối sẽ ra sao?",
+  "metrics": [
+    {
+      "name": "mean_return",
+      "paper": "Atari: ≥ 75% điểm người chơi chuyên nghiệp ở 29 trong 49 game (Hình 3, số theo trí nhớ, hãy đối chiếu lại); bản thu nhỏ: return tối đa 200 (bài toán khác, không so trực tiếp)",
+      "unit": "return trung bình của chính sách tham lam trên 20 episode mới (tối đa 200; ngẫu nhiên ≈ 20)",
+      "target": { "op": ">=", "value": 100 }
+    },
+    {
+      "name": "solved_frac",
+      "paper": "—",
+      "unit": "tỷ lệ episode sống đủ 200 bước"
+    },
+    {
+      "name": "random_return",
+      "paper": "điểm chơi ngẫu nhiên là mốc 0% khi paper chuẩn hóa điểm theo người chơi (Hình 3)",
+      "unit": "return trung bình của chính sách ngẫu nhiên trên cùng 20 seed"
+    },
+    {
+      "name": "q_start",
+      "paper": "Hình 2: Q lớn nhất trung bình trên tập trạng thái giữ lại tăng đều trong lúc train (theo trí nhớ)",
+      "unit": "Q lớn nhất trung bình ở 20 trạng thái đầu episode (trần lý thuyết 1/(1 − γ) = 100 với γ = 0,99)"
+    }
+  ]
+}

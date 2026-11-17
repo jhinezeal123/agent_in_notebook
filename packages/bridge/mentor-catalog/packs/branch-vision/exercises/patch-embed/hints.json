@@ -1,0 +1,75 @@
+[
+  {
+    "level": 0,
+    "test": "test_patchify_shape",
+    "text": "Ảnh (B, C, H, W) chia lưới p×p cho bao nhiêu patch? Và mỗi patch có bao nhiêu số khi duỗi ra, nếu nó có C kênh?"
+  },
+  {
+    "level": 0,
+    "test": "test_patch_grid_order",
+    "text": "Khi bạn tách trục H thành (H/p, p) và trục W thành (W/p, p), hai trục chỉ số của lưới là trục nào? Muốn quét hàng trước cột thì trục chỉ số của hàng phải đứng ngoài hay đứng trong trục chỉ số của cột?"
+  },
+  {
+    "level": 0,
+    "test": "test_within_patch_order",
+    "text": "Sau khi tách trục, một patch gồm các trục kênh, hàng-trong-patch và cột-trong-patch. Theo đề, ba trục đó phải đứng theo thứ tự nào khi duỗi ra, và sau khi đổi thứ tự trục, code của bạn đặt chúng ở đâu?"
+  },
+  {
+    "level": 0,
+    "test": "test_patchify_general",
+    "text": "Sau khi đổi thứ tự các trục, tensor có còn liền mạch trong bộ nhớ không, và phép gộp trục bạn dùng có chịu được điều đó không (thử in ra shape ở từng bước)?"
+  },
+  {
+    "level": 0,
+    "test": "test_not_divisible",
+    "text": "Với H = 9 và p = 4 thì H // p bằng bao nhiêu và phần dư đi đâu? Làm sao để biết ảnh có chia hết hay không trước khi reshape?"
+  },
+  {
+    "level": 0,
+    "test": "test_embed_structure",
+    "text": "Một Conv2d làm đúng việc của một lớp Linear trên mỗi patch không chồng lấn cần kernel_size và stride bằng bao nhiêu so với p? Có cần padding không?"
+  },
+  {
+    "level": 0,
+    "test": "test_embed_forward",
+    "text": "Sau conv đầu ra có shape (B, embed_dim, H/p, W/p). Muốn thành (B, N, embed_dim), hai trục không gian phải được gộp thế nào và embed_dim phải chuyển ra cuối bằng phép nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_embed_token_order",
+    "text": "Nếu bạn gộp hai trục (H/p, W/p) của đầu ra conv thành một trục, trục nào đứng ngoài? Thứ tự token đó có trùng với thứ tự quét hàng trước cột của patchify không?"
+  },
+  {
+    "level": 0,
+    "test": "test_embed_equals_linear",
+    "text": "Conv đọc kernel (C, p, p) theo thứ tự nào khi nhân với patch, và vector patch của patchify đang duỗi theo thứ tự nào? Hai thứ tự đó có trùng nhau không?"
+  },
+  {
+    "level": 1,
+    "text": "patchify: tách trục H thành (số hàng patch, p) và trục W thành (số cột patch, p), đưa các trục chỉ số của lưới (hàng patch, cột patch) lên trước và các trục trong patch (kênh, hàng, cột) ra sau theo đúng thứ tự (C, p, p), rồi gộp hai trục lưới thành N và ba trục trong patch thành C·p·p. PatchEmbed: dùng một Conv2d với kernel và stride bằng p, rồi gộp hai trục không gian lại và đưa trục kênh ra cuối."
+  },
+  {
+    "level": 1,
+    "text": "Hai việc này khớp nhau miễn là thứ tự duỗi trong patch là (C, p, p) và thứ tự token là hàng trước cột ở cả hai nơi: conv cho đầu ra có trục không gian đúng thứ tự hàng trước cột sẵn, bạn chỉ cần gộp chúng mà không hoán vị."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "patchify(x, p):\n  nếu H hoặc W không chia hết cho p: ValueError\n  x = reshape thành (B, C, H/p, p, W/p, p)\n  x = permute thành (B, H/p, W/p, C, p, p)   # lưới trước, patch sau\n  trả về reshape thành (B, N, C*p*p)\nPatchEmbed.forward(x):\n  kiểm chia hết\n  y = proj(x)                  # (B, D, H/p, W/p)\n  duỗi hai trục cuối thành một (B, D, N)\n  đổi chỗ trục 1 và 2 để được (B, N, D)"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở số chỉ trục của permute",
+    "text": "Sau reshape, các trục là (0: B, 1: C, 2: hàng patch, 3: hàng trong patch, 4: cột patch, 5: cột trong patch). Đích là (B, hàng patch, cột patch, C, hàng trong patch, cột trong patch): hãy ghi mỗi vị trí đích là trục nào của nguồn."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở permute của patchify",
+    "text": "```python\nx = x.reshape(B, C, H // p, p, W // p, p)\nx = x.permute(0, 2, 4, 1, 3, 5)\nreturn x.reshape(B, (H // p) * (W // p), C * p * p)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở forward của PatchEmbed",
+    "text": "```python\nreturn self.proj(x).flatten(2).transpose(1, 2)\n```"
+  }
+]

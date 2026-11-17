@@ -1,0 +1,13 @@
+{
+  "id": "euler-sampler",
+  "title": "Flow matching: lấy mẫu bằng Euler",
+  "star": "flow",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1700,
+  "minutes": 20,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["euler_sample"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

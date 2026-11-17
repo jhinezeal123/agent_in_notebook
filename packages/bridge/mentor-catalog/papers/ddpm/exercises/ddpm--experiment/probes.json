@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Nếu mô hình luôn đoán ε = 0 thì L_simple bằng bao nhiêu? Ở t lớn (x_t gần như nhiễu thuần túy) đoán ε khó hay dễ, còn ở t nhỏ (x_t là ảnh sắc nét cộng chút nhiễu) thì sao? Vậy trong L_simple trung bình đều theo t, phần lớn loss nằm ở đâu?",
+    "tag": "loss-by-timestep",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "ε = 0 cho loss = E[ε²] = 1. Ở t lớn, x_t ≈ sqrt(1−ᾱ_t)·ε nên ε ≈ x_t / sqrt(1−ᾱ_t) gần như đọc thẳng được từ đầu vào: sai số rất nhỏ (cỡ vài phần nghìn trên MNIST). Ở t nhỏ, nhiễu là một nhiễu loạn bé trên ảnh có cấu trúc, tách ε khỏi chi tiết ảnh là khó nhất: sai số lớn nhất (cỡ vài phần mười). Vì vậy trung bình đều theo t bị chi phối bởi các t nhỏ, và l_simple_small_t lớn hơn l_simple_large_t nhiều lần."
+  },
+  {
+    "q": "Ảnh MNIST của đề có viền nền 2 pixel mỗi phía và phần lớn ảnh là nền đen hằng số. Điều đó làm L_simple trung bình dễ hay khó hơn so với ảnh tự nhiên có texture khắp nơi? Vì sao con số ngưỡng 0,06 của đề không so trực tiếp được với loss DDPM của bài toán khác (CIFAR-10, T = 1000)?",
+    "tag": "loss-not-comparable",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Pixel nền có x_0 biết trước (hằng −1), nên ε ở đó đoán được chính xác từ x_t = sqrt(ᾱ_t)·(−1) + sqrt(1−ᾱ_t)·ε khi mô hình nhận ra là nền; phần lớn pixel dễ, loss trung bình thấp. Ảnh tự nhiên khó hơn khắp nơi. Ngoài ra L_simple phụ thuộc dữ liệu, lịch nhiễu (T, β), kích thước ảnh và cả phân phối của t, nên chỉ so được giữa các lần chạy cùng dữ liệu và cùng lịch. Paper so chất lượng bằng FID chứ không bằng loss; bản thu nhỏ không đo FID."
+  },
+  {
+    "q": "Bạn train mô hình để đoán ε. Nếu nhầm train nó đoán ảnh sạch x_0 (target là x_0) rồi vẫn đưa vào Alg. 2, chuyện gì xảy ra với L_simple đo bằng máy chấm và với ảnh mẫu? Hai cách tham số hóa này liên hệ với nhau thế nào?",
+    "tag": "eps-vs-x0-target",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Hai đầu ra liên hệ qua x_0 = (x_t − sqrt(1−ᾱ_t)·ε) / sqrt(ᾱ_t): biết một thì suy ra được cái kia, và loss ε bằng loss x_0 nhân trọng số ᾱ_t/(1−ᾱ_t) (SNR). Nhưng mạng đã học xuất ra x_0 thì đầu ra của nó mang nghĩa khác: máy chấm (và Alg. 2) đọc nó như ε nên L_simple rất lớn (cỡ ≥ 1, không còn là bộ đoán nhiễu) và các bước reverse đưa ảnh đi sai hướng nên mẫu hỏng. Phải nhất quán giữa thứ train và thứ dùng; paper chọn ε vì thực nghiệm cho mẫu tốt nhất (Bảng 2)."
+  },
+  {
+    "q": "Eq. 14 (L_simple) bỏ các trọng số theo t của ELBO thật (Eq. 12) và lấy t đều. Paper (§3.4) nói điều này làm trọng số của các bước t nào giảm đi, và vì sao đó là điều tốt? Con số l_simple_small_t của bạn có mâu thuẫn với điều đó không?",
+    "tag": "uniform-t-weighting",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "ELBO thật có trọng số lớn ở t nhỏ; L_simple bỏ trọng số đó nên giảm tầm quan trọng của các bước t nhỏ (khử nhiễu rất nhẹ), để mạng tập trung vào các tác vụ khử nhiễu khó hơn ở t lớn; paper thấy điều này cho chất lượng mẫu tốt hơn. Không mâu thuẫn với con số: ngay cả khi mỗi t có trọng số bằng nhau, sai số ε tuyệt đối ở t nhỏ vẫn lớn (khó tách nhiễu khỏi chi tiết), nên nó vẫn đóng góp nhiều vào trung bình; trọng số và độ khó là hai chuyện khác nhau."
+  },
+  {
+    "q": "Giả sử mô hình A có l_simple = 0,040 và mô hình B có 0,038. Bạn có kết luận B sinh ảnh đẹp hơn không? Cần xem hoặc đo thêm gì, và vì sao loss thấp chưa đủ?",
+    "tag": "loss-not-quality",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Chưa kết luận được. L_simple là sai số đoán nhiễu một bước, trung bình theo t và bị chi phối bởi các t nhỏ; chất lượng mẫu phụ thuộc vào việc 200 bước reverse nối tiếp có tích lũy sai số không, và vào cấu trúc toàn cục được quyết định ở t lớn. Hai mô hình chênh 0,002 có thể ngang nhau (dao động giữa các seed, hoặc giữa các tập kiểm tra) hoặc cho ảnh khác hẳn. Cần nhìn mẫu (hoặc dùng FID, một bộ phân loại chữ số cho độ chính xác và đa dạng) trên nhiều ảnh và nhiều seed; paper dùng FID chính vì thế."
+  },
+  {
+    "q": "Vì sao máy chấm đo L_simple trên ảnh test cố định, ở các bước t cố định, với nhiễu cố định và chế độ eval, thay vì lấy loss train cuối cùng bạn in ra? Loss train cuối cùng nói được gì và không nói được gì?",
+    "tag": "eval-protocol",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Mỗi bước train dùng một batch với t và nhiễu ngẫu nhiên, nên loss in ra dao động mạnh (vì loss phụ thuộc rất nhiều vào t được bốc) và không so được giữa hai lần chạy. Đo trên lưới t cố định, nhiễu cố định cho một con số ổn định, tái lập được. Dùng ảnh test mô hình chưa thấy cho biết nó tổng quát hóa chứ không chỉ nhớ tập train; chế độ eval loại bỏ nhiễu từ dropout/BatchNorm. Loss train cuối cùng chỉ cho biết đường đi của train và có thể tụt thấp hơn loss test nếu overfit."
+  }
+]

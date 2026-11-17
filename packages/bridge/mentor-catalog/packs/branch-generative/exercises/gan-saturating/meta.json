@@ -1,0 +1,16 @@
+{
+  "id": "gan-saturating",
+  "title": "Loss minimax bão hòa của G (biến thể của gan-losses)",
+  "star": "gan",
+  "skills": ["formula", "theory"],
+  "difficulty": 1700,
+  "minutes": 15,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["g_loss_saturating"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["gan-losses"],
+  "variantOf": "gan-losses",
+  "predict": "Gọi $\\ell$ là logit của $D$ trên một ảnh giả $G(z)$, $D=\\sigma(\\ell)$. Loss minimax gốc là $L_{\\text{sat}}=\\log(1-D)$ ($G$ giảm nó); loss non-saturating ở bài trước là $L_{\\text{non}}=-\\log D$. Trước khi code, dự đoán (không tính máy): (a) khi $D$ rất tự tin ảnh là giả, $\\ell=-10$ ($D\\approx 4.5\\times10^{-5}$), $|\\partial L/\\partial\\ell|$ của $L_{\\text{sat}}$ cỡ bao nhiêu, và của $L_{\\text{non}}$ cỡ bao nhiêu? (b) khi $D$ bị lừa, $\\ell=+10$, hai độ lớn đó đổi thế nào? (c) Ở đầu train, $G$ sinh ảnh nhiễu và $D$ phân biệt dễ: $G$ dùng loss nào thì học được, loss nào thì đứng yên? (d) Tỉ số $\\dfrac{\\partial L_{\\text{sat}}/\\partial\\ell}{\\partial L_{\\text{non}}/\\partial\\ell}$ bằng biểu thức nào theo $D$? (e) Trong float32, nếu tính $\\log(1-\\sigma(\\ell))$ thẳng tay thì từ $\\ell$ khoảng bao nhiêu trở đi kết quả thành $-\\infty$?"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "ppo",
+  "title": "Proximal Policy Optimization Algorithms",
+  "authors": "Schulman, Wolski, Dhariwal, Radford, Klimov",
+  "year": 2017,
+  "url": "https://arxiv.org/abs/1707.06347",
+  "arxiv": "1707.06347",
+  "closes": "rl",
+  "goal": "Ráp vòng lặp PPO từ các bài bạn đã làm (thu rollout rồi tính advantage bằng GAE, loss thay thế có cắt, cập nhật nhiều epoch trên minibatch) và train một actor-critic tí hon chơi CartPole thuần NumPy trong vài chục giây trên CPU: bản thu nhỏ của thí nghiệm điều khiển liên tục trong paper.",
+  "status": "ready"
+}

@@ -1,0 +1,81 @@
+[
+  {
+    "level": 0,
+    "test": "test_optimizer_step_count",
+    "text": "Một cập nhật ứng với đơn vị nào: một epoch hay một minibatch? Với 10 mẫu, nhóm 4 và 3 epoch, mỗi epoch có mấy nhóm, và optimizer.step() nằm ở vòng lặp nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_each_sample_once_per_epoch",
+    "text": "Mỗi epoch bạn lấy danh sách các nhóm chỉ số ở đâu? Có gọi hàm cho sẵn một lần mỗi epoch, hay một lần cho cả quá trình? Policy được gọi ở vòng ngoài hay vòng trong?"
+  },
+  {
+    "level": 0,
+    "test": "test_shuffle_is_deterministic_and_fresh_each_epoch",
+    "text": "Nguồn ngẫu nhiên duy nhất của hàm là gì? Epoch thứ hai có cùng thứ tự với epoch thứ nhất không, và điều đó do bạn gọi hàm xáo trộn ở đâu?"
+  },
+  {
+    "level": 0,
+    "test": "test_entropy_bonus_sign",
+    "text": "Chỉ còn bonus entropy, optimizer giảm loss: entropy của policy cần đi lên hay đi xuống, và vì thế số hạng entropy mang dấu gì trong loss? Entropy trung bình tính theo trục nào của bảng xác suất (B, A)?"
+  },
+  {
+    "level": 0,
+    "test": "test_value_loss_pulls_value_to_returns",
+    "text": "value loss so value với tensor nào? Khi chỉ còn value loss và returns = 3, sau nhiều bước value phải đi về đâu? vf_coef = 0 thì phần này đóng góp gì cho gradient?"
+  },
+  {
+    "level": 0,
+    "test": "test_policy_moves_with_advantage",
+    "text": "Tỉ số bằng 1 ở bước đầu: gradient của loss policy theo log-xác suất của một mẫu có advantage dương dấu gì, và optimizer đi theo hướng nào? Bạn đang dùng hàm loss của bài trước chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradient_clipping",
+    "text": "Cắt chuẩn gradient tác động lên .grad của tham số: nó phải chạy sau lệnh nào và trước lệnh nào? Giá trị mặc định của max_grad_norm là bao nhiêu và None nghĩa là gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_no_gradient_into_batch",
+    "text": "Trong loss tổng, tensor nào của batch là hằng số (dữ liệu) và tensor nào là kết quả của policy? Sau backward, tensor nào được phép có .grad?"
+  },
+  {
+    "level": 0,
+    "test": "test_reuses_ppo_clip_loss",
+    "text": "Bài trước bạn đã viết hàm tính loss policy có cắt. Trong ppo_update bạn gọi nó, hay dựng lại công thức? Nó nhận những đối số nào từ minibatch?"
+  },
+  {
+    "level": 0,
+    "test": "test_returned_stats",
+    "text": "Tỉ số mẫu bằng bao nhiêu so với 1 để được tính là 'bị cắt'? Thống kê lấy từ new_logp trước hay sau optimizer.step()? Và kết quả cuối là tensor hay số Python?"
+  },
+  {
+    "level": 1,
+    "text": "Khung chia làm hai vòng lặp lồng nhau. Vòng ngoài theo epoch; trong mỗi epoch xin hàm cho sẵn một danh sách nhóm chỉ số mới, rồi vòng trong duyệt từng nhóm. Với mỗi nhóm: lấy ra phần dữ liệu tương ứng (obs, actions, old_logp, advantages, returns), gọi policy một lần để có logits và value, từ logits tính log-xác suất của hành động đã chọn và entropy trung bình. Loss tổng là loss policy có cắt (hàm của bài trước) cộng vf_coef nhân sai số bình phương trung bình giữa value và returns, trừ ent_coef nhân entropy. Rồi theo thứ tự: xóa gradient cũ, backward, cắt chuẩn gradient (nếu có), optimizer step. Mỗi lần cập nhật thu các số thống kê (từ giá trị trước step) rồi cuối cùng lấy trung bình."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "n = số mẫu; các tổng thống kê = 0; số lần cập nhật = 0\nlặp epochs lần:\n    với mỗi idx trong minibatch_indices(n, minibatch_size, generator):\n        lấy obs, actions, old_logp từ batch tại idx\n        gọi policy(obs) một lần để có logits và value\n        log_probs = log_softmax(logits); new_logp = log-xác suất tại actions\n        entropy = -(xác suất * log_probs) cộng theo trục hành động, rồi trung bình\n        pg = ppo_clip_loss(new_logp, old_logp, advantages tại idx, clip_eps)\n        vl = mse(value, returns tại idx)\n        loss = pg + vf_coef * vl - ent_coef * entropy\n        zero_grad; backward; clip_grad_norm nếu max_grad_norm khác None; step\n        ghi thống kê (tỉ số, kl) từ new_logp và old_logp\ntrả về các tổng chia cho số lần cập nhật"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở thống kê",
+    "text": "Trong khối không cần gradient: log_ratio = new_logp - old_logp. clip_fraction của lần này là trung bình của (|exp(log_ratio) - 1| > clip_eps) đổi sang số thực; approx_kl của lần này là trung bình của (-log_ratio). Dùng .item() để cộng dồn thành số Python, không giữ tensor còn nối đồ thị."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở vòng lặp epoch và minibatch",
+    "text": "```python\nfor _ in range(epochs):\n    for idx in minibatch_indices(n, minibatch_size, generator):\n        obs = batch[\"obs\"][idx]\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở thứ tự backward và cắt gradient",
+    "text": "```python\noptimizer.zero_grad()\nloss.backward()\nif max_grad_norm is not None:\n    nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)\noptimizer.step()\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở entropy",
+    "text": "```python\nlog_probs = F.log_softmax(logits, dim=-1)\nentropy = -(log_probs.exp() * log_probs).sum(dim=-1).mean()\n```"
+  }
+]

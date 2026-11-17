@@ -1,0 +1,16 @@
+{
+  "id": "ucb-bandit",
+  "title": "UCB1 (biến thể của bandit epsilon-greedy)",
+  "star": "bandit",
+  "skills": ["formula", "theory"],
+  "difficulty": 1400,
+  "minutes": 15,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["select_ucb"],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "uses": ["eps-greedy-bandit"],
+  "variantOf": "eps-greedy-bandit",
+  "predict": "Bandit K tay, đã chơi $t - 1$ lượt; tay $a$ có ước lượng $Q_a$ và đã được kéo $N_a$ lần. UCB1 chọn tay có $Q_a + c\\sqrt{\\ln t / N_a}$ lớn nhất. Trước khi code, dự đoán (không tính máy): (a) Một tay chưa được kéo lần nào ($N_a = 0$): bonus của nó là bao nhiêu theo công thức, và vì thế nó nên được chọn lúc nào so với các tay đã thử? Máy tính sẽ ra gì nếu cứ chia cho 0? (b) Cho $c = 0$ thì UCB thành thuật toán gì? Cho $c$ rất lớn thì thành gì (tay nào được chọn nhiều nhất)? (c) Một tay có $Q$ thấp mà không được chọn suốt thời gian dài: tại sao rốt cuộc nó vẫn được chọn lại, dù $N_a$ không đổi? Điều đó nhờ thành phần nào của công thức? (d) So với epsilon-greedy, UCB dùng số ngẫu nhiên không, và khi đã biết rõ tay nào tốt thì nó còn lãng phí lượt khám phá với tỉ lệ cố định không?"
+}

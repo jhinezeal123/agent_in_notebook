@@ -48,6 +48,7 @@ def test_forward(user, ref):
     x = _tokens((2, 7), 3)
     out = m(x)
     t.shape(out, (2, 7, D), what="PositionalEmbedding với tokens (2, 7)")
+    assert out.dtype == torch.float32, f"Đầu ra có kiểu {out.dtype}, cần float32: bảng pe của bạn tạo bằng kiểu số nào?"
     t.close(out, r(x), tol=1e-4, what="đầu ra (embedding đã được nhân với hệ số nào? cộng những hàng nào của pe?)")
 
 

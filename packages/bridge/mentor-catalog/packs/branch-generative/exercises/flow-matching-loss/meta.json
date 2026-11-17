@@ -1,0 +1,13 @@
+{
+  "id": "flow-matching-loss",
+  "title": "Flow matching: loss với đường thẳng, đoán vận tốc",
+  "star": "flow",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1800,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 1,
+  "functions": ["fm_loss"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Ảnh 224×224 với 3 kênh, patch 16: có bao nhiêu token, và mỗi patch duỗi ra bao nhiêu số? Nếu giảm patch xuống 8 thì số token và chi phí của self-attention (tỷ lệ với N²) đổi thế nào?",
+    "tag": "vit-patch-count",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "N = (224/16)² = 14² = 196 token, mỗi patch 16·16·3 = 768 số. Patch 8: N = 28² = 784 token (gấp 4), mỗi patch 8·8·3 = 192 số; chi phí attention tỷ lệ N² nên gấp 16 lần. Patch nhỏ = nhiều chi tiết hơn nhưng đắt hơn rất nhiều; đó là lý do ViT chọn patch 16 hoặc 32."
+  },
+  {
+    "q": "Nếu patch được duỗi theo thứ tự (p, p, C) thay vì (C, p, p) rồi đưa qua cùng một lớp Linear, mô hình có học kém đi không? Khi nào sự khác biệt đó thật sự gây hại?",
+    "tag": "patch-flatten-order",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Khi huấn luyện từ đầu thì không: lớp Linear học trọng số cho từng vị trí trong vector, hoán vị thứ tự các số trong vector chỉ là hoán vị cột của ma trận trọng số, tập các hàm biểu diễn được không đổi. Nó gây hại khi bạn nạp trọng số đã train từ nơi khác (hoặc so với conv): trọng số được học cho một thứ tự cụ thể, nên phải duỗi đúng thứ tự đó, nếu không đầu ra là rác mà không báo lỗi."
+  },
+  {
+    "q": "Vì sao một Conv2d(kernel p, stride p) cho đúng kết quả như cắt ảnh thành patch rồi áp một lớp Linear lên từng patch? Hai cách khác nhau thế nào về trọng số (shape) và về tốc độ?",
+    "tag": "conv-equals-patch-linear",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Với kernel p×p và stride p, mỗi vị trí của kernel phủ đúng một patch, các vị trí không chồng lấn; phép tính ở mỗi vị trí là tích vô hướng của patch với kernel của từng bộ lọc, tức là một lớp Linear (C·p·p → D) dùng chung trọng số ở mọi patch. Trọng số conv (D, C, p, p) duỗi thành (D, C·p·p) chính là trọng số Linear. Conv chạy nhanh hơn (một lần gọi tối ưu, không cần dựng tensor các patch)."
+  },
+  {
+    "q": "Ảnh 224×224 chia cho patch 16 vừa khít. Với ảnh 225×225 bạn có những lựa chọn nào, và vì sao bài này raise ValueError thay vì lặng lẽ cắt bỏ dòng và cột dư?",
+    "tag": "patch-divisibility",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "Có thể resize ảnh về cỡ chia hết, pad thêm viền (thường bằng 0), hoặc crop trung tâm có chủ ý. Lặng lẽ bỏ phần dư làm mất pixel mà người gọi không biết (và lệch tọa độ so với ảnh gốc); với bài toán cần giữ biên (detection, segmentation) có thể mất đối tượng. Nên raise lỗi để người gọi tự chọn cách xử lý có chủ đích."
+  },
+  {
+    "q": "PatchEmbed một mình có phân biệt được hai ảnh có các patch giống hệt nhau nhưng xáo trộn vị trí không? Cần thêm gì để Transformer biết patch nào ở đâu?",
+    "tag": "patch-position-blind",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Không: mỗi patch được nhúng độc lập bằng cùng một phép biến đổi, nên xáo trộn các patch chỉ xáo trộn các token tương ứng; và self-attention cũng không có khái niệm vị trí (hoán vị đầu vào chỉ hoán vị đầu ra). Cần cộng thêm positional embedding (học được hoặc sin/cos) vào từng token: đó là việc của bài vit-forward."
+  }
+]

@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Máy chấm tìm các thuộc tính embed, drop, enc_layers, dec_layers, out. Nếu bạn để các lớp trong một list Python thường thì chuyện gì xảy ra với việc PyTorch tìm tham số của chúng?"
+  },
+  {
+    "level": 0,
+    "test": "test_weight_tying",
+    "text": "Muốn hai nn.Module cùng dùng một ma trận trọng số thì bạn gán đối tượng nn.Parameter cho nhau hay chép giá trị từ cái này sang cái kia? Khác nhau ở đâu khi train?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward_eval",
+    "text": "Encoder nhận chuỗi nào và chạy qua những gì? Cái nó trả ra được decoder dùng ở đâu? Mỗi lớp nhận những mask nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_causal",
+    "text": "Mask nào ngăn một vị trí của chuỗi đích nhìn các vị trí sau nó, và bạn đã truyền nó cho mọi lớp decoder chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_src_padding",
+    "text": "src_mask đi vào những chỗ nào: self-attention của encoder, cross-attention của decoder, hay cả hai? Một câu nguồn có PAD ở cuối thì token PAD làm gì với softmax nếu mask bị thiếu ở một trong hai chỗ?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients",
+    "text": "Tham số nào không nhận gradient? Chúng nằm trong phần nào của mô hình, và nhánh đó có thật sự được nối vào logits không?"
+  },
+  {
+    "level": 1,
+    "text": "Trong __init__: một embedding dùng chung, một dropout, hai nn.ModuleList (chồng encoder và chồng decoder, mỗi chồng n_layers lớp), một Linear không bias cho logits, rồi gán trọng số của nó bằng đúng tham số của embedding. forward: lấy hai mask từ make_masks; encoder: embedding + dropout rồi qua từng lớp encoder với src_mask, kết quả là memory; decoder: embedding của tgt_in + dropout rồi qua từng lớp decoder cùng với memory, tgt_mask và src_mask; cuối cùng qua lớp out."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "forward(src, tgt_in):\n  (src_mask, tgt_mask) lấy từ make_masks(src, tgt_in)\n  memory = dropout(embed(src))                    # (B, S, d_model)\n  với mỗi lớp encoder: memory = lớp(memory, src_mask)\n  y = dropout(embed(tgt_in))                      # (B, T, d_model)\n  với mỗi lớp decoder: y = lớp(y, memory, tgt_mask, src_mask)\n  logits = out(y)                                 # (B, T, vocab_size)"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chia sẻ trọng số",
+    "text": "out là nn.Linear(d_model, vocab_size): weight của nó có shape (vocab_size, d_model), đúng bằng shape của ma trận trong nn.Embedding(vocab_size, d_model). Gán thuộc tính weight của out bằng đối tượng Parameter của embedding (đường truy cập: embed -> embed -> weight)."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở chia sẻ trọng số",
+    "text": "```python\nself.out = nn.Linear(d_model, vocab_size, bias=False)\nself.out.weight = self.embed.embed.weight\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở chồng lớp",
+    "text": "```python\nself.enc_layers = nn.ModuleList([EncoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)])\nfor layer in self.enc_layers:\n    memory = layer(memory, src_mask)\n```"
+  }
+]

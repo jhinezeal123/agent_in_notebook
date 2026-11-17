@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Một GPT cỡ GPT-2 small (C = 768, 12 khối, V = 50257, T = 1024, không dùng chung trọng số, tổng ≈ 163 triệu tham số) được gắn LoRA r = 8 vào attn.qkv và attn.proj. Dự đoán trước: khoảng bao nhiêu tham số được train, tức khoảng bao nhiêu phần trăm?",
+    "tag": "lora-pct-trainable",
+    "kind": "shape",
+    "stage": "lab",
+    "answer": "Mỗi khối: qkv là Linear(768, 2304) nên 8 · (768 + 2304) = 24 576; proj là Linear(768, 768) nên 8 · (768 + 768) = 12 288; tổng 36 864 mỗi khối, nhân 12 khối ≈ 442 nghìn tham số. So với ≈ 163 triệu là khoảng 0,27%. Con số nhỏ vì adapter tăng theo r · (in + out), còn ma trận gốc tăng theo in · out."
+  },
+  {
+    "q": "Nếu bạn gọi đóng băng \"mọi tham số\" SAU khi đã tạo các LoRALinear thay vào mô hình, chuyện gì xảy ra với việc huấn luyện, và bạn phát hiện ra bằng cách nào mà không cần chờ loss?",
+    "tag": "lora-freeze-order",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "A và B cũng bị đóng băng (requires_grad = False), nên không còn tham số nào học được: loss không giảm, hoặc optimizer báo danh sách tham số rỗng. Phát hiện sớm bằng cách in số tham số cần gradient (count_params cho trainable = 0) hoặc liệt kê tên các tham số có requires_grad = True ngay sau khi gắn. Thứ tự đúng: đóng băng cả mô hình trước, rồi mới tạo adapter (tham số mới sinh ra mặc định cần gradient)."
+  },
+  {
+    "q": "Paper chỉ gắn LoRA vào các ma trận attention và để nguyên MLP. Nếu bạn gắn cả vào MLP, phần trăm tham số train đổi thế nào (nhìn hình ở Phòng công thức), và được gì, mất gì?",
+    "tag": "lora-target-choice",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Thêm mlp.0 và mlp.2 (các lớp Linear(C, 4C) và Linear(4C, C), mỗi lớp góp r · 5C) làm số tham số adapter tăng thêm hơn gấp đôi so với chỉ attention (ở mô hình nhỏ khoảng 3% lên 7%). Được: nhiều dung lượng hơn để thích nghi (paper về sau và nhiều thực hành cho thấy gắn thêm MLP thường tốt hơn ở cùng r nhỏ). Mất: nhiều tham số hơn, nhiều bộ nhớ hơn cho optimizer. Paper chọn attention chủ yếu vì đơn giản và tiết kiệm, không phải vì MLP không dùng được."
+  },
+  {
+    "q": "Embedding và head đóng băng cùng mọi thứ khác. Tác vụ mới dùng một ký tự mà mô hình huấn luyện trước chưa từng thấy (token chưa có trong từ vựng). LoRA vào attention có giúp gì không?",
+    "tag": "lora-frozen-embedding",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Không đủ: token chưa có trong từ vựng không có hàng embedding hay hàng của head, và adapter chỉ thêm một độ lệch hạng thấp lên các ma trận có sẵn, không thêm được token mới. Phải mở rộng từ vựng, và các hàng embedding/head mới (hoặc cả bảng) phải được train riêng. Tổng quát hơn: LoRA hợp khi tác vụ mới dùng lại cùng biểu diễn, yếu khi cần biểu diễn mới."
+  },
+  {
+    "q": "Paper nói LoRA giảm bộ nhớ GPU khoảng 3 lần so với fine-tune toàn bộ (GPT-3 175B). Dù mọi trọng số gốc vẫn phải nằm trong bộ nhớ, bộ nhớ đi đâu mà giảm được?",
+    "tag": "lora-memory",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Fine-tune toàn bộ giữ cho mỗi tham số: gradient và (với Adam) hai trạng thái moment, đều cỡ số tham số, ngoài chính trọng số. Với LoRA, tham số đóng băng chỉ cần trọng số (không gradient, không trạng thái optimizer); gradient và moment chỉ tồn tại cho các A, B rất nhỏ. Phần trọng số gốc vẫn còn nên bộ nhớ không giảm tới mức tỷ lệ với số tham số, chỉ giảm cỡ 3 lần ở quy mô của paper (activation vẫn phải lưu để backward)."
+  }
+]

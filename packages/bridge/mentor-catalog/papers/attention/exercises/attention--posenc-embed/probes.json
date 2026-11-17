@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Hoán vị các token của một câu rồi cho qua self-attention (chưa có positional encoding): đầu ra đổi thế nào? Vì sao điều đó thành vấn đề cho bài đảo chuỗi?",
+    "tag": "attention-order-blind",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Self-attention không có khái niệm vị trí: nó coi đầu vào là một tập, nên hoán vị đầu vào chỉ hoán vị đầu ra theo (equivariant), không đổi giá trị của từng token. Bài đảo chuỗi là chuyện thứ tự, nên không có thông tin vị trí thì mô hình không thể học được; phải cộng thông tin vị trí vào embedding (§3.5)."
+  },
+  {
+    "q": "Vì sao cộng PE vào embedding mà không nối thêm cột? Và nhân embedding với √d_model để làm gì: nếu bỏ phép nhân thì cái nào lấn át cái nào?",
+    "tag": "embed-scale",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Cộng giữ nguyên số chiều d_model nên các lớp sau không đổi kích thước, và token với vị trí nằm chung một không gian. Embedding khởi tạo với độ lệch chuẩn d_model^-1/2 rất nhỏ so với sin/cos (biên độ 1); nhân √d_model đưa nó về cỡ 1 để cân với PE. Bỏ phép nhân thì PE lấn át embedding: thông tin token bị chìm."
+  },
+  {
+    "q": "Chu kỳ (wavelength) của cặp cột 2i, 2i+1 là bao nhiêu? Cột đầu và cột cuối chênh nhau cỡ nào, và vì sao thiết kế các tần số trải dài như vậy?",
+    "tag": "pe-frequencies",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Chu kỳ là 2π·10000^(2i/d_model): từ 2π (cột đầu, đổi rất nhanh theo vị trí) tới cỡ 10000·2π (cột cuối, gần như hằng trên chuỗi ngắn). Giống các chữ số của một bộ đếm: cột nhanh phân biệt vị trí sát nhau, cột chậm phân biệt vị trí xa nhau; cùng nhau mỗi vị trí có một mã riêng. PE(pos+k) còn là một phép quay tuyến tính của PE(pos) nên dễ học vị trí tương đối (§3.5)."
+  },
+  {
+    "q": "Vì sao pe được đăng ký bằng register_buffer, mà không phải một thuộc tính tensor thường hay một nn.Parameter? Điều gì xảy ra với model.to(\"cuda\") và với optimizer ở mỗi trường hợp?",
+    "tag": "buffer-vs-parameter",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Buffer đi theo module (model.to(device), state_dict, lưu và nạp) nhưng không có gradient và optimizer không thấy. Thuộc tính tensor thường không được .to() chuyển nên lệch thiết bị với embedding (lỗi device mismatch) và không vào state_dict. nn.Parameter thì optimizer sẽ cập nhật bảng PE: nó thôi là bảng cố định hình sin."
+  },
+  {
+    "q": "Cùng token 5 ở vị trí 0 và ở vị trí 3 cho cùng một vector đầu ra không? Vì sao điều đó quan trọng cho việc đảo chuỗi?",
+    "tag": "position-distinguishes",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Không: embed cho cùng một vector, nhưng PE[0] khác PE[3] nên tổng khác nhau. Nhờ vậy các lớp attention sau phân biệt được hai lần xuất hiện của cùng một chữ số và định vị \"chữ số thứ k của chuỗi nguồn\" để ghép với vị trí tương ứng của chuỗi đảo."
+  }
+]

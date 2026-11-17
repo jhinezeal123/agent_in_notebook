@@ -1,0 +1,21 @@
+{
+  "id": "batchnorm2d",
+  "title": "Batch Normalization: train, eval và running stats",
+  "star": "resblock",
+  "skills": [
+    "formula",
+    "tensor"
+  ],
+  "difficulty": 1550,
+  "minutes": 25,
+  "requires": [
+    "numpy",
+    "torch"
+  ],
+  "order": 1,
+  "functions": [
+    "BatchNorm2d"
+  ],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

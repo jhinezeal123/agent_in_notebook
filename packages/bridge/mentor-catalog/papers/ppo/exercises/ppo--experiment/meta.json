@@ -1,0 +1,48 @@
+{
+  "id": "ppo--experiment",
+  "title": "Thí nghiệm: train PPO chơi CartPole (50 vòng × 1024 bước)",
+  "star": "ppo--experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2050,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["policy"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "ppo",
+  "role": "experiment",
+  "cites": "§5 (Algorithm 1), §6.1 (Bảng 1), Phụ lục A (siêu tham số)",
+  "uses": ["ppo--rollout", "ppo-update"],
+  "judge": "kernel",
+  "judgeSeconds": 120,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) Policy vừa khởi tạo, lấy mẫu hành động, đạt return cỡ bao nhiêu và entropy bao nhiêu (hai hành động đều nhau cho entropy bao nhiêu)? (2) Return trung bình mỗi vòng đi lên đều, theo đường chữ S, hay dao động, và sau bao nhiêu vòng (trong 50) nó chạm khoảng 200? (3) Entropy cuối cùng của policy cỡ nào: vẫn gần 0,69, giảm còn vài phần mười, hay gần 0? (4) So với một lần chạy DQN của bạn trên cùng môi trường: đường học của PPO sẽ mượt hơn hay dao động hơn, và vì sao?",
+  "metrics": [
+    {
+      "name": "mean_return",
+      "paper": "MuJoCo (7 môi trường, 1 triệu bước): điểm chuẩn hóa trung bình khoảng 0,82 với cắt ε = 0,2, cao nhất trong các biến thể (Bảng 1; theo trí nhớ, hãy đối chiếu); bản thu nhỏ: return CartPole tối đa 200 (bài toán khác, không so trực tiếp)",
+      "unit": "return trung bình của policy (lấy mẫu hành động) trên 20 episode mới (tối đa 200; ngẫu nhiên ≈ 20)",
+      "target": { "op": ">=", "value": 150 }
+    },
+    {
+      "name": "greedy_return",
+      "paper": "—",
+      "unit": "return trung bình khi luôn chọn hành động có logit lớn nhất, 20 episode mới"
+    },
+    {
+      "name": "random_return",
+      "paper": "điểm chơi ngẫu nhiên là mốc 0 khi paper chuẩn hóa điểm (§6.1; theo trí nhớ)",
+      "unit": "return trung bình của chính sách ngẫu nhiên trên cùng 20 seed"
+    },
+    {
+      "name": "policy_entropy",
+      "paper": "§5: số hạng thưởng entropy c₂·S[π] khuyến khích khám phá (Eq. 9; c₂ = 0,01 ở Atari, theo trí nhớ)",
+      "unit": "nat; ln 2 ≈ 0,69 là hai hành động đều nhau, gần 0 là gần tất định"
+    },
+    {
+      "name": "value_start",
+      "paper": "—",
+      "unit": "V trung bình ở 20 trạng thái đầu episode (trần lý thuyết 1/(1 − γ) = 100 với γ = 0,99)"
+    }
+  ]
+}

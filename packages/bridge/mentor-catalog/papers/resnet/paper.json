@@ -1,0 +1,11 @@
+{
+  "id": "resnet",
+  "title": "Deep Residual Learning for Image Recognition",
+  "authors": "He, Zhang, Ren, Sun",
+  "year": 2015,
+  "url": "https://arxiv.org/abs/1512.03385",
+  "arxiv": "1512.03385",
+  "closes": "vision",
+  "goal": "Ráp ResNet kiểu CIFAR (6n + 2 lớp) từ khối residual bạn đã làm, rồi train ResNet-20 có và không có đường tắt (shortcut) trên một tập con CIFAR-10 và đặt hai con số lỗi train, lỗi test cạnh nhau: đường tắt giúp tối ưu mạng sâu đến đâu ở quy mô nhỏ này, và hiện tượng degradation có hiện ra không.",
+  "status": "ready"
+}

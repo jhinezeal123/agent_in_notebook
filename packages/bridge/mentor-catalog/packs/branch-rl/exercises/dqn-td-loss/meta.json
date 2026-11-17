@@ -1,0 +1,13 @@
+{
+  "id": "dqn-td-loss",
+  "title": "DQN: loss TD với mạng target",
+  "star": "dqn",
+  "skills": ["tensor", "formula"],
+  "difficulty": 1750,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["dqn_loss"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

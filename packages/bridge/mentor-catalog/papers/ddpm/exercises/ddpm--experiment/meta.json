@@ -1,0 +1,48 @@
+{
+  "id": "ddpm--experiment",
+  "title": "Thí nghiệm: train DDPM tí hon sinh chữ số MNIST (T = 200)",
+  "star": "ddpm--experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["sched", "model"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "ddpm",
+  "role": "experiment",
+  "cites": "Alg. 1, Eq. 14, §4, Bảng 1",
+  "uses": ["ddpm-loss", "ddpm--sample"],
+  "judge": "kernel",
+  "judgeSeconds": 300,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) Loss lúc mô hình chưa train (đoán gần như 0) cỡ bao nhiêu, và sau vài nghìn bước nó xuống cỡ bao nhiêu: vài phần mười, vài phần trăm, hay vài phần nghìn? (2) Khi đo riêng theo bước t, loss ở t nhỏ (ảnh gần sạch) và ở t lớn (gần nhiễu thuần túy), chỗ nào lớn hơn và lớn hơn khoảng bao nhiêu lần? (3) Nếu giữ β từ 1e-4 đến 0,02 với T = 200 thay vì co giãn, ᾱ_T bằng bao nhiêu và ảnh sinh ra sẽ sai thế nào? (4) 16 ảnh mẫu sau khi train sẽ đọc được thành chữ số chưa, và giá trị pixel trung bình của chúng gần mức nào (MNIST thật cỡ −0,8)?",
+  "metrics": [
+    {
+      "name": "l_simple",
+      "paper": "—  (paper báo FID 3,17 trên CIFAR-10, Bảng 1: bài toán khác, không so trực tiếp)",
+      "unit": "L_simple trung bình trên 128 ảnh test (đoán 0 cho ≈ 1)",
+      "target": { "op": "<=", "value": 0.06 }
+    },
+    {
+      "name": "l_simple_small_t",
+      "paper": "—",
+      "unit": "L_simple chỉ trên các bước t < 20"
+    },
+    {
+      "name": "l_simple_large_t",
+      "paper": "—",
+      "unit": "L_simple chỉ trên các bước t ≥ 100"
+    },
+    {
+      "name": "sample_in_range",
+      "paper": "—",
+      "unit": "tỷ lệ pixel của 16 ảnh mẫu trong [−1,5; 1,5]"
+    },
+    {
+      "name": "sample_mean",
+      "paper": "—",
+      "unit": "pixel trung bình của 16 ảnh mẫu (MNIST thật ≈ −0,8)"
+    }
+  ]
+}

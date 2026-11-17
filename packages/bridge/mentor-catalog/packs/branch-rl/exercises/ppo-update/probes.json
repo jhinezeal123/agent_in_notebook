@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong hình đồ chơi, nếu chỉ leo gradient thẳng qua nhiều epoch (không cắt), tỉ số, clip_fraction và approx_kl đi về đâu? Tại sao một rollout không thể dùng mãi? Và bạn sẽ chọn con số nào trong ba số đó làm tín hiệu 'dừng sớm' cho rollout hiện tại?",
+    "tag": "multi-epoch-drift",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Cả ba tăng đều và không tự dừng: tỉ số của hành động có advantage dương phình ra (càng ngày càng xa 1), clip_fraction tăng về gần 1, approx_kl tăng. Dữ liệu được thu bởi policy cũ: càng đi xa, dữ liệu càng không đại diện cho policy mới, nên gradient (ước lượng bằng dữ liệu cũ) càng kém tin cậy và policy có thể sụp. approx_kl là thước đo trực tiếp 'policy mới cách policy cũ bao xa'; nên nhiều bản cài dừng sớm khi approx_kl vượt một ngưỡng (khoảng 0.01-0.03); clip_fraction cũng hữu ích như dấu hiệu chẩn đoán."
+  },
+  {
+    "q": "Nhìn lịch trình epoch x minibatch: mỗi mẫu được dùng bao nhiêu lần trong một epoch và qua cả quá trình? Vì sao phải xáo trộn lại ở MỖI epoch thay vì xáo trộn một lần rồi lặp lại cùng thứ tự? Nếu N không chia hết cho minibatch_size thì minibatch cuối khác gì và có nên bỏ nó không?",
+    "tag": "minibatch-coverage",
+    "stage": "lab",
+    "kind": "shape",
+    "answer": "Mỗi mẫu đúng một lần mỗi epoch, tổng cộng epochs lần. Xáo trộn lại để các minibatch có thành phần khác nhau mỗi epoch: các lần cập nhật không bị tương quan theo thứ tự thu thập (mẫu liền kề trong rollout rất giống nhau) và không lặp lại cùng một chuỗi nhóm; thứ tự cố định có thể tạo thiên lệch và kém ổn định. Minibatch cuối có ít mẫu hơn (N mod minibatch_size) nhưng vẫn hợp lệ; bỏ nó thì một số mẫu mỗi epoch bị bỏ rơi (cứ cùng một thứ tự thì cùng những mẫu bị bỏ)."
+  },
+  {
+    "q": "Tổng loss có số hạng - ent_coef * entropy. Vì sao dấu trừ, và entropy cao hay thấp có nghĩa gì với policy? Nếu bạn đặt ent_coef quá lớn thì điều gì xảy ra với policy, và nếu bằng 0 thì rủi ro gì ở đầu huấn luyện?",
+    "tag": "entropy-bonus-sign",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Entropy đo độ ngẫu nhiên của policy (cao = còn khám phá nhiều hành động, thấp = chắc chắn một hành động). Ta muốn thưởng cho entropy (giữ khám phá), nhưng optimizer GIẢM loss, nên entropy phải mang dấu trừ: giảm loss = tăng entropy. Dấu cộng sẽ phạt entropy, ép policy co về hành động tất định quá sớm. ent_coef quá lớn: policy gần như đều (gần ngẫu nhiên), bỏ qua advantage, không học được; bằng 0: policy có thể hội tụ sớm về một hành động chưa tối ưu (sụp entropy) và không còn khám phá để sửa."
+  },
+  {
+    "q": "Vì sao value loss và policy loss được cộng vào một loss tổng (nhân vf_coef) thay vì cập nhật riêng? Điều đó nói gì về mạng dùng chung thân giữa policy và value, và vì sao returns trong value loss phải là hằng số?",
+    "tag": "value-loss-coefficient",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Khi policy và value chung thân mạng (shared trunk), một lần backward trên tổng loss cập nhật cả hai đầu và phần thân dùng chung; vf_coef cân bằng độ lớn gradient của hai mục tiêu (value loss thường lớn hơn nhiều, nên cần hệ số nhỏ để không lấn át policy). Nếu hai mạng tách riêng thì có thể cập nhật riêng, nhưng cộng chung vẫn tiện. returns là mục tiêu hồi quy tính từ dữ liệu (từ GAE): nó không phụ thuộc theta nên phải là hằng số, nếu không gradient chảy vào returns/advantage gốc, mục tiêu 'trôi' theo dự đoán và phá việc học."
+  },
+  {
+    "q": "Thứ tự zero_grad, backward, clip_grad_norm_, step: nếu cắt gradient TRƯỚC backward, hoặc quên zero_grad giữa các minibatch, điều gì xảy ra cụ thể? Vì sao cắt theo chuẩn toàn cục thay vì cắt từng phần tử?",
+    "tag": "grad-clipping-order",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Cắt trước backward: lúc đó .grad còn là giá trị cũ hoặc rỗng (None), nên không cắt gì cả (hoặc cắt gradient của bước trước), rồi backward ghi gradient lớn chưa bị cắt vào step. Quên zero_grad: PyTorch cộng dồn gradient vào .grad, nên minibatch thứ k dùng tổng gradient của k minibatch (bước to dần, hướng sai). Cắt theo chuẩn toàn cục giữ nguyên HƯỚNG của gradient và chỉ co độ lớn khi quá lớn; cắt từng phần tử bóp méo hướng (các thành phần bị cắt khác nhau) nên không còn là hướng giảm loss."
+  },
+  {
+    "q": "approx_kl và clip_fraction đều được trả về. Hai số này nói gì khác nhau về việc policy đã đi xa? Nếu clip_fraction rất cao (ví dụ 0.7) ở những epoch cuối, bạn sẽ đổi tham số nào của ppo_update, và vì sao?",
+    "tag": "approx-kl-clip-fraction",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "approx_kl đo mức lệch trung bình theo log-xác suất (độ dài của bước trong không gian phân phối), nhạy với những thay đổi lớn nhưng hiếm; clip_fraction đếm bao nhiêu mẫu đã chạm ngưỡng cắt (bao nhiêu gradient đã bị chặn). clip_fraction rất cao nghĩa là phần lớn dữ liệu của rollout không còn đóng góp gradient và policy đã đi xa: giảm số epoch, giảm learning rate, hoặc dừng sớm theo approx_kl; tăng clip_eps chỉ làm lỏng phanh chứ không giải quyết nguyên nhân (cập nhật quá mạnh trên dữ liệu cũ)."
+  }
+]

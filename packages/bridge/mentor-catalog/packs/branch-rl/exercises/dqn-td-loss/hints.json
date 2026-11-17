@@ -1,0 +1,61 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_example",
+    "text": "Tính tay ba phần: Q đã chọn của mỗi hàng là bao nhiêu, target của mỗi hàng là bao nhiêu (hàng nào là done?), và sai số của mỗi hàng. Trong số đó, phần nào bạn chưa chắc code của mình ra cùng số?"
+  },
+  {
+    "level": 0,
+    "test": "test_gather_chosen_action",
+    "text": "Mạng cho bạn bảng (B, A). Với mỗi hàng bạn cần đúng một số: Q của hành động đã chọn. Chỉ số hành động phải có shape nào để lấy được theo trục hành động, và kết quả cuối có shape gì trước khi đem so với target?"
+  },
+  {
+    "level": 0,
+    "test": "test_done_mask",
+    "text": "Với transition done = 1, target của nó bằng bao nhiêu? Biểu thức của bạn có triệt tiêu phần tương lai đúng ở những hàng đó không, và dones có kiểu số gì để nhân được?"
+  },
+  {
+    "level": 0,
+    "test": "test_matches_reference",
+    "text": "Max của giá trị tương lai lấy theo trục nào của bảng Q của next_states? Kết quả cần shape (B,): bạn có đang lấy max trên cả batch không?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients_only_to_q_net",
+    "text": "Sau loss.backward(), tham số nào của target_net có gradient? Phần tính target nằm trong phạm vi nào của autograd: có được ghi vào đồ thị không?"
+  },
+  {
+    "level": 0,
+    "test": "test_huber_not_mse",
+    "text": "Với sai số 10, loss của phần tử đó bằng bao nhiêu: 50 hay 9.5? Bạn đang gọi hàm loss nào, và reduction của nó là gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_no_side_effects_and_dtype",
+    "text": "Loss bạn trả về có còn nối với đồ thị tính gradient của q_net không? Phần nào của hàm được phép tắt gradient, phần nào không?"
+  },
+  {
+    "level": 1,
+    "text": "Chia thành hai nhánh. Nhánh dự đoán (cần gradient): cho states qua q_net được bảng (B, A), rồi lấy theo trục hành động đúng một giá trị mỗi hàng, ra vector (B,), bằng hàm chọn-theo-chỉ-số của tensor với chỉ số hành động được thêm một chiều. Nhánh target (không gradient, bọc trong chế độ tắt gradient): cho next_states qua target_net, lấy max theo trục hành động ra (B,), rồi target là thưởng cộng gamma nhân (một trừ done) nhân max đó. Cuối cùng so hai vector bằng smooth L1, trung bình theo batch."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "giải gói batch thành states, actions, rewards, next_states, dones\nq_all = q_net(states)  # (B, A)\nq_sa = lấy phần tử [i, actions[i]] của mỗi hàng i  -> (B,)   (chỉ số hành động cần shape (B, 1) và bỏ chiều thừa sau đó)\ntrong chế độ no_grad:\n    next_q = max theo trục 1 của target_net(next_states)  -> (B,)\n    target = rewards + gamma * (1 - dones) * next_q\nloss = smooth_l1(q_sa, target)  # trung bình mặc định"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chuyện chọn hành động theo trục",
+    "text": "Hàm tensor để chọn theo chỉ số nhận hai thứ: trục (ở đây là trục 1, trục hành động) và một tensor chỉ số có cùng số chiều với bảng Q, tức (B, 1). actions của bạn đang là (B,), nên cần thêm một chiều ở cuối trước khi truyền vào, và bỏ chiều đó đi sau khi lấy. Hàm max theo một trục trả về cả giá trị và chỉ số; bạn cần phần giá trị."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở lấy Q của hành động đã chọn",
+    "text": "```python\nq_sa = q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở nhánh target",
+    "text": "```python\nwith torch.no_grad():\n    next_q = target_net(next_states).max(dim=1).values\n    target = rewards + gamma * (1.0 - dones) * next_q\n```"
+  }
+]

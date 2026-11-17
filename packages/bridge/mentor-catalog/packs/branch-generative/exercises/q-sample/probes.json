@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab: nhân vector 4 hệ số vào batch 4 ảnh shape (4, 3, 5, 4) không báo lỗi. Hệ số thật sự chạy dọc trục nào, và vì sao đổi chiều rộng thành 5 thì lại báo lỗi? Điều đó nói gì về cách bạn phải viết hệ số theo t?",
+    "tag": "batch-broadcast-silent",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Broadcasting căn thẳng hàng từ trục CUỐI: vector (4,) khớp với trục cuối (chiều rộng, vốn bằng 4), nên mỗi CỘT của mọi ảnh nhận một hệ số khác nhau chứ không phải mỗi ảnh một hệ số: trung bình các ảnh đều bằng 2.5. Khi chiều rộng là 5 thì (4,) và 5 không khớp nên mới có lỗi. Muốn hệ số chạy dọc trục batch thì vector phải được đưa về shape (B, 1, 1, 1) để trục batch thẳng hàng với trục 0 của ảnh. Nguy hiểm ở chỗ bug im lặng khi B trùng với một kích thước khác."
+  },
+  {
+    "q": "Trong lab, tạo một ảnh ở bước 600 phải đi qua 600 phép tính. Khi train, mỗi ảnh của mỗi batch cần một bước t ngẫu nhiên. Eq. 4 giúp gì, và vì sao nó đúng được (nhiều bước nhiễu Gauss nối tiếp gộp lại thành gì)?",
+    "tag": "q-sample-closed-form",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Mỗi bước là một biến đổi tuyến tính cộng nhiễu Gauss độc lập, nên hợp của chúng vẫn là Gauss: trung bình là x0 nhân với tích các √α_s = √ᾱ_t, phương sai là tổng các phương sai nhiễu đã bị thu nhỏ = 1 − ᾱ_t. Vì vậy ta nhảy thẳng từ x0 tới x_t trong O(1) phép tính thay vì t phép, và đó là điều làm việc train khả thi (mỗi lần cập nhật chọn t tuỳ ý, không phải chạy cả chuỗi)."
+  },
+  {
+    "q": "Nếu viết x_t = ᾱ_t·x0 + (1 − ᾱ_t)·ε (quên căn) thì phương sai của x_t khi ᾱ_t = 0.5 là bao nhiêu, nếu x0 và ε độc lập có phương sai 1? Điều đó phá chỗ nào của Eq. 4?",
+    "tag": "q-sample-sqrt-coefficients",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Phương sai là ᾱ² + (1 − ᾱ)² = 0.25 + 0.25 = 0.5, không phải 1: ảnh bị co biên độ ở các bước giữa (nhỏ nhất tại ᾱ = 0.5) và mất tính chất giữ phương sai đơn vị của quá trình. Eq. 4 là N(√ᾱ x0, (1 − ᾱ) I): đó là PHƯƠNG SAI (1 − ᾱ), nên độ lệch chuẩn, tức hệ số nhân vào ε, phải là √(1 − ᾱ); tương tự hệ số tín hiệu là √ᾱ. Mô hình sẽ học trên phân phối khác phân phối mà lúc lấy mẫu ta giả định."
+  },
+  {
+    "q": "t = 0 và t = T−1 cho ra ảnh trông thế nào? Nếu bạn lỡ lấy hệ số theo t − 1 thì ảnh có t = 0 nhận hệ số của phần tử nào của lịch, và điều đó sai ra sao?",
+    "tag": "q-sample-indexing",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "t = 0 cho ảnh gần như nguyên (√ᾱ ≈ 0.99995, nhiễu hệ số 0.01), t = T−1 cho gần như thuần nhiễu (√ᾱ ≈ 0.0064). Với t − 1, ảnh t = 0 lấy chỉ số −1 tức phần tử CUỐI của lịch (Python cho phép chỉ số âm, không báo lỗi): ảnh còn nguyên bị biến thành gần thuần nhiễu. Mọi t khác lệch một bước so với bước mà mô hình được báo. Chỉ số của lịch bắt đầu từ 0 như đã chọn ở bài noise-schedule."
+  },
+  {
+    "q": "Vì sao mỗi ảnh trong một batch nên có bước t riêng, thay vì cả batch cùng một t? Hàm q_sample của bạn có cần phải khác đi gì nếu cả batch cùng một t?",
+    "tag": "q-sample-per-sample-t",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Mỗi ảnh một t ngẫu nhiên khiến gradient của một batch là trung bình trên nhiều mức nhiễu khác nhau, nên ước lượng loss có phương sai thấp hơn và ổn định hơn; cả batch cùng t thì mỗi bước cập nhật chỉ nhìn một mức nhiễu và dao động mạnh giữa các bước. Hàm cần đúng cho cả hai: cả batch cùng t chỉ là trường hợp đặc biệt của t có giá trị trùng nhau, nên mã đúng cho t (B,) khác nhau tự động đúng khi chúng bằng nhau."
+  },
+  {
+    "q": "Vì sao q_sample nhận noise làm tham số thay vì tự sinh nhiễu bên trong? Khi train DDPM ta cần dùng lại chính nhiễu đó ở đâu nữa?",
+    "tag": "noise-shared-target",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Nhiễu ε dùng để tạo x_t cũng chính là đích hồi quy của mô hình ở loss L_simple (Eq. 14: mô hình đoán đúng ε đã thêm vào). Nếu q_sample tự sinh nhiễu bên trong thì bên ngoài không biết ε là gì để so; nhận ε vào thì hàm gọi sinh một lần, dùng cho cả hai. Lợi ích phụ: hàm thuần tuý (cùng đầu vào cho cùng đầu ra) nên dễ kiểm tra."
+  }
+]

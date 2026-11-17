@@ -1,0 +1,37 @@
+[
+  {
+    "q": "So dự đoán của bạn với kết quả thật: G ở hai cực lambda là bao nhiêu, và vì sao G_2 (bước cuối) giống nhau ở mọi lambda? Dạng 'pha trộn' (1 - lambda) * V + lambda * G cho bạn cách nhìn nào về lambda mà dạng cộng dồn sai số TD khó thấy?",
+    "tag": "predict-vs-reality",
+    "stage": "lab",
+    "kind": "trap",
+    "answer": "lambda = 0: G = [2, 2.5, 3]; lambda = 1: G = [2.25, 2.5, 3]. G_2 giống nhau vì ở bước cuối cả V_(t+1) và G_(t+1) đều là last_value, nên trộn thế nào cũng ra cùng một con số. Dạng pha trộn cho thấy lambda là 'núm' tin tưởng: mỗi bước tin (1 - lambda) vào ước lượng V của bước sau và lambda vào return thật tính tiếp từ bước sau; lambda = 0 hoàn toàn tin V, lambda = 1 hoàn toàn tin dòng thưởng thật."
+  },
+  {
+    "q": "Trong lambda-return, mỗi bước một mình quyết định 'tin V bao nhiêu'. Giải thích vì sao tin V nhiều thì có bias nhưng ít phương sai, còn tin dòng thưởng thật nhiều thì ngược lại. Ở đầu huấn luyện (V còn rất tệ), bạn muốn lambda lớn hay nhỏ?",
+    "tag": "bias-variance-lambda",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "V là một hàm xấp xỉ có sai số hệ thống: dùng nó làm mục tiêu thì mục tiêu lệch theo (bias), nhưng nó là một con số ổn định, ít nhiễu. Thưởng thật cộng dồn nhiều bước thì không lệch, nhưng mỗi thưởng mang ngẫu nhiên của môi trường và policy, càng nhiều bước càng nhiều nhiễu cộng lại (phương sai). Đầu huấn luyện V rất tệ nên bias lớn: lambda lớn (gần 1) tin thưởng thật hơn, đáng giá; về sau V tốt hơn thì lambda vừa phải (0.9-0.97) cân bằng."
+  },
+  {
+    "q": "Vì sao lambda_return(...) bằng đúng returns = advantages + values của compute_gae? Chỉ ra phép biến đổi đại số nối hai dạng đệ quy (gợi ý: đặt A_t = G_t - V_t trong công thức của advantage).",
+    "tag": "gae-equals-lambda-return",
+    "stage": "defend",
+    "kind": "why",
+    "answer": "Thay G_t = A_t + V_t vào G_t = r_t + gamma*(1-d)*[(1-lambda) V_(t+1) + lambda G_(t+1)]: vế phải thành r_t + gamma(1-d) V_(t+1) + gamma*lambda*(1-d)*(G_(t+1) - V_(t+1)) = r_t + gamma(1-d)V_(t+1) + gamma*lambda*(1-d)*A_(t+1). Trừ V_t hai vế: A_t = delta_t + gamma*lambda*(1-d)*A_(t+1), đúng công thức GAE. Hai dạng là một đại lượng viết theo hai biến khác nhau (advantage hoặc return)."
+  },
+  {
+    "q": "Nếu mạng giá trị V đã chính xác tuyệt đối thì mọi lambda cho cùng G (test 'V đúng thì lambda vô nghĩa'). Vậy trong thực tế vì sao vẫn cần chỉnh lambda, và đại lượng nào đo mức V 'chưa đúng'?",
+    "tag": "exact-values-lambda",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Khi V đúng, sai số TD delta_t có kỳ vọng 0 và mọi cách cộng dồn đều có cùng kỳ vọng (không bias); lambda chỉ còn ảnh hưởng đến phương sai: lambda nhỏ thì ít nhiễu hơn. Trong thực tế V luôn có sai số (mạng xấp xỉ, ít dữ liệu), nên lambda quyết định mức hậu quả của sai số đó (bias) so với nhiễu của thưởng thật (phương sai). Sai số TD delta_t (hoặc advantage trung bình khác 0, hoặc loss của value) đo V chưa đúng ở đâu."
+  },
+  {
+    "q": "Tại sao ở bước done, cả hai số hạng trong ngoặc vuông (V sau và return sau) đều phải bị chặn, chứ không phải chỉ một? Nêu ví dụ một con số sai nếu chỉ chặn số hạng lambda * G sau mà quên số hạng (1 - lambda) * V sau, khi lambda = 0.",
+    "tag": "terminal-mask-gae",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Cả V_(t+1) lẫn G_(t+1) thuộc episode khác/reset sau done; chặn một mà quên một thì phần còn lại vẫn là thông tin của ván sau. Ví dụ lambda = 0: ngoặc vuông chỉ còn V_(t+1); nếu chỉ chặn lambda*G (bằng 0 ở lambda = 0 rồi), phần V_(t+1) của trạng thái khởi đầu ván sau vẫn được cộng gamma * V vào G_t: bước done có mục tiêu r + gamma*V(s_đầu ván sau) thay vì r, và V học rằng 'thua rồi vẫn còn tương lai'."
+  }
+]

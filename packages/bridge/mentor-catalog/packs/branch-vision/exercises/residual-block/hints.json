@@ -1,0 +1,70 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Nhìn vào bảng thuộc tính của đề: conv1 và conv2 khác nhau ở tham số nào của nn.Conv2d? Và khi nào shortcut không có tham số nào, khi nào là một nn.Sequential gồm hai lớp?"
+  },
+  {
+    "level": 0,
+    "test": "test_shapes",
+    "text": "Với ảnh 7×7 và stride 2, nhánh chính cho ra mấy×mấy, và đường tắt (kernel 1×1, stride 2, không padding) cho ra mấy×mấy? Hai con số đó có khớp nhau để cộng được không?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward_values",
+    "text": "Thứ tự trong nhánh chính là conv, BN, ReLU, conv, BN. Bạn có đặt ReLU ở giữa hai conv không, và stride được truyền vào conv nào trong hai conv?"
+  },
+  {
+    "level": 0,
+    "test": "test_eval_mode",
+    "text": "Khi gọi model.eval(), lớp BatchNorm nằm trong shortcut có chuyển chế độ theo không? Nó có phải là module con của khối của bạn (nằm trong self) không, hay là một hàm gọi lẻ ở ngoài?"
+  },
+  {
+    "level": 0,
+    "test": "test_identity_shortcut",
+    "text": "Nếu nhánh chính cho ra toàn số 0 và đường tắt là đồng nhất, thì tổng trước ReLU bằng gì? Từ đó đầu ra là gì, và gradient theo x ở một vị trí có x âm bằng bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_projection_shortcut",
+    "text": "Khi in_ch ≠ out_ch hoặc stride ≠ 1, đường tắt phải đổi x sang shape nào? Điều kiện chọn giữa đồng nhất và projection của bạn có xét cả stride, không chỉ số kênh không?"
+  },
+  {
+    "level": 0,
+    "test": "test_relu_after_add",
+    "text": "Nếu nhánh chính luôn cho ra −1 và đường tắt là x thì khối nên cho ra gì ở vị trí có x = 0.5? ReLU của bạn nhìn thấy tổng hay chỉ nhìn thấy từng nhánh riêng?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradients",
+    "text": "Tham số nào không nhận được gradient nào sau backward? Có lớp nào bạn tạo trong __init__ mà forward không gọi, hoặc gọi nhầm một lớp hai lần không?"
+  },
+  {
+    "level": 1,
+    "text": "Khởi tạo: tạo bốn lớp của nhánh chính (conv 3×3 giảm độ phân giải bằng stride, BN, conv 3×3 giữ nguyên, BN) rồi quyết định shortcut bằng một điều kiện if trên cả số kênh lẫn stride. Forward: tính nhánh chính (ReLU chỉ nằm giữa hai conv, không nằm sau conv thứ hai), tính đường tắt từ x, cộng hai kết quả, rồi áp ReLU cho tổng."
+  },
+  {
+    "level": 1,
+    "text": "Hai nhánh chỉ cộng được khi cùng shape. Đường tắt cần cùng số kênh với nhánh chính (đổi số kênh bằng một phép nhân ma trận theo kênh, tức conv kernel 1×1) và cùng độ phân giải (stride nhánh chính chọn, đường tắt phải dùng cùng stride để lấy mẫu cùng các điểm). Còn khi hai shape đã khớp thì chẳng cần làm gì."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "__init__(in_ch, out_ch, stride):\n  conv1 = Conv2d(in_ch, out_ch, 3, stride=stride, padding=1, bias=False); bn1 = BatchNorm2d(out_ch)\n  conv2 = Conv2d(out_ch, out_ch, 3, stride=1, padding=1, bias=False); bn2 = BatchNorm2d(out_ch)\n  nếu stride == 1 và in_ch == out_ch: shortcut = Identity\n  ngược lại: shortcut = Sequential(Conv2d(in_ch, out_ch, 1, stride=stride, bias=False), BatchNorm2d(out_ch))\nforward(x):\n  out = ReLU(bn1(conv1(x)))\n  out = bn2(conv2(out))      # chưa ReLU\n  trả về ReLU(out + shortcut(x))"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở shape của shortcut",
+    "text": "Với ảnh H×H, nhánh chính qua conv 3×3 (padding 1, stride s) có độ phân giải ⌊(H + 2 − 3)/s⌋ + 1. Conv 1×1 stride s không padding cho ⌊(H − 1)/s⌋ + 1: hai con số bằng nhau với mọi H và s. Padding mà bạn thêm cho kernel 1×1 sẽ làm hai con số lệch nhau."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khởi tạo shortcut",
+    "text": "```python\nif stride == 1 and in_ch == out_ch:\n    self.shortcut = nn.Identity()\nelse:\n    self.shortcut = nn.Sequential(nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=stride, bias=False), nn.BatchNorm2d(out_ch))\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở forward",
+    "text": "```python\nout = F.relu(self.bn1(self.conv1(x)))\nout = self.bn2(self.conv2(out))\nreturn F.relu(out + self.shortcut(x))\n```"
+  }
+]

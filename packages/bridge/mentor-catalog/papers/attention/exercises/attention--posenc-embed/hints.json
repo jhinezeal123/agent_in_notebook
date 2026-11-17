@@ -1,0 +1,51 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Bảng PE có cần học không? Nếu không, nó nên là tham số, thuộc tính tensor thường, hay thứ gì mà module.to(...) và state_dict() vẫn thấy?"
+  },
+  {
+    "level": 0,
+    "test": "test_pe_values",
+    "text": "Hàng pos = 0 của bảng phải là gì ở các cột chẵn và các cột lẻ? Cột 0 và cột 1 có cùng tần số không?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward",
+    "text": "Embedding đã được nhân với hệ số nào trước khi cộng? Và bạn cộng với những hàng nào của pe, khi tokens có T = 7 mà max_len là 40?"
+  },
+  {
+    "level": 0,
+    "test": "test_lengths",
+    "text": "Khi T nhỏ hơn max_len, bạn cắt bảng pe thế nào để cộng được với tensor (B, T, d_model)?"
+  },
+  {
+    "level": 0,
+    "test": "test_init",
+    "text": "nn.Embedding mặc định khởi tạo với độ lệch chuẩn bao nhiêu? Sau khi nhân √d_model, thành phần của embedding nên có độ lệch chuẩn cỡ bao nhiêu để cân với sin/cos?"
+  },
+  {
+    "level": 1,
+    "text": "Dựng bảng pe một lần trong __init__: một cột vị trí 0..max_len-1 nhân với một hàng tần số, đưa vào sin cho các cột chẵn và cos cho các cột lẻ. Tần số của cặp cột thứ i là 10000 mũ âm (2i / d_model). Khởi tạo lại trọng số embedding bằng phân phối chuẩn có độ lệch chuẩn d_model^-1/2 (có sẵn hàm trong nn.init). forward: nhân embedding với √d_model rồi cộng T hàng đầu của pe."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "__init__:\n  embed = nn.Embedding(vocab_size, d_model); khởi tạo lại trọng số: chuẩn, mean 0, std d_model^-1/2\n  position: (max_len, 1) = 0, 1, 2, ...\n  freq: (d_model/2,) = 10000^(-2i/d_model), i = 0 .. d_model/2 - 1\n  pe = zeros (max_len, d_model); cột chẵn = sin(position * freq); cột lẻ = cos(position * freq)\n  đăng ký pe là buffer\nforward: embed(tokens) * √d_model + pe[:T]"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc điền cột chẵn và cột lẻ",
+    "text": "position (max_len, 1) nhân freq (d_model/2,) broadcast ra (max_len, d_model/2): đúng bằng một nửa số cột. Cột chẵn là lát cắt bước nhảy 2 bắt đầu từ 0, cột lẻ là lát cắt bước nhảy 2 bắt đầu từ 1."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở tạo freq và điền pe",
+    "text": "```python\nfreq = torch.pow(10000.0, -torch.arange(0, d_model, 2, dtype=torch.float32) / d_model)\npe[:, 0::2] = torch.sin(position * freq)\npe[:, 1::2] = torch.cos(position * freq)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khởi tạo embed và buffer",
+    "text": "```python\nnn.init.normal_(self.embed.weight, mean=0.0, std=d_model ** -0.5)\nself.register_buffer(\"pe\", pe)\n```"
+  }
+]

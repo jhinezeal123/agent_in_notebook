@@ -1,0 +1,66 @@
+[
+  {
+    "level": 0,
+    "test": "test_len_is_min_of_pushes_and_capacity",
+    "text": "Sau 12 lần push vào bộ đệm sức chứa 5, bạn đang lưu bao nhiêu transition? Biến nào đếm số đang lưu, và nó có bị chặn ở đâu không?"
+  },
+  {
+    "level": 0,
+    "test": "test_sample_shapes_and_dtypes",
+    "text": "Mỗi mảng bạn trả về có dtype gì khi người gọi đưa vào số nguyên Python, bool, hay mảng float64? Nên chọn dtype lúc nào: lúc ghi hay lúc bốc?"
+  },
+  {
+    "level": 0,
+    "test": "test_transition_stays_together",
+    "text": "Bạn chọn các chỉ số ngẫu nhiên một lần hay một lần cho mỗi mảng? Nếu mỗi mảng bốc chỉ số riêng thì hàng thứ i của states còn cùng transition với hàng thứ i của rewards không?"
+  },
+  {
+    "level": 0,
+    "test": "test_overwrites_oldest",
+    "text": "Khi bộ đệm đã đầy, push tiếp theo ghi vào ô nào? Ô đó chứa transition cũ nhất hay mới nhất, và sau khi ghi, ô kế tiếp bạn ghi là ô nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_sample_without_replacement",
+    "text": "Hàm bốc ngẫu nhiên bạn dùng có thể trả về cùng một chỉ số hai lần không? Cách gọi nó có tham số nào quyết định chuyện đó?"
+  },
+  {
+    "level": 0,
+    "test": "test_only_written_entries",
+    "text": "Khi mới push 7 transition vào bộ đệm sức chứa 100, các chỉ số bạn bốc nằm trong khoảng nào: tới 7 hay tới 100? Phần còn lại của mảng đang chứa gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_sample_errors",
+    "text": "Nếu người gọi xin 10 transition khi chỉ có 4, bạn trả về gì? Và nếu bộ đệm còn trống hẳn?"
+  },
+  {
+    "level": 0,
+    "test": "test_copies_inputs",
+    "text": "Nếu người gọi sửa mảng s ngay sau khi push, transition đã lưu có đổi theo không? Bạn đã lưu bản sao hay chỉ lưu một cái tên trỏ tới mảng của họ?"
+  },
+  {
+    "level": 1,
+    "text": "Giữ năm mảng NumPy cùng chiều dài `capacity` (một mảng cho mỗi trường của transition, kiểu dữ liệu chọn sẵn), cùng hai số nguyên: con trỏ ghi và số phần tử đang có. Vì chưa biết chiều d của state, hãy cấp mảng ở lần push đầu. push ghi vào hàng ở con trỏ, rồi đẩy con trỏ lên một và quay vòng về đầu khi chạm sức chứa; số phần tử tăng tới khi chạm sức chứa thì dừng. sample kiểm tra batch hợp lệ, bốc một lần các chỉ số khác nhau trong phần đã ghi, rồi dùng cùng bộ chỉ số đó để lấy hàng của cả năm mảng."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết cấu trúc lớp",
+    "text": "__init__: capacity, pos = 0, size = 0, các mảng chưa cấp (None)\npush: nếu chưa cấp mảng thì cấp theo d = độ dài của s (states, next_states float32 (capacity, d); actions int64; rewards, dones float32 (capacity,)); gán vào hàng pos của từng mảng; pos = (pos + 1) quay vòng theo capacity; size = min(size + 1, capacity)\nsample: nếu batch_size < 1 hoặc > size thì ValueError; idx = bốc batch_size chỉ số khác nhau trong [0, size) bằng rng; trả về từng mảng lấy theo idx\n__len__: size"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chuyện bốc ngẫu nhiên",
+    "text": "Phương thức choice của Generator nhận tổng số lựa chọn, kích thước cần lấy, và một cờ cho phép lặp hay không. Dùng số phần tử đang có làm tổng số lựa chọn (không phải sức chứa), và tắt cờ cho phép lặp. Lấy chỉ số đúng một lần rồi dùng lại cho cả năm mảng."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở vị trí ghi và quay vòng",
+    "text": "```python\ni = self.pos\nself.states[i] = s\nself.pos = (self.pos + 1) % self.capacity\nself.size = min(self.size + 1, self.capacity)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở bốc không thay thế",
+    "text": "```python\nidx = rng.choice(self.size, size=batch_size, replace=False)\n```"
+  }
+]

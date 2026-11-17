@@ -1,0 +1,11 @@
+{
+  "id": "vit",
+  "title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
+  "authors": "Dosovitskiy, Beyer, Kolesnikov, Weissenborn, Zhai, Unterthiner, Dehghani, Minderer, Heigold, Gelly, Uszkoreit, Houlsby",
+  "year": 2020,
+  "url": "https://arxiv.org/abs/2010.11929",
+  "arxiv": "2010.11929",
+  "closes": "vision",
+  "goal": "Ráp một ViT thu nhỏ cho chữ số MNIST từ các mảnh bạn đã làm (patch embedding, cls token, positional embedding, khối encoder), tự chỉnh positional embedding cho lưới patch khác, rồi train hai ViT chỉ khác patch size (4 và 7) và đặt cạnh nhau accuracy, số token và chi phí: patch nhỏ cho nhiều token hơn, tốn bao nhiêu và được bao nhiêu.",
+  "status": "ready"
+}

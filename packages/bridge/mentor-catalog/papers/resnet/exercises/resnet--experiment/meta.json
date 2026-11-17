@@ -1,0 +1,48 @@
+{
+  "id": "resnet--experiment",
+  "title": "Thí nghiệm: ResNet-20 có và không có shortcut trên CIFAR-10 (tập con)",
+  "star": "resnet--experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["model_res", "model_plain"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "resnet",
+  "role": "experiment",
+  "cites": "§4.1 (Hình 4), §4.2 (Hình 6, Bảng 6)",
+  "uses": ["resnet--net"],
+  "judge": "kernel",
+  "judgeSeconds": 300,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) Sau 30 epoch trên 10 000 ảnh, accuracy test của ResNet-20 cỡ bao nhiêu: vài chục phần trăm, hay gần 90% như paper (91,25%, tức lỗi 8,75% ở Bảng 6)? Vì sao khác? (2) Lỗi train của hai mạng sau khi train sẽ cỡ nào (gần 0, vài phần trăm, hay hàng chục phần trăm), và lỗi test lớn hơn lỗi train bao nhiêu lần? (3) Plain-20 có lỗi train cao hơn ResNet-20 không, và nếu có thì chênh khoảng bao nhiêu điểm phần trăm? (4) Nếu đổi n = 9 (56 lớp) thì khoảng cách đó đổi thế nào?",
+  "metrics": [
+    {
+      "name": "acc_res",
+      "paper": "ResNet-20: lỗi test 8,75% trên CIFAR-10 = accuracy 91,25% (Bảng 6; 45 000 ảnh train, 164 epoch; bản thu nhỏ không so trực tiếp)",
+      "unit": "accuracy của model_res trên 2000 ảnh đầu tập test (đoán bừa = 0,1)",
+      "target": { "op": ">=", "value": 0.5 }
+    },
+    {
+      "name": "acc_plain",
+      "paper": "— (Hình 6: ở 20 lớp plain và ResNet gần nhau; plain sâu hơn thì tệ dần)",
+      "unit": "accuracy của model_plain trên 2000 ảnh đầu tập test"
+    },
+    {
+      "name": "train_err_res",
+      "paper": "— (Hình 6: lỗi train của ResNet giảm khi mạng sâu hơn)",
+      "unit": "tỷ lệ đoán sai của model_res trên 2000 ảnh đầu tập train (eval, không augment)"
+    },
+    {
+      "name": "train_err_plain",
+      "paper": "— (Hình 6: lỗi train của plain-56 cao hơn plain-20: degradation)",
+      "unit": "tỷ lệ đoán sai của model_plain trên 2000 ảnh đầu tập train (eval, không augment)"
+    },
+    {
+      "name": "depth",
+      "paper": "20 lớp (n = 3, 0,27 triệu tham số)",
+      "unit": "số lớp có trọng số của model_res (conv 3×3 và Linear)"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Encoder cho logvar = -4 ở một chiều latent. Độ lệch chuẩn σ của chiều đó là bao nhiêu? Và nếu bạn nhầm logvar với σ (viết z = mu + logvar·eps) thì chiều này bị sai theo hướng nào, về độ lớn lẫn về dấu?",
+    "tag": "logvar-vs-std",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "logvar = log σ² nên σ = exp(logvar/2) = exp(-2) ≈ 0,135 (phương sai e^-4 ≈ 0,018). Nếu nhân eps với logvar = -4 thì noise bị nhân với một số ÂM cỡ 4: gấp khoảng 30 lần độ rộng thật và đảo dấu (đảo dấu một noise đối xứng thì phân phối không đổi, nhưng gradient theo logvar sai dấu và sai độ lớn, và logvar ≈ 0 cho ra σ ≈ 0 thay vì 1). Dạng log được dùng vì nhận mọi giá trị thực mà không cần ép dương; exp đảm bảo phương sai luôn dương."
+  },
+  {
+    "q": "Nhìn bản đồ KL trong lab: tại (mu, logvar) = (0, 0) KL bằng bao nhiêu và vì sao đó là điểm thấp nhất? Trước khi tính, nói xem KL theo logvar đối xứng hay lệch: mở rộng gấp đôi và thu hẹp một nửa so với prior có cùng KL không?",
+    "tag": "kl-minimum",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "KL = 0 tại (0, 0) vì khi đó q chính là prior; KL luôn ≥ 0 và chỉ bằng 0 khi hai phân phối trùng nhau, nên đó là cực tiểu duy nhất. Theo logvar mặt KL KHÔNG đối xứng: σ = 2 (rộng gấp đôi, logvar = ln 4) cho KL ≈ 0,81, còn σ = 0,5 (hẹp một nửa, logvar = -ln 4) chỉ ≈ 0,32, vì hạng e^logvar tăng nhanh hơn hạng -logvar. Nghĩa là KL(q ‖ p) phạt q rộng hơn prior nặng hơn q hẹp hơn prior. Theo mu thì đối xứng (mu²/2). Gradient theo logvar tại (0, 0) bằng 0."
+  },
+  {
+    "q": "Nếu bạn lấy mẫu z trực tiếp từ N(mu, σ²) (ví dụ Normal(mu, std).sample()) rồi đưa z cho decoder, gradient của loss chảy về encoder ra sao? Reparameterization đổi điều gì về mặt đồ thị tính toán mà vẫn giữ nguyên phân phối của z?",
+    "tag": "reparam-gradient",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Lấy mẫu trực tiếp là một phép chọn ngẫu nhiên: autograd không có đạo hàm của \"chọn một điểm theo mu và σ\", nên đường gradient bị cắt ở z (hoặc cho gradient 0 sai). Reparameterization viết z = mu + σ·eps với eps ~ N(0, I) lấy từ nguồn không phụ thuộc tham số: toàn bộ tính ngẫu nhiên nằm ở eps (một hằng số với autograd), còn z là hàm xác định, khả vi của mu và logvar. Phân phối của z vẫn đúng N(mu, σ²) vì phép co giãn và tịnh tiến một Gaussian chuẩn cho Gaussian mới."
+  },
+  {
+    "q": "Vì sao `kl_gaussian` cộng theo chiều latent nhưng không lấy trung bình theo batch ở bên trong hàm? Nếu cộng nhầm theo trục batch thì shape ra sao và giá trị đó nghĩa là gì?",
+    "tag": "kl-sum-axis",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "Prior và posterior đều có các chiều latent độc lập (đường chéo), nên KL của cả vector là TỔNG KL từng chiều: cộng theo trục cuối. Mỗi mẫu trong batch có một KL riêng, và việc gộp các mẫu (trung bình) là quyết định của loss ở ngoài (bài vae-elbo), nên hàm trả shape (B,). Cộng nhầm theo trục batch cho shape (D,): mỗi số là tổng KL của một chiều latent qua cả batch, mất thông tin từng mẫu và không còn là KL của một mẫu."
+  },
+  {
+    "q": "Nếu mô hình đẩy KL xuống đúng 0 cho mọi ảnh trong tập dữ liệu, encoder đang làm gì với z? Vì sao điều đó là một thất bại chứ không phải tối ưu?",
+    "tag": "kl-prior-collapse",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "KL = 0 nghĩa là q(z|x) = N(0, I) với mọi x: z không mang thông tin gì về x (posterior collapse). Khi đó decoder phải tái tạo x mà không biết gì về nó, chỉ ra được \"ảnh trung bình\". Số KL thấp đẹp nhưng loss tái tạo cao: ELBO gồm hai hạng đối nghịch, và tối ưu là cân bằng, trong đó KL dương phản ánh lượng thông tin về x được nén vào z."
+  },
+  {
+    "q": "KL(q ‖ p) với q là encoder, p là prior chuẩn: nếu đổi chỗ thành KL(p ‖ q) thì có còn công thức đóng gọn như vậy cho mọi q Gaussian chéo không, và hai chiều KL cho hành vi khác nhau ra sao (q hẹp hơn p so với q rộng hơn p)?",
+    "tag": "kl-direction",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Cả hai chiều đều có dạng đóng cho hai Gaussian, nhưng chúng khác nhau và VAE dùng KL(q ‖ p) vì nó là hạng xuất hiện trong ELBO (kỳ vọng lấy theo q, mà ta lấy mẫu được). KL(q ‖ p) phạt nặng khi q đặt khối lượng ở nơi p gần như không có (mode-seeking, q có xu hướng co vào một vùng); KL(p ‖ q) phạt nặng khi q bỏ sót vùng mà p có khối lượng (mass-covering, q có xu hướng rộng ra). Đổi chiều là đổi bài toán, không phải đổi cách viết."
+  }
+]

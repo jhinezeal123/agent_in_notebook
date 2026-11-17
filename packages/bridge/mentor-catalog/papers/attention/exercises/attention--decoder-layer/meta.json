@@ -1,0 +1,17 @@
+{
+  "id": "attention--decoder-layer",
+  "title": "Lớp decoder: masked self-attention, cross-attention, FFN (§3.1)",
+  "star": "attention--decoder-layer",
+  "skills": ["blank", "tensor"],
+  "difficulty": 1750,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 4,
+  "functions": ["DecoderLayer"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "attention",
+  "role": "component",
+  "cites": "§3.1, §3.2.3, Figure 1",
+  "uses": ["attention--mha", "attention--encoder-layer"]
+}

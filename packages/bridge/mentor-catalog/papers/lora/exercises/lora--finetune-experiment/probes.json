@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Mỗi ký tự có 10% xác suất là ký tự ngẫu nhiên thay vì đúng quy tắc. Một mô hình biết quy tắc hoàn hảo sẽ có loss cỡ bao nhiêu trên tác vụ B (gợi ý: nó đặt xác suất khoảng 0,906 vào ký tự theo quy tắc và khoảng 0,006 vào mỗi ký tự khác)? Vậy loss 0,59 là tệ hay gần hoàn hảo?",
+    "tag": "loss-floor",
+    "kind": "edge",
+    "stage": "lab",
+    "answer": "Loss nhỏ nhất là entropy của phân phối thật của ký tự kế: −0,906·ln 0,906 − 15·0,006·ln 0,006 ≈ 0,09 + 0,48 ≈ 0,565 nat (đó là LOSS_FLOOR). Không mô hình nào thắng được phần nhiễu vì ký tự ngẫu nhiên không đoán được. Do đó loss 0,59 là gần hoàn hảo (chỉ hơn sàn 0,02), còn loss 1,7 của mô hình chưa fine-tune là còn học sai bốn quy tắc đổi."
+  },
+  {
+    "q": "Dự đoán trước khi nhìn số: mô hình huấn luyện trước trên tác vụ A (chưa fine-tune) chấm tác vụ B ra sao? Bốn ký tự trong 16 đổi quy tắc: loss trên B của nó cỡ bao nhiêu? Con số đó nói gì về việc ta cần \"học lại\" nhiều hay ít?",
+    "tag": "lora-predict-vs-reality",
+    "kind": "compare",
+    "stage": "lab",
+    "answer": "Mô hình đúng ở 12/16 ký tự (loss gần sàn 0,565) và tự tin sai ở 4/16 ký tự (xác suất rất nhỏ vào ký tự đúng của B, mỗi lần loss khoảng 5-7 nat). Trung bình ≈ 0,565 + (4/16)·(khoảng 4,5) ≈ 1,7. Việc phải học lại là nhỏ: chỉ bốn quy tắc, còn lại giữ nguyên, nên độ lệch cần thiết có hạng thấp và LoRA hợp."
+  },
+  {
+    "q": "Vì sao LoRA thường dùng learning rate lớn hơn so với fine-tune toàn bộ? Nếu bạn dùng chung lr 1e-4 cho LoRA thì thấy gì ở loss sau cùng số bước?",
+    "tag": "lora-lr-higher",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Adapter chỉ có vài nghìn tham số và B bắt đầu từ 0, nên mỗi tham số phải dịch xa hơn nhiều so với từng trọng số của fine-tune toàn bộ (nơi hàng chục nghìn tham số cùng góp một chút). Với Adam mỗi bước dịch chừng lr, nên lr nhỏ làm B lớn lên quá chậm và cập nhật ΔW còn rất nhỏ sau 300 bước: loss vẫn gần mức chưa fine-tune. Phải tăng lr (hoặc số bước, hoặc α) để adapter kịp học."
+  },
+  {
+    "q": "Nếu quy tắc của tác vụ B khác A ở cả 16 ký tự (ví dụ A xoay +1, B xoay +3) thì r = 4 còn đủ như lúc B chỉ đổi 4 quy tắc không? Đoán rồi giải thích bằng hạng của độ lệch.",
+    "tag": "lora-rank-limit",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Có thể không đủ. Độ lệch cần thiết để đổi cả 16 ánh xạ kế tiếp có hạng cao hơn nhiều (cỡ 16, không phải 4), mà adapter chỉ biểu diễn được hạng ≤ r mỗi lớp. Khi đó LoRA r = 4 sẽ cho loss cao hơn rõ rệt so với fine-tune toàn bộ, và cần tăng r, gắn thêm vào MLP, hoặc fine-tune toàn bộ. Giả thuyết hạng thấp của paper đúng khi tác vụ mới gần với tác vụ đã học."
+  },
+  {
+    "q": "Sau khi fine-tune sang B, model_lora xử lý tác vụ A tệ đi. Bạn làm thế nào để lấy lại hành vi tác vụ A từ model_lora mà không cần lưu một bản mô hình đầy đủ khác? Fine-tune toàn bộ có làm được điều này không?",
+    "tag": "lora-swap-adapter",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Trọng số gốc đóng băng nguyên vẹn, nên tắt adapter (bỏ nhánh B·A, hoặc đặt B = 0) là quay về đúng mô hình huấn luyện trước, chính xác từng bit; muốn tác vụ khác thì nạp một adapter khác lên cùng base. Chỉ cần lưu vài nghìn tham số cho mỗi tác vụ. Fine-tune toàn bộ đã ghi đè mọi trọng số, nên phải lưu cả một bản đầy đủ cho mỗi tác vụ."
+  },
+  {
+    "q": "Một lần chạy cho LoRA 0,59 và fine-tune toàn bộ 0,58. Bạn có kết luận được \"LoRA ngang fine-tune toàn bộ\" không? Cần kiểm thêm gì để so sánh công bằng?",
+    "tag": "experiment-fairness",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Chưa chắc: chênh 0,01 có thể nhỏ hơn dao động giữa các seed (khởi tạo A, thứ tự batch). Cần lặp nhiều seed và so trung bình ± độ lệch, tinh chỉnh learning rate riêng cho mỗi phương pháp (mỗi bên một lr tốt nhất, vì LoRA nhạy với lr), cho cùng số bước/dữ liệu, và đo trên dữ liệu kiểm tra tách khỏi lúc train. Cũng nên nhìn cả loss trên tác vụ cũ để thấy fine-tune toàn bộ \"quên\" ra sao."
+  }
+]

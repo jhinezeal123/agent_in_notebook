@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Trong lab: với dữ liệu Gauss, sai số tốt nhất của việc đoán nhiễu lớn nhất ở bước nhỏ hay bước lớn, và vì sao ở bước nhỏ lại khó? (Nhìn hình ε theo x_t ở t = 10 và t = 900.)",
+    "tag": "eps-prediction-difficulty",
+    "kind": "trap",
+    "stage": "lab",
+    "answer": "Khó nhất ở bước nhỏ: sai số tốt nhất xấp xỉ ᾱ_t, tức gần 1 khi t nhỏ (ngang với đoán 0) và giảm về gần 0 ở t lớn. Ở t nhỏ, x_t ≈ x0 cộng một nhiễu rất bé, nên nhìn x_t không phân biệt được đâu là ảnh đâu là nhiễu (ở đồ thị ε theo x_t chỉ là đám mây tròn, không tương quan); ở t lớn x_t gần như CHÍNH LÀ ε nên đoán rất dễ (đường thẳng). Với ảnh thật có cấu trúc, mô hình dùng cấu trúc đó để tách nhiễu nhỏ nên loss ở t nhỏ thấp hơn, nhưng việc vẫn là phần khó nhất, và paper (§3.4) nói L_simple bỏ trọng số của bound gốc để dồn sức vào các bước khó hơn, nghiêng về t lớn."
+  },
+  {
+    "q": "Trong lab: nếu mô hình đoán ε sai 0.1 thì suy ra x0 từ Eq. 4 sai bao nhiêu ở t nhỏ, và ở t rất lớn (ᾱ ≈ 4e-5)? Vậy loss trên ε công bằng giữa các t theo nghĩa nào, và công bằng theo nghĩa nào thì không?",
+    "tag": "eps-vs-x0-amplification",
+    "kind": "compare",
+    "stage": "lab",
+    "answer": "Hệ số khuếch đại là √(1−ᾱ)/√ᾱ: khoảng 0.01 ở t nhỏ (sai số 0.1 thành 0.001) và khoảng 150 ở t cuối (thành 15). Loss trên ε công bằng theo nghĩa mọi t đều có đích cùng thang đo (phương sai 1, không phụ thuộc t), nên không bước nào áp đảo vì cỡ đích. Nhưng nó không công bằng theo nghĩa sai số trên ảnh: cùng một sai số ε, ở t lớn ảnh sạch suy ra sai rất nhiều, ở t nhỏ gần như không sai."
+  },
+  {
+    "q": "Khi tự sinh t, bạn dùng khoảng [0, T) trong đó T là số bước của lịch. Nếu lỡ lấy [1, T] (đúng cách đánh số của paper) với các mảng đánh số từ 0 thì chuyện gì xảy ra, và nếu lấy [0, T − 1) thì mô hình thiếu gì?",
+    "tag": "ddpm-loss-t-range",
+    "kind": "edge",
+    "stage": "defend",
+    "answer": "[1, T] lấy cả t = T, tức chỉ số T nằm ngoài mảng độ dài T: lỗi chỉ số (IndexError), và dù không lỗi thì t = 0 (bước nhiễu ít nhất) sẽ không bao giờ được train. [0, T − 1) bỏ mất t = T − 1, bước nhiễu nhiều nhất: mô hình không bao giờ học đoán nhiễu ở bước đầu của quá trình sinh (nơi lấy mẫu bắt đầu), nên ảnh sinh ra hỏng ngay từ đầu. Khoảng đúng khi chỉ số từ 0: [0, T) (đầu trên loại trừ), tức t từ 0 đến T − 1, mỗi bước xác suất đều 1/T."
+  },
+  {
+    "q": "Nếu nhiễu dùng làm đích hồi quy khác với nhiễu dùng để tạo x_t (lấy hai lần), thì mô hình tốt nhất đoán gì và loss thấp nhất đạt được là bao nhiêu? Vì sao bạn nên thấy loss rất ngoan cố đứng yên khi quên một lần?",
+    "tag": "ddpm-loss-noise-shared",
+    "kind": "break",
+    "stage": "defend",
+    "answer": "Khi đích độc lập với x_t, mô hình không còn thông tin nào để đoán, nên đoán tốt nhất là hằng số 0 (trung bình của đích) và loss tối thiểu bằng phương sai của đích, tức khoảng 1 (E[ε²] với ε ~ N(0, 1)): không thể thấp hơn dù train bao lâu. Loss sẽ kẹt quanh 1 và mô hình không học được gì, một triệu chứng khó nhận ra vì code vẫn chạy bình thường và gradient vẫn có. Vì vậy ε phải được lấy một lần rồi dùng cho cả hai."
+  },
+  {
+    "q": "Vì sao mô hình phải nhận t, và điều gì xảy ra nếu bạn đưa cho nó t khác t đã dùng để nhiễu ảnh (ví dụ lệch một)?",
+    "tag": "ddpm-t-to-model",
+    "kind": "why",
+    "stage": "defend",
+    "answer": "Một mạng duy nhất phục vụ mọi mức nhiễu, và cùng một x_t phải được xử lý rất khác nhau tuỳ t: ở t nhỏ chỉ lọc một chút nhiễu li ti, ở t lớn gần như phải dựng lại ảnh từ nhiễu. Hệ số của lịch (√(1−ᾱ_t)) cho biết nhiễu đang chiếm bao nhiêu x_t, nên t là thông tin cần thiết. Đưa sai t thì mạng tưởng mức nhiễu khác thực tế nên đoán ε lệch tỉ lệ; lệch một bước thì sai lệch nhỏ nhưng có hệ thống, làm mô hình học mối quan hệ (x_t, t) sai một bước so với mối quan hệ dùng lúc lấy mẫu."
+  },
+  {
+    "q": "Dùng trung bình trên mọi phần tử thay vì tổng bình phương như công thức Eq. 14 thì khác gì cho việc huấn luyện, và vì sao người ta vẫn dùng trung bình?",
+    "tag": "ddpm-loss-mean-vs-sum",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Hai cách khác nhau một hằng số B·C·H·W: gradient to hơn đúng bấy nhiêu lần ở cách tổng. Với trung bình, độ lớn loss và gradient không phụ thuộc cỡ batch hay cỡ ảnh, nên một learning rate dùng được cho nhiều cấu hình và loss giữa các lần chạy so được với nhau (và gần 1 ở bước đầu, dễ nhận ra lỗi). Cách tổng cần chỉnh learning rate theo cỡ ảnh và batch; paper viết chuẩn bình phương, nhưng bản cài đặt chính thức cũng dùng trung bình."
+  }
+]

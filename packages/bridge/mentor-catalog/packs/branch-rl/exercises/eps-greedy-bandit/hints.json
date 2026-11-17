@@ -1,0 +1,61 @@
+[
+  {
+    "level": 0,
+    "test": "test_update_incremental_mean",
+    "text": "Sau lần kéo đầu tiên của một tay, Q phải bằng bao nhiêu so với r? Số n bạn chia cho đã tính lần kéo này chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_update_in_place",
+    "text": "Hàm của bạn đổi chính mảng người gọi đưa vào, hay làm việc trên một bản và trả về? Người gọi nhìn vào biến nào sau khi gọi update?"
+  },
+  {
+    "level": 0,
+    "test": "test_greedy_picks_best",
+    "text": "Khi eps = 0, nhánh khám phá có được phép chạy không? Điều kiện so sánh số ngẫu nhiên với eps của bạn xử lý eps = 0 thế nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_tie_break_random",
+    "text": "Nếu ba tay cùng có Q lớn nhất, phép lấy tay lớn nhất của bạn trả về mấy tay? Làm sao để cả ba đều có cơ hội?"
+  },
+  {
+    "level": 0,
+    "test": "test_epsilon_rate",
+    "text": "Khi khám phá, bạn chọn trong những tay nào? Tay đang tốt nhất có nằm trong số đó không, và điều đó đổi xác suất chọn nó ra sao?"
+  },
+  {
+    "level": 0,
+    "test": "test_uses_given_rng",
+    "text": "Mỗi chỗ cần số ngẫu nhiên trong hàm của bạn, nguồn của nó là gì: rng truyền vào hay thứ gì khác?"
+  },
+  {
+    "level": 0,
+    "test": "test_run_greedy_locks_in",
+    "text": "Ở lượt đầu mọi Q bằng nhau; chuyện gì quyết định tay nào được chọn? Sau đó vì sao eps = 0 lại giữ tay đó mãi nếu thưởng dương?"
+  },
+  {
+    "level": 1,
+    "text": "select_action là một lần tung đồng xu rồi rẽ hai nhánh: lấy một số ngẫu nhiên trong [0, 1) từ rng và so với eps. Nhánh khám phá chọn một chỉ số trong cả K tay. Nhánh khai thác tìm giá trị lớn nhất của q, gom MỌI chỉ số đạt giá trị đó, rồi chọn ngẫu nhiên một cái trong nhóm. update chỉ có hai dòng: tăng đếm của tay a, rồi dịch Q của tay đó về phía r một đoạn bằng chênh lệch chia cho đếm mới. run_bandit chỉ là vòng lặp gọi hai hàm trên và ghi lại tay đã chọn."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết cấu trúc từng hàm",
+    "text": "select_action: u = số ngẫu nhiên từ rng; nếu u < eps thì trả về chỉ số ngẫu nhiên đều trong K; ngược lại tìm các chỉ số mà q bằng giá trị lớn nhất, trả về một chỉ số ngẫu nhiên (bằng rng) trong các chỉ số đó.\nupdate: n[a] tăng 1; q[a] cộng (r - q[a]) chia n[a].\nrun_bandit: q, n khởi tạo toàn 0 (n kiểu số nguyên); với mỗi lượt t: a = chọn tay, lấy r từ hàng t cột a của bảng thưởng, update, ghi a vào actions[t]."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chuyện tie-break",
+    "text": "Tìm giá trị lớn nhất của q, rồi lấy mảng chỉ số của những phần tử BẰNG đúng nó (so sánh bằng, cho ra mặt nạ bool, rồi đổi mặt nạ thành danh sách chỉ số). Chọn một phần tử của danh sách đó bằng rng. Chỉ số tay là phần tử được chọn, không phải vị trí trong danh sách (hai thứ này khác nhau khi chỉ số không bắt đầu từ 0)."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở đúng hai dòng của update",
+    "text": "```python\nn[a] += 1\nq[a] += (r - q[a]) / n[a]\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở tie-break",
+    "text": "```python\nbest = np.flatnonzero(q == q.max())\nreturn int(rng.choice(best))\n```"
+  }
+]

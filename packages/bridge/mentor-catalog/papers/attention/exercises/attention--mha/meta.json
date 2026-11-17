@@ -1,0 +1,25 @@
+{
+  "id": "attention--mha",
+  "title": "Multi-head attention (Eq. 1, §3.2)",
+  "star": "attention--mha",
+  "skills": [
+    "tensor",
+    "formula"
+  ],
+  "difficulty": 1650,
+  "minutes": 25,
+  "requires": [
+    "numpy",
+    "torch"
+  ],
+  "order": 1,
+  "functions": [
+    "MultiHeadAttention"
+  ],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "attention",
+  "role": "component",
+  "cites": "§3.2.1–3.2.2, Eq. 1, Figure 2",
+  "uses": []
+}

@@ -1,0 +1,21 @@
+{
+  "id": "residual-block",
+  "title": "Khối residual của ResNet: đường tắt đồng nhất và projection",
+  "star": "resblock",
+  "skills": [
+    "blank",
+    "tensor"
+  ],
+  "difficulty": 1600,
+  "minutes": 25,
+  "requires": [
+    "numpy",
+    "torch"
+  ],
+  "order": 2,
+  "functions": [
+    "ResidualBlock"
+  ],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2
+}

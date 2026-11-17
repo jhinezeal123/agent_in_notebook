@@ -15,6 +15,17 @@ def make_batch(n, length, generator):
     return src, torch.cat([bos, rev], dim=1), torch.cat([rev, eos], dim=1)
 
 
+def make_masks(src, tgt_in):
+    """Hai mask bool cho Transformer (True = được nhìn), dùng được thẳng làm mask của MultiHeadAttention:
+    src_mask (B, 1, 1, S): các key không phải PAD của src (self-attention của encoder và cross-attention của decoder);
+    tgt_mask (B, 1, T, T): causal (vị trí t chỉ nhìn t' <= t) và không nhìn PAD của tgt_in (self-attention của decoder)."""
+    src_mask = (src != PAD)[:, None, None, :]
+    T = tgt_in.shape[1]
+    causal = torch.tril(torch.ones(T, T, dtype=torch.bool, device=tgt_in.device))
+    tgt_mask = causal & (tgt_in != PAD)[:, None, None, :]
+    return src_mask, tgt_mask
+
+
 def to_text(tokens):
     """Một dãy token (1 chiều) thành chữ để đọc: chữ số, '_' là PAD, '<' là BOS, '>' là EOS."""
     names = {PAD: "_", BOS: "<", EOS: ">"}

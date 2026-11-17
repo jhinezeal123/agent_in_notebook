@@ -1,0 +1,56 @@
+[
+  {
+    "level": 0,
+    "test": "test_structure",
+    "text": "Máy chấm chép trọng số theo tên. Mỗi sublayer có LayerNorm riêng hay dùng chung một cái, và self_attn của bạn thuộc lớp nào: lớp bạn đã viết ở bài trước hay lớp có sẵn của PyTorch?"
+  },
+  {
+    "level": 0,
+    "test": "test_feed_forward",
+    "text": "Giữa hai nn.Linear của FFN còn thiếu phép gì? Và FFN có biết gì về các vị trí khác trong chuỗi không?"
+  },
+  {
+    "level": 0,
+    "test": "test_forward_eval",
+    "text": "Trong LayerNorm(x + Sublayer(x)), phép cộng và LayerNorm cái nào làm trước? Sublayer thứ hai nhận đầu vào là x ban đầu hay đầu ra của sublayer thứ nhất?"
+  },
+  {
+    "level": 0,
+    "test": "test_post_ln",
+    "text": "Phép cuối cùng của lớp encoder là gì? Đầu ra của nó có trung bình bao nhiêu theo trục d_model?"
+  },
+  {
+    "level": 0,
+    "test": "test_padding_mask",
+    "text": "Self-attention của bạn có nhận src_mask không? Nếu mask không được truyền xuống, các vị trí PAD đóng vai gì trong softmax?"
+  },
+  {
+    "level": 0,
+    "test": "test_dropout",
+    "text": "Nếu dropout = 1.0 thì đầu ra của sublayer bằng bao nhiêu? Lúc đó phép cộng residual còn lại gì? Dropout của bạn nằm trước hay sau phép cộng?"
+  },
+  {
+    "level": 1,
+    "text": "FeedForward: Linear từ d_model lên d_ff, hàm kích hoạt max(0, ·), rồi Linear từ d_ff về d_model. EncoderLayer: tạo các thành phần trong __init__ (attention của bài trước, FFN, hai LayerNorm, một Dropout). forward chạy hai sublayer liên tiếp; mỗi sublayer có cùng một công thức: tính đầu ra sublayer, cho qua dropout, cộng với đầu vào của chính sublayer đó, rồi LayerNorm."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "forward(x, src_mask):\n  a = self_attn(x, x, x, src_mask)          # (B, S, d_model)\n  x = norm1( x + dropout(a) )\n  f = ffn(x)                                 # (B, S, d_model)\n  x = norm2( x + dropout(f) )\n  trả về x"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở FeedForward",
+    "text": "x (B, T, d_model) -> w1 -> (B, T, d_ff) -> max(0, .) -> w2 -> (B, T, d_model). Phép Linear của PyTorch tác động lên trục cuối, nên không cần đụng tới trục T."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở một sublayer",
+    "text": "```python\nx = self.norm1(x + self.drop(self.self_attn(x, x, x, src_mask)))\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở FeedForward",
+    "text": "```python\nreturn self.w2(torch.relu(self.w1(x)))\n```"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "id": "reinforce-loss",
+  "title": "REINFORCE: loss policy gradient có baseline",
+  "star": "reinforce",
+  "skills": ["formula", "tensor"],
+  "difficulty": 1700,
+  "minutes": 25,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["reinforce_loss"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "uses": ["returns-to-go"]
+}

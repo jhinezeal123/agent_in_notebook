@@ -1,0 +1,61 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_example",
+    "text": "Với logits bằng 0, xác suất của mỗi hành động bằng bao nhiêu, và log của nó là bao nhiêu? Từ đó loss bằng gì khi trọng số là [2, 4]? Trung bình hay tổng: kết quả tính tay của bạn ra số nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_gradient_matches_analytic",
+    "text": "Gradient của log pi(a) theo logits của chính hàng đó là gì (nghĩ tới softmax kết hợp cross-entropy: 'one-hot trừ xác suất')? Nhân nó với trọng số và hệ số trung bình, rồi nhớ dấu của loss: bạn đang so sánh với con số nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_sign_of_the_update",
+    "text": "Optimizer đi ngược gradient. Muốn xác suất hành động có A dương tăng thì gradient theo logit của hành động đó phải mang dấu gì, và vì thế loss cần một dấu ở đâu?"
+  },
+  {
+    "level": 0,
+    "test": "test_baseline_and_returns_get_no_gradient",
+    "text": "Sau loss.backward(), tensor nào được phép có .grad? A_t = G_t - b_t có phải là thứ mà ta muốn thay đổi bằng loss của policy không?"
+  },
+  {
+    "level": 0,
+    "test": "test_large_logits_stable",
+    "text": "Với logits chênh nhau 2000, xác suất của hành động ít khả năng là bao nhiêu trong float32, và log của số đó là gì? Có hàm nào cho thẳng log-xác suất mà không phải đi qua xác suất?"
+  },
+  {
+    "level": 0,
+    "test": "test_normalize_advantage",
+    "text": "Khi mọi return bằng nhau, độ lệch chuẩn bằng bao nhiêu, và phép chia của bạn thành gì? Cần thêm gì vào mẫu số?"
+  },
+  {
+    "level": 0,
+    "test": "test_matches_reference",
+    "text": "logits có shape (T, A): hành động đã chọn nằm ở trục nào, và chỉ số hành động cần shape gì để lấy đúng một phần tử mỗi hàng theo trục đó? Kết quả cuối có shape gì trước khi nhân với A_t?"
+  },
+  {
+    "level": 1,
+    "text": "Làm bốn việc. Một: từ logits tính log-xác suất của mọi hành động bằng hàm log-softmax của PyTorch theo trục hành động (ổn định, không qua xác suất). Hai: lấy ra, ở mỗi hàng, đúng log-xác suất của hành động đã chọn, bằng hàm chọn-theo-chỉ-số của tensor (kết quả shape (T,)). Ba: tính trọng số A là returns, trừ baseline nếu có, cả hai đều tách khỏi đồ thị gradient; nếu normalize thì chuẩn hóa. Bốn: nhân từng phần tử, lấy trung bình, đổi dấu."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "log_probs = log_softmax của logits theo trục hành động  # (T, A)\nlogp = phần tử [t, actions[t]] của mỗi hàng t  # (T,)\nadv = returns (đã detach)\nnếu có baseline: adv = adv - baseline (đã detach)\nnếu normalize: adv = (adv - trung bình adv) / (độ lệch chuẩn adv + eps)\nloss = -(trung bình của logp * adv)"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chuyện lấy log-xác suất theo hành động",
+    "text": "Hàm chọn theo chỉ số của tensor nhận trục (ở đây là trục hành động, trục 1) và tensor chỉ số có cùng số chiều với bảng log-xác suất, tức (T, 1); actions của bạn đang là (T,), nên thêm một chiều ở cuối trước khi truyền vào và bỏ chiều đó đi sau khi lấy. Truyền trục 0 sẽ lấy cột 0 của các hàng sai mà không báo lỗi khi T khác A."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở lấy log-xác suất của hành động đã chọn",
+    "text": "```python\nlog_probs = F.log_softmax(logits, dim=-1)\nlogp = log_probs.gather(1, actions.unsqueeze(1)).squeeze(1)\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở trọng số A và đổi dấu",
+    "text": "```python\nadv = returns.detach()\nif baseline is not None:\n    adv = adv - baseline.detach()\nreturn -(logp * adv).mean()\n```"
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "q": "Nhìn hai hình đầu của lab: vì sao một batch gồm 32 bước liên tiếp là vấn đề cho việc huấn luyện mạng, còn 32 bước bốc ngẫu nhiên từ bộ đệm thì không? Cụ thể điều gì xấu xảy ra với gradient của batch liên tiếp?",
+    "tag": "correlated-samples",
+    "stage": "lab",
+    "kind": "why",
+    "answer": "Các bước liên tiếp gần giống nhau (tương quan mạnh), nên batch thực chất chỉ chứa vài mẫu độc lập: gradient có phương sai lớn và lệch về vùng hiện tại; mạng quá khớp vùng đang chơi và quên vùng đã qua (catastrophic forgetting), tạo vòng phản hồi vì chính sách đổi theo mạng làm dữ liệu càng lệch. Bốc ngẫu nhiên từ bộ nhớ lớn làm các mẫu gần độc lập, gradient ổn định hơn, và mỗi trải nghiệm còn được dùng lại nhiều lần (hiệu quả dữ liệu)."
+  },
+  {
+    "q": "Sức chứa 8, đã push 13 transition (0 đến 12). Ô nào đang chứa transition nào, vị trí ghi tiếp theo là ô nào, và nếu viết công thức cho vị trí ghi của transition thứ k bằng một phép toán số học thì nó là gì?",
+    "tag": "ring-pointer",
+    "stage": "lab",
+    "kind": "shape",
+    "answer": "Transition k nằm ở ô k mod 8: ô 0..4 chứa 8..12, ô 5..7 chứa 5..7. Vị trí ghi tiếp theo là ô 5 (13 mod 8), nên transition 5 (cũ nhất) sẽ bị ghi đè đầu tiên. Con trỏ ghi tiến lên 1 mỗi lần và quay về 0 khi chạm sức chứa, tức phép chia lấy dư. Con trỏ ghi khác với 'số phần tử' (dừng ở 8)."
+  },
+  {
+    "q": "Bạn giữ 'số phần tử' và 'con trỏ ghi' là hai biến. Sức chứa 100, đã push 7 thì hai biến bằng bao nhiêu? Sau 250 lần push thì sao? Biến nào dùng để quyết định phạm vi bốc ngẫu nhiên, và biến nào để quyết định ghi vào đâu?",
+    "tag": "size-vs-capacity",
+    "stage": "defend",
+    "kind": "edge",
+    "answer": "Sau 7 push: số phần tử = 7, con trỏ = 7. Sau 250 push: số phần tử = 100 (bị chặn ở sức chứa), con trỏ = 250 mod 100 = 50. Phạm vi bốc dùng số phần tử (chỉ phần đã ghi); vị trí ghi dùng con trỏ. Dùng sức chứa làm phạm vi bốc sẽ lấy ô trống khi chưa đầy, dùng số phần tử làm vị trí ghi thì ghi vượt khỏi mảng."
+  },
+  {
+    "q": "Một agent bắt đầu học khi bộ đệm mới có vài transition, rồi bộ đệm rất lớn (1 triệu). Hai rủi ro lệch dữ liệu nào xuất hiện ở đầu quá trình học, và ở cuối khi bộ đệm đã đầy toàn dữ liệu cũ do chính sách cũ?",
+    "tag": "buffer-staleness",
+    "stage": "defend",
+    "kind": "trap",
+    "answer": "Đầu: bốc từ vài transition thì mẫu lặp liên tục và gần như tương quan, nên người ta chờ đến khi có đủ (warm-up) rồi mới học. Cuối: dữ liệu cũ do chính sách cũ sinh ra không còn đại diện cho hành vi hiện tại; Q-learning là off-policy nên vẫn dùng được, nhưng quá cũ thì phân phối trạng thái lệch so với những gì chính sách mới gặp. Sức chứa là đánh đổi giữa đa dạng/ổn định (lớn) và độ mới (nhỏ)."
+  },
+  {
+    "q": "Vì sao push phải lưu bản sao của s và s_next? Hãy nói chuyện gì xảy ra với bộ đệm nếu vòng lặp môi trường dùng một mảng state duy nhất, sửa tại chỗ ở mỗi bước, và bộ đệm lưu thẳng tham chiếu.",
+    "tag": "copy-vs-reference",
+    "stage": "defend",
+    "kind": "break",
+    "answer": "Mọi phần tử trong bộ đệm đều trỏ tới cùng một mảng, nên khi nó đổi ở bước sau thì mọi transition đã lưu đều đổi theo: toàn bộ states trong bộ đệm thành giá trị của bước hiện tại và dữ liệu học vô nghĩa (mọi batch giống nhau), một lỗi im lặng, không báo lỗi. Chép dữ liệu (ví dụ gán vào hàng của một mảng được cấp sẵn) làm bộ đệm sở hữu dữ liệu của chính nó."
+  },
+  {
+    "q": "Vì sao bốc không thay thế trong một batch, và vì sao tính đều (mỗi transition cùng xác suất) lại quan trọng? Nói một cách để ưu tiên các transition 'đáng học' hơn (prioritized replay) và cái giá của nó.",
+    "tag": "uniform-sampling",
+    "stage": "defend",
+    "kind": "compare",
+    "answer": "Lặp một transition trong cùng batch làm nó có trọng số gấp đôi một cách vô nghĩa và giảm độ đa dạng, nên bốc không thay thế. Đều là mặc định vì cho kỳ vọng gradient không lệch so với phân phối dữ liệu đã thu thập. Prioritized replay bốc theo độ lớn TD error để học nhiều hơn từ những bước bất ngờ, nhưng làm phân phối lệch nên phải sửa bằng trọng số importance sampling, cần cấu trúc dữ liệu phức tạp hơn (sum tree) và thêm siêu tham số."
+  }
+]

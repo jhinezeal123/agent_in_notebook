@@ -1,0 +1,15 @@
+[
+  {"level": 0, "test": "test_loss_value", "text": "Hàm của bạn trả về tensor có shape gì: () hay (B,) hay (B, C, H, W)? Phép rút gọn của bạn là trung bình trên bao nhiêu phần tử, hay là tổng?"},
+  {"level": 0, "test": "test_predicts_noise", "text": "Mô hình hoàn hảo biết nhiễu thật. Nếu đích hồi quy là nhiễu thì loss bằng bao nhiêu, còn nếu đích là ảnh sạch thì sao? Và nó đang được gọi với t nào: đúng t đã dùng khi nhiễu ảnh không?"},
+  {"level": 0, "test": "test_default_draws", "text": "Bạn lấy nhiễu một lần hay hai lần? Tensor dùng để tạo x_t và tensor dùng làm đích có phải cùng một biến không?"},
+  {"level": 0, "test": "test_noise_distribution", "text": "Mô hình luôn đoán 0 thì loss là trung bình của ε². Nếu ε ~ N(0, 1) thì con số đó bằng bao nhiêu, và nhiễu bạn sinh ra có phải N(0, 1) cùng shape với x0 không?"},
+  {"level": 0, "test": "test_t_sampling", "text": "Khi T = 5, t nhỏ nhất và lớn nhất mà hàm của bạn có thể lấy là bao nhiêu? Chỉ số hợp lệ của một mảng 5 phần tử chạy từ đâu đến đâu, và hàm sinh số nguyên của bạn có lấy cả đầu trên không?"},
+  {"level": 0, "test": "test_model_receives", "text": "Hãy in t mà model nhận và so với t của người gọi. Có chỗ nào bạn cộng, trừ hoặc đổi kiểu của t trước khi đưa cho model không? x_t đưa cho model có đúng là ảnh đã nhiễu bằng q_sample không?"},
+  {"level": 0, "test": "test_gradient", "text": "Hãy in loss.requires_grad. Trong hàm của bạn có chỗ nào gọi detach, đổi sang số Python hay bọc trong no_grad làm đường gradient từ loss về tham số của model bị đứt không?"},
+  {"level": 1, "text": "Bốn việc: (1) nếu t hoặc noise là None thì tự lấy: t là số nguyên ngẫu nhiên đều, mỗi ảnh một số, trong nửa khoảng [0, T); noise là Gauss chuẩn cùng shape với x0; (2) tạo ảnh nhiễu bằng q_sample của bạn; (3) cho model đoán nhiễu từ ảnh nhiễu và t; (4) trả về trung bình bình phương sai khác giữa dự đoán và nhiễu thật."},
+  {"level": 1, "when": "chưa biết lấy t ngẫu nhiên", "text": "T là số phần tử của sched[\"betas\"]. Hàm sinh số nguyên ngẫu nhiên của PyTorch nhận đầu dưới (gồm), đầu trên (loại trừ) và shape; bạn cần shape (B,) và kết quả mặc định là kiểu int64, đúng kiểu q_sample cần."},
+  {"level": 2, "when": "chưa biết thứ tự các bước", "text": "B = số ảnh trong batch, T = số phần tử của sched[\"betas\"]\nnếu t là None: t = số nguyên ngẫu nhiên đều trong [0, T), shape (B,)\nnếu noise là None: noise = Gauss chuẩn cùng shape với x0\nảnh nhiễu x_t: gọi q_sample của bạn với x0, t, noise và sched\ndự đoán: gọi model với x_t và t\ntrả về MSE giữa dự đoán và noise (trung bình mọi phần tử)"},
+  {"level": 2, "when": "kẹt ở loss", "text": "PyTorch có hàm MSE trong torch.nn.functional với reduction mặc định là trung bình. Đối số thứ nhất là dự đoán, thứ hai là đích: đích ở đây là nhiễu thật, không phải x0."},
+  {"level": 3, "when": "kẹt ở lấy t và noise", "text": "```python\nif t is None:\n    t = torch.randint(0, T, (B,), device=x0.device)\nif noise is None:\n    noise = torch.randn_like(x0)\n```"},
+  {"level": 3, "when": "kẹt ở dòng loss", "text": "```python\nx_t = q_sample(x0, t, noise, sched)\nreturn F.mse_loss(model(x_t, t), noise)\n```"}
+]

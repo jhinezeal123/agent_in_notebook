@@ -1,0 +1,11 @@
+@torch.no_grad()
+def sample(model, sched, shape, generator=None):
+    device = sched["betas"].device
+    T = sched["betas"].shape[0]
+    was_training = model.training
+    model.eval()
+    x = torch.randn(shape, generator=generator).to(device)
+    for t in reversed(range(T)):
+        x = p_sample(model, x, t, sched, noise=torch.zeros_like(x))
+    model.train(was_training)
+    return x

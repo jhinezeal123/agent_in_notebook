@@ -1,0 +1,61 @@
+[
+  {
+    "level": 0,
+    "test": "test_update_formula_by_hand",
+    "text": "Tính tay với số trong đề: target là bao nhiêu, Q cũ là bao nhiêu, và Q mới dịch về phía target một đoạn bằng alpha lần chênh lệch nào? Hàm của bạn trả về chênh lệch đó chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_done_does_not_bootstrap",
+    "text": "Bước vừa làm kết thúc episode: trạng thái s' có còn tương lai để cộng vào target không? Bạn kiểm cờ done ở đâu trong công thức?"
+  },
+  {
+    "level": 0,
+    "test": "test_max_over_next_state",
+    "text": "Giá trị tương lai lấy từ hàng nào của Q: hàng của s hay hàng của s'? Và lấy theo hành động đã chọn, hay hành động nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_alpha_gamma_edges",
+    "text": "Khi alpha = 0, Q có đổi không, và TD error có đổi không? Khi gamma = 0 thì target còn lại gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_updates_in_place",
+    "text": "Sau khi hàm chạy xong, người gọi nhìn vào biến Q của chính họ. Hàm của bạn đã đổi mảng đó, hay đổi một bản sao ở đâu đó?"
+  },
+  {
+    "level": 0,
+    "test": "test_q_learning_gridworld",
+    "text": "Sau mỗi env.step, trạng thái dùng để chọn hành động ở lượt kế tiếp là trạng thái nào? Bạn đã chuyển sang nó chưa, và đã dừng khi done chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_q_learning_episode_loop",
+    "text": "Một episode bắt đầu bằng gì và kết thúc khi nào? Nếu eps = 1 thì hành động có phụ thuộc vào Q không?"
+  },
+  {
+    "level": 1,
+    "text": "q_update làm bốn việc theo thứ tự: tính target (lấy thưởng; nếu chưa done thì cộng gamma nhân giá trị lớn nhất trong hàng của s_next), tính TD error là target trừ Q cũ, dịch Q[s, a] đi alpha nhân TD error, rồi trả TD error về. q_learning là hai vòng lồng nhau: ngoài lặp theo episode (reset), trong lặp từng bước tới khi done; mỗi bước chọn hành động epsilon-greedy (giống bài bandit nhưng theo hàng Q[s]), gọi env.step, gọi q_update, rồi chuyển sang trạng thái mới."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết cấu trúc từng hàm",
+    "text": "q_update: target = r; nếu không done thì target cộng gamma nhân (max của hàng s_next); td = target trừ Q[s, a]; Q[s, a] cộng alpha nhân td; trả td.\nq_learning: Q = bảng 0 shape (n_states, n_actions); lặp episodes lần: s = env.reset(), done = False; trong khi chưa done: a = (rng quyết định khám phá hay khai thác theo eps); (s_next, r, done) = env.step(a); gọi q_update; s = s_next. Trả Q."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở chọn hành động đồng hạng",
+    "text": "Hàng Q[s] lúc đầu toàn 0. Nhóm mọi hành động đạt giá trị lớn nhất của hàng, rồi chọn một cái trong nhóm bằng rng (cùng ý như tie-break ở bài bandit). Nhớ ép về số nguyên thường trước khi truyền vào env.step."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở target và cờ done",
+    "text": "```python\ntarget = r if done else r + gamma * Q[s_next].max()\ntd_error = target - Q[s, a]\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở khung vòng lặp",
+    "text": "```python\nfor _ in range(episodes):\n    s = env.reset()\n    done = False\n    while not done:\n        # chọn a, rồi\n        s_next, r, done = env.step(a)\n```"
+  }
+]

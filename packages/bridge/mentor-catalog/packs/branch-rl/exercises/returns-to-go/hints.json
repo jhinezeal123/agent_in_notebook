@@ -1,0 +1,51 @@
+[
+  {
+    "level": 0,
+    "test": "test_hand_example",
+    "text": "Với thưởng [1, 2, 3] và gamma = 0.5, bước nào có G dễ tính nhất, không cần biết gì về bước khác? Từ đó bước kế bên cần đúng thông tin nào để tính tiếp?"
+  },
+  {
+    "level": 0,
+    "test": "test_gamma_edges",
+    "text": "Khi gamma = 0, G_t còn gì? Khi gamma = 1, G_t là phép tính quen thuộc nào trên các thưởng phía sau? Biểu thức của bạn có cho đúng hai kết quả đó không?"
+  },
+  {
+    "level": 0,
+    "test": "test_episode_boundaries",
+    "text": "Bước t là bước cuối của episode: nó có tương lai nào trong CÙNG episode không? Đại lượng bạn đang mang theo khi duyệt phải bằng bao nhiêu khi bạn đi từ episode sau sang bước cuối của episode trước, và bạn reset nó trước hay sau khi tính G của bước done?"
+  },
+  {
+    "level": 0,
+    "test": "test_truncated_tail_not_bootstrapped",
+    "text": "Bước đầu tiên bạn xử lý (bước cuối mảng) mang theo tích lũy bằng bao nhiêu? Nó phụ thuộc vào dones[T-1] hay không?"
+  },
+  {
+    "level": 0,
+    "test": "test_dtype_and_inputs_untouched",
+    "text": "Nếu thưởng là số nguyên thì mảng kết quả của bạn được tạo với dtype gì, và 0.5 được lưu vào đó thành gì? Bạn đang ghi kết quả vào mảng nào: của bạn hay của người gọi?"
+  },
+  {
+    "level": 1,
+    "text": "Duyệt từ bước cuối về bước đầu, mang theo một con số duy nhất: return của bước đứng sau. Ở mỗi bước, return mới là thưởng hiện tại cộng gamma nhân con số đang mang, nhưng con số đang mang phải bị triệt tiêu nếu bước hiện tại là bước cuối của một episode. Ghi return mới vào ô tương ứng của mảng kết quả (mảng riêng, kiểu số thực) rồi mang nó sang bước trước."
+  },
+  {
+    "level": 2,
+    "when": "chưa biết thứ tự các bước",
+    "text": "chuyển rewards thành mảng float; dones = None thì coi như toàn 0, ngược lại chuyển thành mảng số\nkết quả = mảng 0 cùng độ dài; tích lũy = 0\nvới t từ T-1 xuống 0:\n    tích lũy = rewards[t] + gamma * (đang không phải bước cuối episode) * tích lũy\n    kết quả[t] = tích lũy"
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở việc reset ở ranh giới",
+    "text": "Hệ số (1 - done) nhân vào phần mang sang từ bước sau, tại chính bước t: done[t] = 1 nghĩa là phần mang sang từ episode kế bị nhân với 0 TRƯỚC khi cộng vào thưởng của bước t. Không reset bằng một câu lệnh riêng sau khi ghi kết quả, vì khi đó G của bước done đã bị nhiễm episode sau."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở thân vòng lặp",
+    "text": "```python\nfor t in range(n - 1, -1, -1):\n    running = rewards[t] + gamma * (1.0 - dones[t]) * running\n    out[t] = running\n```"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở việc chuẩn bị đầu vào",
+    "text": "```python\nrewards = np.asarray(rewards, dtype=np.float64)\nout = np.zeros(len(rewards))\ndones = np.zeros(len(rewards)) if dones is None else np.asarray(dones, dtype=np.float64)\n```"
+  }
+]

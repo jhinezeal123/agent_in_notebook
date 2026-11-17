@@ -1,0 +1,37 @@
+[
+  {
+    "q": "Trong lab bạn thấy tín hiệu qua 30 khối plain với khởi tạo nhỏ co về gần 0, còn khối residual thì giữ nguyên cỡ. Nếu mọi trọng số của F đều bằng 0, khối residual làm gì với x, và khối plain làm gì? Vì sao điều đó giúp bắt đầu train một mạng 56 khối?",
+    "tag": "resnet-identity-init",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Khối residual với F = 0 cho y = ReLU(x + 0), tức đồng nhất (x đã không âm sau ReLU của khối trước), nên một chồng khối với trọng số nhỏ vẫn truyền tín hiệu (và gradient) nguyên vẹn từ đầu tới cuối. Khối plain với F = 0 cho ra 0: tín hiệu bị xóa, mỗi khối nhân thêm một hệ số nhỏ và qua nhiều khối tín hiệu co theo lũy thừa. Vì vậy mạng residual sâu bắt đầu từ một mạng 'nông tương đương' và chỉ phải học phần độ lệch F, còn mạng plain sâu phải tự học cả việc truyền tín hiệu."
+  },
+  {
+    "q": "Mỗi stage giảm độ phân giải một nửa mỗi chiều và gấp đôi số kênh. Số kênh gấp đôi thì conv 3×3 giữa các kênh tốn bao nhiêu lần tham số (khối cùng loại), và vì sao nhà thiết kế chọn gấp đôi chứ không giữ nguyên số kênh?",
+    "tag": "resnet-stage-design",
+    "kind": "why",
+    "stage": "lab",
+    "answer": "Tham số conv 3×3 tỷ lệ với C_in·C_out, nên gấp đôi kênh thì tốn khoảng 4 lần tham số cho mỗi conv. Nhưng độ phân giải mỗi chiều giảm một nửa thì số vị trí giảm 4 lần, nên số phép tính (FLOPs) mỗi lớp giữ gần như bằng nhau giữa các stage: khi bớt chi tiết không gian thì được thêm bề rộng đặc trưng để bù, paper nói đây là quy tắc để giữ độ phức tạp thời gian mỗi lớp. Giữ nguyên số kênh sẽ làm mạng nhẹ dần ở các stage sau và bỏ phí khả năng biểu diễn ở những chỗ đã cô đọng."
+  },
+  {
+    "q": "Vì sao ResNetCifar kết thúc bằng average pooling toàn cục rồi một Linear, thay vì duỗi bản đồ đặc trưng 64×8×8 rồi Linear? Số tham số của fc khác nhau bao nhiêu, và nếu ảnh đầu vào là 64×64 thì chuyện gì xảy ra ở mỗi cách?",
+    "tag": "global-avg-pool",
+    "kind": "compare",
+    "stage": "defend",
+    "answer": "Pooling toàn cục lấy trung bình mỗi kênh nên fc chỉ có 64·num_classes + num_classes tham số (650), duỗi ra thì 64·8·8·10 = 40 960 (cộng bias): gấp 60 lần. Pooling toàn cục cũng không phụ thuộc kích thước ảnh: ảnh 64×64 chỉ làm bản đồ đặc trưng 16×16 và vẫn ra vector 64 chiều, còn Linear trên bản đồ duỗi sẽ sai shape (cần 64·16·16 đầu vào). Đổi lại pooling bỏ thông tin vị trí chính xác trong ảnh, ổn với phân loại."
+  },
+  {
+    "q": "Mạng plain-20 và ResNet-20 trong bài này không có cùng số tham số (ResNet nhiều hơn cỡ ba nghìn). Nếu ResNet-20 đạt lỗi thấp hơn, bạn có thể nói 'vì nó nhiều tham số hơn' không? Paper làm gì để câu chuyện đó không đứng vững (xem §4.1 về option A)?",
+    "tag": "fair-comparison",
+    "kind": "trap",
+    "stage": "defend",
+    "answer": "Chênh khoảng ba nghìn trên hơn hai trăm bảy mươi nghìn tham số là dưới 1,1%, quá nhỏ để giải thích một khác biệt đáng kể về lỗi, nhưng vẫn là một biến lẫn vào phép so sánh. Paper chọn option A (đường tắt đồng nhất, đệm số 0 khi đổi shape, không tham số) chính để mạng residual và plain có đúng cùng độ sâu, bề rộng và số tham số: khác biệt duy nhất là đường tắt. Kết luận sạch chỉ khi thay đổi đúng một thứ."
+  },
+  {
+    "q": "ResNet-110 trên CIFAR-10 ứng với n bằng mấy? Có bao nhiêu khối và bao nhiêu conv 3×3 trong các khối? Số tham số cỡ bao nhiêu lần ResNet-20, và vì sao?",
+    "tag": "resnet-depth-count",
+    "kind": "shape",
+    "stage": "defend",
+    "answer": "6n + 2 = 110 cho n = 18. Có 3·18 = 54 khối, 108 conv 3×3 trong khối (cộng conv đầu và fc là 110 lớp). Số tham số gần tỷ lệ với n (mỗi khối thêm một lượng cố định theo stage), nên cỡ 6 lần ResNet-20 (n = 3): paper báo 1,7 triệu so với 0,27 triệu."
+  }
+]

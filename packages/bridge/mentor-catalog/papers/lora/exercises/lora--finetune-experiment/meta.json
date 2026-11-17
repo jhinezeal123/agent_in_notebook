@@ -1,0 +1,50 @@
+{
+  "id": "lora--finetune-experiment",
+  "title": "Thí nghiệm: fine-tune toàn bộ so với LoRA r = 4",
+  "star": "lora--finetune-experiment",
+  "skills": ["train", "blank"],
+  "difficulty": 2000,
+  "minutes": 30,
+  "requires": ["numpy", "torch"],
+  "order": 2,
+  "functions": ["model_full", "model_lora"],
+  "prelude": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F",
+  "probes": 2,
+  "paper": "lora",
+  "role": "experiment",
+  "cites": "§4, §5, Table 4",
+  "uses": ["lora--inject"],
+  "judge": "kernel",
+  "judgeSeconds": 120,
+  "predict": "Trước khi train, viết dự đoán (vài câu, có lý do): (1) Với $r = 4$, gắn vào `attn.qkv` và `attn.proj` của mô hình nhỏ ($C = 64$, 2 khối), LoRA train khoảng bao nhiêu phần trăm số tham số (tính bằng công thức $r\\,(\\text{in} + \\text{out})$ của từng lớp)? (2) Mô hình huấn luyện trước trên A, chưa fine-tune, chấm tác vụ B ra loss cỡ bao nhiêu (bốn trong 16 quy tắc đã đổi), so với mức thấp nhất có thể `LOSS_FLOOR`? (3) Sau 300 bước, `loss_lora` so với `loss_full`: LoRA kém nhiều, kém chút, bằng, hay tốt hơn? Vì sao? (4) Nếu tác vụ B đổi cả 16 quy tắc thay vì 4, bạn đoán LoRA $r = 4$ còn theo kịp không?",
+  "metrics": [
+    {
+      "name": "lora_trainable_pct",
+      "paper": "GPT-3 175B: giảm khoảng 10 000 lần tham số cần train và khoảng 3 lần bộ nhớ GPU so với fine-tune toàn bộ",
+      "unit": "% tham số đang học",
+      "target": { "op": "<=", "value": 10 }
+    },
+    {
+      "name": "loss_lora",
+      "paper": "GPT-3 175B: LoRA ngang hoặc hơn fine-tune toàn bộ trên WikiSQL, MNLI, SAMSum (bài toán khác, không so trực tiếp)",
+      "unit": "nat/token (thấp nhất có thể ≈ 0,565)",
+      "target": { "op": "<=", "value": 0.75 }
+    },
+    {
+      "name": "loss_full",
+      "paper": "—",
+      "unit": "nat/token (thấp nhất có thể ≈ 0,565)",
+      "target": { "op": "<=", "value": 0.75 }
+    },
+    {
+      "name": "loss_before",
+      "paper": "—",
+      "unit": "nat/token, mô hình chưa fine-tune"
+    },
+    {
+      "name": "loss_ratio",
+      "paper": "xấp xỉ 1: LoRA ngang fine-tune toàn bộ",
+      "unit": "loss_lora / loss_full"
+    }
+  ]
+}

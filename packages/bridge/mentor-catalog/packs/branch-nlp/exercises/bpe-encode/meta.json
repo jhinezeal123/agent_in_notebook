@@ -1,0 +1,14 @@
+{
+  "id": "bpe-encode",
+  "title": "BPE: encode và decode",
+  "star": "bpe",
+  "skills": ["blank", "formula"],
+  "difficulty": 1450,
+  "minutes": 20,
+  "requires": ["numpy"],
+  "order": 2,
+  "functions": ["encode", "decode"],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "uses": ["bpe-train"]
+}
