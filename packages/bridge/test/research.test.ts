@@ -51,6 +51,14 @@ describe("OpenResearch sidecar", () => {
     expect(runs).toEqual([{ id: "run_1", experimentId: "exp_1", projectId: "proj_1", status: "done", backend: "kaggle", startedAt: 1, endedAt: 2, exitCode: 0 }]);
   });
 
+  it("starts the new configuration when restarted during startup", async () => {
+    const { orx } = make();
+    const first = orx.start();
+    const restarted = orx.restart();
+    expect((await first).state).toBe("off");
+    expect(await restarted).toMatchObject({ state: "ready", owned: true });
+  });
+
   it("uses an OpenResearch that is already running instead of starting another", async () => {
     const server: Server = createServer((req, res) => {
       res.writeHead(req.url === "/api/health" ? 200 : 404, { "content-type": "application/json" });

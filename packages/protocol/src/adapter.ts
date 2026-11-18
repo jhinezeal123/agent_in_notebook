@@ -15,7 +15,7 @@ import {
   type ReviewInfo,
   type RunResult,
 } from "./notebook.js";
-import { normalizeIpynbOutput, outputsFingerprint } from "./outputs.js";
+import { normalizeIpynbOutput, OutputFingerprints } from "./outputs.js";
 import { RunWatcher } from "./run-watcher.js";
 
 export interface NotebookAdapter {
@@ -77,6 +77,7 @@ const RUN_POLL_MS = 1000;
  */
 export class OpRunner {
   private reviews = new Map<string, { info: ReviewInfo; resolve(accept: boolean): void | Promise<void> }>();
+  private readonly fingerprints = new OutputFingerprints();
   private readonly executions = new Executions();
   readonly watcher: RunWatcher;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -151,13 +152,16 @@ export class OpRunner {
           if (!op.outputsHash || op.summary) return c;
           // Hashed in the page: only the fingerprint crosses the wire, unless the outputs were asked for too.
           const { outputs, ...rest } = c;
-          const hashed = c.type === "code" ? { ...rest, outputsHash: outputsFingerprint(outputs ?? []) } : rest;
+          const hashed = c.type === "code" ? { ...rest, outputsHash: this.fingerprints.read(c.id, outputs ?? []) } : rest;
           return op.includeOutputs ? { ...hashed, outputs } : hashed;
         }).map((c) => {
           const stale = c.type === "code" && this.watcher.isStale(c.id, c.source);
           const withRunState = stale ? { ...c, stale: true } : c;
           return pending.has(c.id) ? { ...withRunState, pendingReview: true } : withRunState;
         });
+        if (op.outputsHash && !op.cellIds && op.start === undefined && op.end === undefined) {
+          this.fingerprints.retain(new Set(cells.filter((c) => c.type === "code").map((c) => c.id)));
+        }
         // Summaries are cut here, in the page, so a big notebook's sources never cross the wire for an outline.
         return { cells: op.summary ? cells.map(summarizeCell) : cells };
       }

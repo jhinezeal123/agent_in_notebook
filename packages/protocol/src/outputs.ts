@@ -121,11 +121,40 @@ ${o.traceback ?? ""}`.trim());
  * length): equal outputs give equal fingerprints, in any page and after a reload.
  */
 export function outputsFingerprint(outputs: readonly CellOutput[]): string {
-  const json = JSON.stringify(outputs);
+  return fingerprintJson(JSON.stringify(outputs));
+}
+
+function fingerprintJson(json: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < json.length; i++) {
     h ^= json.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
   return `${json.length.toString(36)}.${(h >>> 0).toString(36)}`;
+}
+
+/** Reuse the full JSON hash while a cell's large immutable strings and remaining fields are equal. */
+export class OutputFingerprints {
+  private readonly cells = new Map<string, { shape: string; strings: string[]; hash: string }>();
+
+  read(id: string, outputs: readonly CellOutput[]): string {
+    const strings: string[] = [];
+    const shape = JSON.stringify(outputs, (_key, value) => {
+      if (typeof value !== "string" || value.length < 4096) return value;
+      return { stringIndex: strings.push(value) - 1 };
+    });
+    if (!strings.length) {
+      this.cells.delete(id);
+      return fingerprintJson(shape);
+    }
+    const previous = this.cells.get(id);
+    if (previous?.shape === shape && strings.every((s, i) => s === previous.strings[i])) return previous.hash;
+    const hash = outputsFingerprint(outputs);
+    this.cells.set(id, { shape, strings, hash });
+    return hash;
+  }
+
+  retain(ids: Set<string>): void {
+    for (const id of this.cells.keys()) if (!ids.has(id)) this.cells.delete(id);
+  }
 }

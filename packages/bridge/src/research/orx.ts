@@ -86,8 +86,10 @@ export class Orx {
 
   /** Stop what the bridge started, and look for orx afresh on the next start. */
   async restart(): Promise<ResearchStatus> {
+    const previous = this.starting;
     this.stop();
     this.setStatus({ state: "off" });
+    await previous;
     return this.start();
   }
 
@@ -160,6 +162,7 @@ export class Orx {
         this.setStatus({ state: "off", orxPath, error: code ? exitMessage(code, stderr) : undefined });
       });
       const health = await getJson(`${url}/api/health`, 5000).catch(() => null) as { version?: string } | null;
+      if (generation !== this.generation) return this.status;
       this.opts.log(`OpenResearch is running at ${url}.`);
       return this.ready({ state: "ready", url, version: health?.version, owned: true, orxPath }, generation);
     } catch (e) {

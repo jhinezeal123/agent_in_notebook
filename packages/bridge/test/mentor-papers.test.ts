@@ -153,6 +153,36 @@ describe("papers in the log", () => {
 });
 
 describe("PyTorch exercises not verified on Kaggle", () => {
+  it("invalidates a Kaggle record when shared paper code or a transitive reference changes", async () => {
+    const { mkdtempSync, cpSync, writeFileSync, appendFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const src = loadCatalog().dir;
+    const dir = mkdtempSync(join(tmpdir(), "ainb-hashes-"));
+    const paper = join(dir, "papers", "resnet");
+    cpSync(join(src, "map.json"), join(dir, "map.json"));
+    cpSync(join(src, "papers", "resnet"), paper, { recursive: true });
+    const packPath = join("packs", "branch-vision");
+    cpSync(join(src, packPath, "pack.json"), join(dir, packPath, "pack.json"));
+    const base = join(packPath, "exercises", "residual-block");
+    cpSync(join(src, base), join(dir, base), { recursive: true });
+    const id = "resnet--experiment";
+    const recordAll = () => {
+      const all = loadCatalog(dir, { unverified: true });
+      writeFileSync(join(dir, "verified.json"), JSON.stringify(Object.fromEntries(all.exercises.map((e) => [e.id, { hash: e.hash }]))));
+      return all.exercise(id)!.hash;
+    };
+    const first = recordAll();
+    expect(loadCatalog(dir).exercise(id)?.hash).toBe(first);
+    appendFileSync(join(paper, "given.py"), "\nSHARED = 1\n");
+    expect(loadCatalog(dir).exercise(id)).toBeUndefined();
+    const second = recordAll();
+    expect(second).not.toBe(first);
+    appendFileSync(join(dir, base, "reference.py"), "\nNEW_BASE = 1\n");
+    expect(loadCatalog(dir, { unverified: true }).exercise(id)?.hash).not.toBe(second);
+    expect(loadCatalog(dir).exercise(id)).toBeUndefined();
+  });
+
   it("never reach the learner, nor do the exercises built on them", async () => {
     const { mkdtempSync, cpSync, writeFileSync, readFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { decide, DEFAULT_SETTINGS, type ChatSettings } from "../src/modes.js";
 import { diffLines, diffStats, withContext } from "../src/diff.js";
-import { IMAGE_MAX_BASE64, normalizeIpynbOutput, normalizeIpynbOutputs, outputsToText } from "../src/outputs.js";
+import { IMAGE_MAX_BASE64, OutputFingerprints, outputsFingerprint, normalizeIpynbOutput, normalizeIpynbOutputs, outputsToText } from "../src/outputs.js";
 import { RpcPeer } from "../src/rpc.js";
 import { capText, textHash } from "../src/text.js";
 import type { Envelope } from "../src/wire.js";
+
+it("keeps the full output fingerprint for cached images, edits, streams and clears", () => {
+  const cache = new OutputFingerprints();
+  const image = { mime: "image/png" as const, data: "a".repeat(9000) };
+  const outputs = [{ kind: "display" as const, image, text: "plot" }];
+  const first = cache.read("cell", outputs);
+  expect(cache.read("cell", structuredClone(outputs))).toBe(first);
+  image.data = image.data.slice(0, 4500) + "b" + image.data.slice(4501);
+  expect(cache.read("cell", outputs)).toBe(outputsFingerprint(outputs));
+  expect(cache.read("cell", outputs)).not.toBe(first);
+  outputs[0]!.text = "updated";
+  expect(cache.read("cell", outputs)).toBe(outputsFingerprint(outputs));
+  expect(cache.read("cell", [])).toBe(outputsFingerprint([]));
+});
 
 describe("diffLines", () => {
   it("returns equal lines for identical text", () => {

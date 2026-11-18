@@ -108,6 +108,16 @@ describe.skipIf(!python)("checking an exercise", () => {
     expect(failed).toContain("files");
   });
 
+  it("refuses to certify a starter whose worker died before judging", async () => {
+    const ex = exercise({});
+    let step = "";
+    const result = await verifyExercise({ ...ex, starter: ex.reference }, async (code) =>
+      step === "chấm starter" ? { status: "error", outputs: [], message: "worker exited" } : exec(code),
+    { onStep: (message) => { step = message; } });
+    expect(result.ok).toBe(false);
+    expect(result.checks.find((c) => c.id === "starter")).toMatchObject({ ok: false, note: expect.stringContaining("worker exited") });
+  });
+
   it("stops at a missing module", async () => {
     const r = await verifyExercise(exercise({ requires: ["numpy", "no_such_module_xyz"] }), exec);
     expect(r.checks.find((c) => c.id === "modules")).toMatchObject({ ok: false, note: "thiếu no_such_module_xyz" });
@@ -168,6 +178,24 @@ function persistentKernel(): { exec: Exec; close: () => void } {
 }
 
 describe.skipIf(!python)("checking many exercises through a pool", () => {
+  it("keeps ownership across a competing start and reports errors preparing a job", async () => {
+    const kernel = persistentKernel();
+    const first = new KernelPool(kernel.exec, 10);
+    const other = new KernelPool(kernel.exec, 10);
+    try {
+      await kernel.exec("import tempfile, os\n_scratch = tempfile.TemporaryDirectory()\ntempfile.tempdir = _scratch.name\nos.mkdir(os.path.join(tempfile.tempdir, 'ainb-verify'))\nopen(os.path.join(tempfile.tempdir, 'ainb-verify', 'blocked'), 'w').close()", 1000);
+      await first.start();
+      await expect(other.start()).rejects.toThrow();
+      await other.close();
+      expect(await first.exec("blocked")("print(1)", 2000)).toMatchObject({ status: "error", message: expect.stringContaining("FileExistsError") });
+      expect(await first.exec("valid")("print(2)", 2000)).toMatchObject({ status: "ok", outputs: [{ text: "2\n" }] });
+    } finally {
+      await first.close();
+      await kernel.exec("_scratch.cleanup()", 1000);
+      kernel.close();
+    }
+  });
+
   it("checks them side by side, each check in its own process, and says which gave no result", async () => {
     const kernel = persistentKernel();
     const pool = new KernelPool(kernel.exec, 100);

@@ -184,10 +184,11 @@ interface Known {
   outputsHash: string | null;
 }
 
-class Mirror {
+export class Mirror {
   private known: Known[] = [];
   private readonly pushes = new Map<vscode.NotebookCell, ReturnType<typeof setTimeout>>();
   private structure?: ReturnType<typeof setTimeout>;
+  private structurePush: Promise<void> = Promise.resolve();
   private readonly executions = new Map<string, vscode.NotebookCellExecution>();
   /** Set while the tab's notebook is away (reloading): when it fires, the mirror lets go. */
   private awayTimer?: ReturnType<typeof setTimeout>;
@@ -196,6 +197,7 @@ class Mirror {
   /** Pushes to the browser, one at a time and in order. */
   private queue: Promise<unknown> = Promise.resolve();
   private polling = false;
+  private editVersion = 0;
   /** Runs started here whose run_cells has not answered, and a count of those started: a poll read across one is stale. */
   private runsInFlight = 0;
   private runsStarted = 0;
@@ -205,7 +207,7 @@ class Mirror {
   constructor(
     readonly tab: number,
     private readonly document: vscode.NotebookDocument,
-    private readonly host: ChromeMirrors,
+    private readonly host: Pick<ChromeMirrors, "op">,
     private readonly controller: vscode.NotebookController,
   ) {
     this.known = document.getCells().flatMap((cell) => {
@@ -268,11 +270,13 @@ class Mirror {
 
   localChanged(event: vscode.NotebookDocumentChangeEvent): void {
     if (this.detached) return;
+    if (event.contentChanges.length || event.cellChanges.some((change) => change.document)) this.editVersion++;
     if (event.contentChanges.length) {
       clearTimeout(this.structure);
       this.structure = setTimeout(() => {
         this.structure = undefined;
-        void this.enqueue(() => this.pushStructure()).catch((e) => this.failed(e));
+        this.structurePush = this.enqueue(() => this.pushStructure());
+        void this.structurePush.catch((e) => this.failed(e));
       }, PUSH_DELAY_MS);
     }
     for (const change of event.cellChanges) {
@@ -294,6 +298,7 @@ class Mirror {
       const source = cell.document.getText();
       if (source === known.source) return;
       await this.op({ op: "update_cell", cellId: id, source, review: false, byUser: true });
+      this.editVersion++;
       known.source = source;
       await this.saved();
     });
@@ -320,6 +325,7 @@ class Mirror {
       }
     }
     const { cells: remote } = await this.op({ op: "get_cells" }) as { cells: CellInfo[] };
+    this.editVersion++;
     const previous = new Map(this.known.map((k) => [k.id, k.outputsHash]));
     this.known = remote.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: previous.get(c.id) ?? null }));
     await this.saved();
@@ -337,11 +343,20 @@ class Mirror {
     if (this.structure !== undefined) {
       clearTimeout(this.structure);
       this.structure = undefined;
-      await this.enqueue(() => this.pushStructure()).catch((e) => this.failed(e));
+      this.structurePush = this.enqueue(() => this.pushStructure());
+    }
+    try {
+      await this.structurePush;
+    } catch (e) {
+      return this.failed(e);
     }
     for (const cell of cells) {
       if (cell.kind !== vscode.NotebookCellKind.Code) continue;
-      await this.flush(cell).catch((e) => this.failed(e));
+      try {
+        await this.flush(cell);
+      } catch (e) {
+        return this.failed(e);
+      }
       const id = idOf(cell);
       if (!id) continue;
       this.started(cell, id, true);
@@ -428,11 +443,14 @@ class Mirror {
     if (this.polling || this.detached || this.awayTimer || this.document.isClosed) return;
     this.polling = true;
     try {
+      const version = this.editVersion;
       const runs = this.runsStarted;
+      const current = () => version === this.editVersion && !this.busy() && !this.awayTimer && !this.detached && !this.document.isClosed && !this.runsInFlight && runs === this.runsStarted;
       const { cells: remote } = await this.op({ op: "get_cells", outputsHash: true }) as { cells: CellInfo[] };
       // Read before a run started here reached the browser: it would end that run's spinner.
-      if (this.busy() || this.awayTimer || this.runsInFlight || runs !== this.runsStarted) return;
-      await this.enqueue(() => this.pull(remote));
+      if (current()) await this.enqueue(async () => {
+        if (current()) await this.pull(remote, current);
+      });
     } catch {
       // Not reachable now (bridge or tab away for a moment): try again on the next tick.
     } finally {
@@ -440,7 +458,7 @@ class Mirror {
     }
   }
 
-  private async pull(remote: CellInfo[]): Promise<void> {
+  private async pull(remote: CellInfo[], current: () => boolean): Promise<void> {
     const local = this.document.getCells();
     const localCells: LocalCell[] = local.map((cell) => ({ id: idOf(cell), type: typeOf(cell) }));
     const knownOrder = this.known.map((k) => ({ id: k.id, type: k.type }));
@@ -451,9 +469,10 @@ class Mirror {
     const action = pullAction(localCells, knownOrder, remoteOrder, this.structure !== undefined);
     if (action === "wait") return;
     if (action === "rebuild") {
-      await this.rebuild();
+      await this.rebuild(current);
       return;
     }
+    this.structurePush = Promise.resolve(); // The cell order agrees again after a failed push.
     const edit = new vscode.WorkspaceEdit();
     let edits = 0;
     const changed: { cell: vscode.NotebookCell; known: Known; remote: CellInfo }[] = [];
@@ -504,14 +523,15 @@ class Mirror {
   }
 
   /** Cells were added, removed or moved in the browser: read the whole notebook again. */
-  private async rebuild(): Promise<void> {
+  private async rebuild(current: () => boolean): Promise<void> {
     const { cells } = await this.op({ op: "get_cells", includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
+    if (!current()) return;
     for (const execution of this.executions.values()) execution.end(undefined);
     this.executions.clear();
     this.known = cells.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: c.outputsHash ?? null }));
     const edit = new vscode.WorkspaceEdit();
     edit.set(this.document.uri, [vscode.NotebookEdit.replaceCells(new vscode.NotebookRange(0, this.document.cellCount), cells.map((c) => cellData(c, this.language)))]);
-    await vscode.workspace.applyEdit(edit);
+    if (await vscode.workspace.applyEdit(edit)) this.structurePush = Promise.resolve();
     await this.saved();
   }
 

@@ -10,6 +10,7 @@
 // what has finished with one short kernel call every few seconds; between
 // them the kernel is idle.
 
+import { randomUUID } from "node:crypto";
 import type { Exec } from "./verify.js";
 
 const MARK = /<<MENTOR-POOL (.*) MENTOR-POOL>>/;
@@ -35,11 +36,15 @@ interface Done {
   ms?: number;
 }
 
-const START = String.raw`
+function startCode(owner: string): string {
+  return String.raw`
 def _ainb_pool_start():
     import json, os, queue, subprocess, sys, tempfile, threading, time
     old = globals().get("_ainb_pool")
     if old is not None:
+        # An abandoned pool can be reclaimed after five minutes without a bridge poll.
+        if time.monotonic() - old.get("last_poll", 0) < 300 and "owner" in old:
+            raise RuntimeError("Another Mentor verification is using this kernel.")
         old["stop"]()
     try:
         import torch
@@ -69,20 +74,22 @@ def _ainb_pool_start():
             job = next_job()
             if job is None:
                 return
-            # One folder per exercise: data its reference downloaded is found again by its other checks.
-            folder = os.path.join(base, job["group"])
-            os.makedirs(folder, exist_ok=True)
-            path = os.path.join(folder, job["id"] + ".py")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(job["code"])
-            env = dict(os.environ, MPLBACKEND="Agg", PYTHONIOENCODING="utf-8", OMP_NUM_THREADS=str(max(1, cpus // slots)))
-            if device is not None:
-                env["CUDA_VISIBLE_DEVICES"] = str(device)
             r = {"id": job["id"]}
             t0 = time.time()
             try:
+                # One folder per exercise: data its reference downloaded is found again by its other checks.
+                folder = os.path.join(base, job["group"])
+                os.makedirs(folder, exist_ok=True)
+                path = os.path.join(folder, job["id"] + ".py")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(job["code"])
+                env = dict(os.environ, MPLBACKEND="Agg", PYTHONIOENCODING="utf-8", OMP_NUM_THREADS=str(max(1, cpus // slots)))
+                if device is not None:
+                    env["CUDA_VISIBLE_DEVICES"] = str(device)
                 p = subprocess.Popen([sys.executable, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env, cwd=folder)
                 with lock:
+                    if state["stopped"]:
+                        p.kill()
                     running.add(p)
                 try:
                     out, err = p.communicate(timeout=job["timeout"])
@@ -121,27 +128,33 @@ def _ainb_pool_start():
             ready.notify_all()
             for p in list(running):
                 p.kill()
-    globals()["_ainb_pool"] = {"add": add, "take": take, "stop": stop}
+    globals()["_ainb_pool"] = {"owner": "${owner}", "last_poll": time.monotonic(), "add": add, "take": take, "stop": stop}
     print("<<MENTOR-POOL " + json.dumps({"gpus": gpus, "slots": slots}) + " MENTOR-POOL>>")
 try:
     _ainb_pool_start()
 finally:
     del _ainb_pool_start
 `.trimStart();
+}
 
-function pollCode(jobs: Job[]): string {
+function pollCode(owner: string, jobs: Job[]): string {
   const b64 = Buffer.from(JSON.stringify(jobs), "utf8").toString("base64");
-  return `import base64 as _b, json as _j
+  return `if globals().get("_ainb_pool", {}).get("owner") != "${owner}":
+    raise RuntimeError("The Mentor verification pool was replaced.")
+import base64 as _b, json as _j, time as _t
+_ainb_pool["last_poll"] = _t.monotonic()
 _ainb_pool["add"](_j.loads(_b.b64decode("${b64}").decode("utf-8")))
 print("<<MENTOR-POOL " + _j.dumps(_ainb_pool["take"](), ensure_ascii=False) + " MENTOR-POOL>>")
-del _b, _j
+del _b, _j, _t
 `;
 }
 
-const STOP = `if "_ainb_pool" in globals():
+function stopCode(owner: string): string {
+  return `if globals().get("_ainb_pool", {}).get("owner") == "${owner}":
     _ainb_pool["stop"]()
     del _ainb_pool
 `;
+}
 
 function marked<T>(res: Awaited<ReturnType<Exec>>): T | null {
   const text = res.outputs.filter((o) => o.kind === "stream").map((o) => o.text ?? "").join("");
@@ -160,6 +173,7 @@ function why(res: Awaited<ReturnType<Exec>>): string {
 }
 
 export class KernelPool {
+  private readonly owner = randomUUID();
   private seq = 0;
   private queued: Job[] = [];
   private waiting = new Map<string, { resolve: (r: Awaited<ReturnType<Exec>>) => void; reject: (e: Error) => void }>();
@@ -169,9 +183,9 @@ export class KernelPool {
 
   constructor(private readonly kernel: Exec, private readonly pollMs = 3000) {}
 
-  /** Starts the pool in the kernel (stopping one an earlier check left). */
+  /** Claims the kernel for this verification. A live owner keeps its workers and results. */
   async start(): Promise<PoolInfo> {
-    const res = await this.kernel(START, 120_000);
+    const res = await this.kernel(startCode(this.owner), 120_000);
     const info = marked<PoolInfo>(res);
     if (!info) throw new Error(`Could not start the checking pool in the kernel: ${why(res)}`);
     this.loop = this.run();
@@ -181,6 +195,7 @@ export class KernelPool {
   /** An Exec whose calls wait in the pool's queue; `group` names the folder they run in, `gpu`: they train on a GPU. */
   exec(group: string, gpu = false): Exec {
     return (code, waitMs) => new Promise((resolve, reject) => {
+      if (this.closed) return reject(new Error("The checking pool is closed."));
       if (this.failure) return reject(this.failure);
       const id = `j${++this.seq}`;
       this.waiting.set(id, { resolve, reject });
@@ -190,8 +205,9 @@ export class KernelPool {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.fail(new Error("The checking pool is closed."));
     await this.loop;
-    await this.kernel(STOP, 30_000).catch(() => {});
+    await this.kernel(stopCode(this.owner), 30_000).catch(() => {});
   }
 
   private fail(e: Error): void {
@@ -206,7 +222,7 @@ export class KernelPool {
       const jobs = this.queued.splice(0);
       let res: Awaited<ReturnType<Exec>>;
       try {
-        res = await this.kernel(pollCode(jobs), 60_000);
+        res = await this.kernel(pollCode(this.owner, jobs), 60_000);
       } catch (e) {
         // A cell of the learner's holds the kernel: the pool runs on behind it, try again.
         if (/kernel is busy/i.test((e as Error).message)) {

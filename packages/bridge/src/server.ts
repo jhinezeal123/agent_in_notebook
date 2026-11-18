@@ -110,6 +110,7 @@ export class Bridge {
   private readonly targets = new Map<Chat, Target>();
   /** Notebooks open in Chrome tabs, for the editor's picker. */
   private readonly browserNotebooks = new Map<number, NotebookInfo>();
+  private readonly verifying = new Set<string>();
   private byToken = new Map<string, Chat>();
   private pingTimer: ReturnType<typeof setInterval>;
   private readonly log: (msg: string) => void;
@@ -942,6 +943,7 @@ export class Bridge {
     res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8" });
     const line = (o: unknown) => res.write(`${JSON.stringify(o)}\n`);
     const tick = setInterval(() => line({ t: "tick" }), 20_000);
+    let claimed: string | undefined;
     try {
       const catalog = loadCatalog(typeof body.catalogDir === "string" ? body.catalogDir : undefined, { unverified: true });
       const tabs = [...this.browserNotebooks.keys()];
@@ -949,6 +951,10 @@ export class Bridge {
       if (tabId === undefined || !this.browserNotebooks.has(tabId)) {
         throw new Error(tabs.length ? `Several notebooks are open in Chrome; name one with --tab (${tabs.map((t) => `${t}: ${this.browserNotebooks.get(t)?.title}`).join(", ")}).` : "No notebook is open in Chrome: open a Kaggle notebook and turn its machine on.");
       }
+      const key = this.browserNotebooks.get(tabId)?.key || `tab:${tabId}`;
+      if (this.verifying.has(key)) throw new Error("Another Mentor verification is using this notebook.");
+      this.verifying.add(key);
+      claimed = key;
       const wanted = Array.isArray(body.exerciseIds) && body.exerciseIds.length ? body.exerciseIds.map(String) : catalog.exercises.filter((e) => e.requires.includes("torch")).map((e) => e.id);
       line({ t: "start", tabId, title: this.browserNotebooks.get(tabId)?.title ?? "", exercises: wanted });
       const target: Target = { kind: "browser", tabId };
@@ -979,6 +985,7 @@ export class Bridge {
     } catch (e) {
       line({ t: "error", message: (e as Error).message });
     } finally {
+      if (claimed !== undefined) this.verifying.delete(claimed);
       clearInterval(tick);
       res.end();
     }

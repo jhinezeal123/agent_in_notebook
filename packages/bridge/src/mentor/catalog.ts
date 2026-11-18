@@ -147,7 +147,7 @@ export interface Exercise extends ExerciseMeta {
   brief: string;
   /** Code given with the exercise (data, plotting, boilerplate): shown in the notebook, run before the learner's. */
   given: string;
-  /** Of every file of the exercise: what a verification record is for. */
+  /** The exercise files and, for curated catalog entries, the shared code used during verification. */
   hash: string;
   lab: LabCell[];
   starter: string;
@@ -255,6 +255,12 @@ export function parseCells(text: string): LabCell[] {
 
 function read(file: string): string {
   return readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+}
+
+/** The shared Python actually executed when checking a reference or a broken solution. */
+export function verificationPrelude(ex: Exercise, lookup: (id: string) => Exercise | undefined, paperGiven: string): string {
+  const used = usesOrder(ex.uses, (id) => lookup(id)?.uses ?? []).map(lookup).filter((u): u is Exercise => !!u);
+  return [paperGiven, ...used.flatMap((u) => [u.given, u.reference])].map((code) => code.trim()).filter(Boolean).join("\n\n");
 }
 
 /** Files the machine check does not depend on: questions and hints can be added without checking the exercise again. */
@@ -383,27 +389,34 @@ export function loadCatalog(dir = catalogDir(), opts: CatalogOptions = {}): Cata
     if (!existsSync(join(at, "meta.json"))) continue;
     const ex = loadExercise(at, name);
     if (!starIds.has(ex.star)) throw new Error(`Exercise ${ex.id} is on an unknown star ${ex.star}.`);
-    if (!checked(ex)) {
-      opts.log?.(`Mentor: ${ex.id} is not verified on Kaggle as it is now; it is left out.`);
-      continue;
-    }
     exercises.push(ex);
   }
   const constellations: Catalog["constellations"] = map.constellations.map((c) => ({ ...c, kind: "map" as const }));
   const stars = [...map.stars];
   // Topic packs: more stars and exercises. A pack's mistakes leave its own parts out, nothing else.
   const problems: CatalogProblem[] = [];
-  const packs = loadPacks(join(dir, "packs"), { constellations, stars, exercises, checked, problems });
-  for (const p of problems) opts.log?.(`Mentor: ${p.where}: ${p.message}`);
+  const packs = loadPacks(join(dir, "packs"), { constellations, stars, exercises, problems });
   // Papers: the landmark ones shipped here, then the learner's.
   const papers = new Map<string, PaperPackage>();
-  const curatedPapers = loadPapers(join(dir, "papers"), "curated", opts.log).map((p) => ({ ...p, exercises: p.exercises.filter(checked) }));
+  const curatedPapers = loadPapers(join(dir, "papers"), "curated", opts.log);
   for (const pkg of [...curatedPapers, ...(opts.papersDir ? loadPapers(opts.papersDir, "yours", opts.log) : [])]) {
     if (papers.has(pkg.info.id)) continue;
     papers.set(pkg.info.id, pkg);
     constellations.push({ id: `paper:${pkg.info.id}`, name: pkg.info.title, kind: "paper" });
-    stars.push(...paperStars(pkg));
     exercises.push(...pkg.exercises.filter((e) => !exercises.some((x) => x.id === e.id)));
+  }
+  // Verify shipped content after its complete dependency graph and shared paper code are available.
+  const all = new Map(exercises.map((ex) => [ex.id, ex]));
+  for (let i = exercises.length - 1; i >= 0; i--) {
+    const ex = exercises[i]!;
+    if (ex.paper && papers.get(ex.paper)?.info.origin === "yours") continue; // Workshop reports are managed by PaperShelf.
+    const before = verificationPrelude(ex, (id) => all.get(id), ex.paper ? papers.get(ex.paper)?.info.given ?? "" : "");
+    if (before) ex.hash = createHash("sha256").update(ex.hash).update("\0").update(before).digest("hex").slice(0, 16);
+    if (checked(ex)) continue;
+    const message = "It needs PyTorch and is not verified on Kaggle as it is now (ainb mentor verify); it is left out until then.";
+    if (ex.pack) problems.push({ where: `${ex.pack}/${ex.id}`, message });
+    else opts.log?.(`Mentor: ${ex.id}: ${message}`);
+    exercises.splice(i, 1);
   }
   // An exercise that builds on (or varies) one left out is left out too.
   for (let changed = true; changed;) {
@@ -412,12 +425,19 @@ export function loadCatalog(dir = catalogDir(), opts: CatalogOptions = {}): Cata
     for (let i = exercises.length - 1; i >= 0; i--) {
       const e = exercises[i]!;
       if (e.uses.every((u) => ids.has(u)) && (!e.variantOf || ids.has(e.variantOf))) continue;
-      opts.log?.(`Mentor: ${e.id} builds on an exercise that is left out; it is left out too.`);
+      if (e.pack) {
+        const missing = e.uses.find((id) => !ids.has(id)) ?? e.variantOf;
+        problems.push({ where: `${e.pack}/${e.id}`, message: `It uses an unknown exercise ${missing}; it is left out.` });
+      } else opts.log?.(`Mentor: ${e.id} builds on an exercise that is left out; it is left out too.`);
       exercises.splice(i, 1);
       changed = true;
     }
   }
-  for (const pkg of papers.values()) pkg.exercises = pkg.exercises.filter((e) => exercises.includes(e));
+  for (const p of problems) opts.log?.(`Mentor: ${p.where}: ${p.message}`);
+  for (const pkg of papers.values()) {
+    pkg.exercises = pkg.exercises.filter((e) => exercises.includes(e));
+    stars.push(...paperStars(pkg));
+  }
   checkExercises(exercises);
   const byId = new Map(exercises.map((e) => [e.id, e]));
   return {
@@ -485,8 +505,6 @@ interface PackTarget {
   constellations: CatalogConstellation[];
   stars: StarDef[];
   exercises: Exercise[];
-  /** Verified on Kaggle where it has to be. */
-  checked: (ex: Exercise) => boolean;
   problems: CatalogProblem[];
 }
 
@@ -607,7 +625,6 @@ function loadPacks(root: string, into: PackTarget): PackInfo[] {
       else if (ex.diagnostic) note("A pack's exercise cannot be part of the diagnostic; it is left out.");
       else if (!starIds.has(ex.star)) note(`It is on an unknown star ${ex.star}; it is left out.`);
       else if (into.exercises.some((x) => x.id === ex.id) || own.some((x) => x.id === ex.id)) note(`An exercise ${ex.id} already exists; this one is left out.`);
-      else if (!into.checked(ex)) note("It needs PyTorch and is not verified on Kaggle as it is now (ainb mentor verify); it is left out until then.");
       else own.push(ex);
     }
     // Links: to exercises that exist, with no circle.

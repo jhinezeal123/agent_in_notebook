@@ -300,7 +300,7 @@ Với mỗi bài, lệnh này kiểm: đúng giao thức (các quy tắc đếm 
 pnpm ainb mentor verify <id…>           # ghi kết quả vào verified.json
 ```
 
-  Sửa `tests.py`, `reference.py`, `starter.py`, `given.py`, `lab.py`, `brief.md`, `meta.json` hay mutant của bài PyTorch thì phải verify lại. Sửa `probes.json`, `hints.json` thì không.
+  Sửa `tests.py`, `reference.py`, `starter.py`, `given.py`, `lab.py`, `brief.md`, `meta.json` hay mutant của bài PyTorch thì phải verify lại. Nếu sửa code chung trong `given.py` của paper, hãy verify lại các bài PyTorch dùng code đó. Nếu sửa `given.py` hoặc `reference.py` của một bài trong chuỗi `uses`, hãy verify lại cả các bài PyTorch phụ thuộc trực tiếp và gián tiếp vào nó. Có thể truyền tất cả ID trong cùng một lệnh verify trên notebook đó. Thay đổi riêng ở `probes.json` và `hints.json` giữ nguyên dấu verify.
 
 Khi mọi thứ đạt:
 

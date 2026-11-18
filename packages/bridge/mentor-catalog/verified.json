@@ -1,36 +1,36 @@
 {
   "attention--decoder-layer": {
-    "hash": "14805ac0e4741626",
+    "hash": "ee7843e3411f323a",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:10:48.927Z"
   },
   "attention--encoder-layer": {
-    "hash": "47a82476f7757bef",
+    "hash": "714e48841ff24085",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:10:36.548Z"
   },
   "attention--mha": {
-    "hash": "77044d26a1c519ad",
+    "hash": "e3262818203248e7",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:10:14.979Z"
   },
   "attention--posenc-embed": {
-    "hash": "1befe0612cdaed83",
+    "hash": "1bd1bc15889ffe0b",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:10:26.676Z"
   },
   "attention--reverse-experiment": {
-    "hash": "3607895587196a0c",
+    "hash": "27e54ebc206d1a97",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:29:31.975Z"
   },
   "attention--transformer": {
-    "hash": "20844678b145e0ef",
+    "hash": "0575562f1779b288",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:10:59.996Z"
@@ -48,31 +48,31 @@
     "at": "2026-11-17T00:59:54.881Z"
   },
   "ddpm--experiment": {
-    "hash": "8fdbc04b81c5d40d",
+    "hash": "a0961ab7b146eed5",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:52:53.572Z"
   },
   "ddpm--sample": {
-    "hash": "76eb5ba17cccc01d",
+    "hash": "014d6dcfc8a8769d",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:35:38.772Z"
   },
   "ddpm-loss": {
-    "hash": "9969edde6d1a48e3",
+    "hash": "c98691ecc4449cd6",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:02:08.615Z"
   },
   "dqn--agent": {
-    "hash": "b7d84dd691c77bfa",
+    "hash": "b7beaf867eaa2476",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:20:08.110Z"
   },
   "dqn--experiment": {
-    "hash": "2753891b3bb92691",
+    "hash": "672f44bacb61f991",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T04:11:37.212Z"
@@ -102,7 +102,7 @@
     "at": "2026-11-17T01:06:54.247Z"
   },
   "gae-lambda": {
-    "hash": "c13970b646ab9473",
+    "hash": "d32df23ad8c63138",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:07:09.202Z"
@@ -114,19 +114,19 @@
     "at": "2026-11-17T01:01:36.037Z"
   },
   "gan-saturating": {
-    "hash": "4ae36bb2712da1f6",
+    "hash": "80e5b8662d2278fe",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:01:43.025Z"
   },
   "gpt-generate": {
-    "hash": "88c0a622448d070d",
+    "hash": "f7956be65367873b",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:00:29.115Z"
   },
   "gpt-mini": {
-    "hash": "fc2f4e602e33366e",
+    "hash": "8c8188f4bca5873d",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:00:15.800Z"
@@ -144,19 +144,19 @@
     "at": "2026-11-17T01:05:20.798Z"
   },
   "info-nce-temperature": {
-    "hash": "8795e88d6bd55b6a",
+    "hash": "681156fec523b9c1",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:09:01.070Z"
   },
   "lora--finetune-experiment": {
-    "hash": "11469bb93650593f",
+    "hash": "711a17d534f6c7a7",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:35:06.751Z"
   },
   "lora--inject": {
-    "hash": "886fe4945c8fa8e9",
+    "hash": "953548dd905cb741",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:28:25.486Z"
@@ -168,7 +168,7 @@
     "at": "2026-11-17T01:00:55.675Z"
   },
   "lora-merge": {
-    "hash": "17d2470d181b16d7",
+    "hash": "1477f93c4dae9bec",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:01:03.126Z"
@@ -180,7 +180,7 @@
     "at": "2026-11-17T01:01:50.055Z"
   },
   "p-sample": {
-    "hash": "e00e438e9fae883d",
+    "hash": "dd22a8645e2943df",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:02:44.481Z"
@@ -192,13 +192,13 @@
     "at": "2026-11-17T01:04:34.849Z"
   },
   "ppo--experiment": {
-    "hash": "50f2e5054b3b4abe",
+    "hash": "c14f70997eb9d1c6",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:27:04.965Z"
   },
   "ppo--rollout": {
-    "hash": "d198b8749bf7505c",
+    "hash": "0a51899b65c62e30",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:22:56.882Z"
@@ -210,19 +210,19 @@
     "at": "2026-11-17T01:07:27.346Z"
   },
   "ppo-update": {
-    "hash": "a3e4434230d18c34",
+    "hash": "9dd009043f2aa6a5",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:08:12.294Z"
   },
   "q-sample": {
-    "hash": "d4af1683084dabfd",
+    "hash": "158161d5bd1c2cb7",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:01:58.765Z"
   },
   "reinforce-loss": {
-    "hash": "a34309be30a249a5",
+    "hash": "4774fb005017c623",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:06:33.334Z"
@@ -240,13 +240,13 @@
     "at": "2026-11-17T01:04:11.742Z"
   },
   "resnet--experiment": {
-    "hash": "8d35f281c513b5f2",
+    "hash": "51401482e2ae81d6",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T05:32:01.615Z"
   },
   "resnet--net": {
-    "hash": "39b64cdbf6d1246d",
+    "hash": "29ce51193612dce1",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:19:06.921Z"
@@ -276,25 +276,25 @@
     "at": "2026-11-17T00:58:13.483Z"
   },
   "vae-elbo": {
-    "hash": "730c25c05755b3b2",
+    "hash": "9189bb9b636c4c7e",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:01:23.570Z"
   },
   "vit--classifier": {
-    "hash": "ac60fa148a0e86c7",
+    "hash": "bbeaf11be0936c4c",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:18:35.190Z"
   },
   "vit--experiment": {
-    "hash": "0baf91269942e04e",
+    "hash": "09b8f569fe0b747c",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T03:22:34.670Z"
   },
   "vit-forward": {
-    "hash": "7d7d4e73d2ee7bfd",
+    "hash": "1c579a6ff38f238d",
     "python": "3.13.16",
     "torch": "2.11.0+cu130",
     "at": "2026-11-17T01:04:55.049Z"

@@ -8,7 +8,7 @@
 // consistent, not that it is faithful to the paper.
 
 import type { ExecResult } from "@ainb/protocol";
-import { usesOrder, type Catalog, type Exercise } from "./catalog.js";
+import { verificationPrelude, type Catalog, type Exercise } from "./catalog.js";
 import { judgeCode, newNonce, parseVerdict, TOO_LONG, type JudgeContext } from "./judge.js";
 import { exerciseCells } from "./notebook.js";
 
@@ -49,8 +49,7 @@ export const CHECK_LABEL: Record<string, string> = {
 
 /** What runs before an exercise when its reference is checked: the paper's given code, and the exercises it uses (their references). */
 export function referenceContext(catalog: Pick<Catalog, "exercise" | "paperGiven">, ex: Exercise): JudgeContext {
-  const used = usesOrder(ex.uses, (id) => catalog.exercise(id)?.uses ?? []).map((id) => catalog.exercise(id)).filter((u): u is Exercise => !!u);
-  const code = [ex.paper ? catalog.paperGiven(ex.paper) : "", ...used.flatMap((u) => [u.given, u.reference])].map((c) => c.trim()).filter(Boolean).join("\n\n");
+  const code = verificationPrelude(ex, (id) => catalog.exercise(id), ex.paper ? catalog.paperGiven(ex.paper) : "");
   return { before: code, beforeRef: code };
 }
 
@@ -174,7 +173,7 @@ export async function verifyExercise(ex: Exercise, exec: Exec, opts: VerifyOptio
     const t0 = now();
     const res = await exec(judgeCode(ex, source, nonce, ctx), waitMs);
     const text = res.outputs.filter((o) => o.kind === "stream").map((o) => o.text ?? "").join("");
-    return { verdict: parseVerdict(res, nonce), ms: res.ms ?? now() - t0, answered: text.includes(nonce), message: res.message };
+    return { verdict: parseVerdict(res, nonce), ms: res.ms ?? now() - t0, answered: text.includes(nonce), status: res.status, message: res.message };
   };
   // Started now on a pool (side by side), or when awaited on a kernel (one after another, in this order).
   const later = <T>(f: () => Promise<T>): (() => Promise<T>) => {
@@ -223,7 +222,11 @@ export async function verifyExercise(ex: Exercise, exec: Exec, opts: VerifyOptio
 
   // 4. The starter and the broken solutions fail.
   const starter = await starterRun();
-  if (starter) add("starter", !starter.verdict.ok, starter.verdict.ok ? "starter qua hết test: test quá lỏng" : undefined);
+  if (starter) {
+    const measured = starter.status === "ok" && !starter.verdict.missing && !starter.verdict.error && starter.verdict.total > 0;
+    add("starter", measured && !starter.verdict.ok, !measured ? `chưa chấm được starter: ${starter.message || starter.verdict.error || "không có kết quả test"}`
+      : starter.verdict.ok ? "starter qua hết test: test quá lỏng" : undefined);
+  }
   const caught: string[] = [];
   for (const [i, m] of ex.mutants.entries()) {
     const { verdict, answered, message } = await mutantRuns[i]!();
