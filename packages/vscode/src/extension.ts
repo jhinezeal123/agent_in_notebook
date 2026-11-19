@@ -12,6 +12,7 @@ import { Studio } from "./studio-host.js";
 import { ARTIFACTS, CODE, FolderTree } from "./folder-tree.js";
 import { registerChangeProviders } from "./changes.js";
 import { MentorHost } from "./mentor-host.js";
+import { zoomNotebook } from "./notebook-zoom.js";
 
 const secret = "bridge.config";
 
@@ -33,6 +34,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ainb.saveNotebookToProject", () => panel.projectCommand("chat.saveNotebook")),
     vscode.commands.registerCommand("ainb.verifyNotebook", () => panel.projectCommand("chat.verifyNotebook")),
     vscode.commands.registerCommand("ainb.open", () => panel.openChat()),
+    vscode.commands.registerCommand("ainb.notebookZoomIn", () => zoomNotebook(1)),
+    vscode.commands.registerCommand("ainb.notebookZoomOut", () => zoomNotebook(-1)),
+    vscode.commands.registerCommand("ainb.notebookZoomReset", () => zoomNotebook(0)),
     vscode.commands.registerCommand("ainb.newChat", () => studio.open({ view: "newchat" })),
     vscode.commands.registerCommand("ainb.openSettings", () => studio.open({ view: "settings" })),
     vscode.commands.registerCommand("ainb.openCompute", () => studio.open({ view: "settings", section: "compute" })),
@@ -131,7 +135,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       if ("status" in event) this.studio.setResearchStatus(event.status);
       else this.studio.runChanged(event.run);
     });
-    this.mirrors = new ChromeMirrors((method, params) => this.bridge.request(method, params));
+    this.mirrors = new ChromeMirrors((method, params) => this.bridge.request(method, params), context.extension.id);
     this.studio = new Studio({
       context,
       bridge: async (method, params, force) => {

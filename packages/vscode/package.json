@@ -369,6 +369,21 @@
         "title": "Open Mentor",
         "category": "Agent in Notebook",
         "icon": "$(star-empty)"
+      },
+      {
+        "command": "ainb.notebookZoomIn",
+        "title": "Notebook: Zoom In (code and markdown)",
+        "category": "Agent in Notebook"
+      },
+      {
+        "command": "ainb.notebookZoomOut",
+        "title": "Notebook: Zoom Out (code and markdown)",
+        "category": "Agent in Notebook"
+      },
+      {
+        "command": "ainb.notebookZoomReset",
+        "title": "Notebook: Reset Zoom (code and markdown)",
+        "category": "Agent in Notebook"
       }
     ],
     "keybindings": [
@@ -393,6 +408,24 @@
         "key": "delete",
         "mac": "cmd+backspace",
         "when": "focusedView == ainb.artifacts && !inputFocus"
+      },
+      {
+        "command": "ainb.notebookZoomIn",
+        "key": "ctrl+alt+=",
+        "mac": "cmd+alt+=",
+        "when": "notebookEditorFocused"
+      },
+      {
+        "command": "ainb.notebookZoomOut",
+        "key": "ctrl+alt+-",
+        "mac": "cmd+alt+-",
+        "when": "notebookEditorFocused"
+      },
+      {
+        "command": "ainb.notebookZoomReset",
+        "key": "ctrl+alt+0",
+        "mac": "cmd+alt+0",
+        "when": "notebookEditorFocused"
       }
     ],
     "menus": {

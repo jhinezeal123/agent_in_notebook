@@ -47,8 +47,10 @@ export class ChromeMirrors implements vscode.Disposable {
   private readonly controller: vscode.NotebookController;
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly epoch = Date.now();
+  /** Mirrors whose kernel is this controller: only then can it show runs and outputs. */
+  private readonly bound = new Set<vscode.NotebookDocument>();
 
-  constructor(private readonly request: Request) {
+  constructor(private readonly request: Request, private readonly extensionId: string) {
     this.controller = vscode.notebooks.createNotebookController("ainb-chrome-kernel", MIRROR_TYPE, "Chrome tab (Colab / Kaggle)");
     this.controller.description = "Runs the cells in the notebook's browser tab";
     this.controller.supportsExecutionOrder = true;
@@ -61,14 +63,34 @@ export class ChromeMirrors implements vscode.Disposable {
         transientOutputs: true,
         transientCellMetadata: { id: true },
       }),
+      this.controller.onDidChangeSelectedNotebooks(({ notebook, selected }) => {
+        if (selected) this.bound.add(notebook);
+        else this.bound.delete(notebook);
+      }),
+      vscode.window.onDidChangeActiveNotebookEditor((editor) => void this.bind(editor)),
       vscode.workspace.onDidOpenNotebookDocument((document) => this.attach(document)),
       vscode.workspace.onDidCloseNotebookDocument((document) => {
         this.mirrors.get(document)?.dispose();
         this.mirrors.delete(document);
+        this.bound.delete(document);
       }),
       vscode.workspace.onDidChangeNotebookDocument((event) => this.mirrors.get(event.notebook)?.localChanged(event)),
     );
     for (const document of vscode.workspace.notebookDocuments) this.attach(document);
+    void this.bind(vscode.window.activeNotebookEditor);
+  }
+
+  /**
+   * Make this controller the mirror's kernel. A cell execution, the only way
+   * to show a run and its outputs, can be created only by the selected
+   * controller, and VS Code selects one by itself only when a cell is run here:
+   * a mirror that only watches runs started in the browser would stay idle and empty.
+   */
+  private async bind(editor: vscode.NotebookEditor | undefined): Promise<void> {
+    const document = editor?.notebook;
+    if (!document || !this.mirrors.has(document) || this.bound.has(document)) return;
+    await vscode.commands.executeCommand("notebook.selectKernel", { notebookEditor: editor, id: this.controller.id, extension: this.extensionId })
+      .then(undefined, () => {});
   }
 
   op(tab: number, op: BrowserOp): Promise<unknown> {
@@ -80,7 +102,7 @@ export class ChromeMirrors implements vscode.Disposable {
     const stem = info.title.replace(/\.ipynb$/i, "").replace(/[\\/:*?"<>|]+/g, "_") || "notebook";
     const uri = vscode.Uri.from({ scheme: SCHEME, path: `/${tab}/${stem} (${PLATFORM[info.platform]}).ainb` });
     const document = await vscode.workspace.openNotebookDocument(uri);
-    await vscode.window.showNotebookDocument(document, { preview: false });
+    await this.bind(await vscode.window.showNotebookDocument(document, { preview: false }));
   }
 
   /** The notebook each tab last showed, so a reload is told from going to another notebook. */

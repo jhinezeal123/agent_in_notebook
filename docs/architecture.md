@@ -210,7 +210,7 @@ agent ──MCP stdio──► `ainb mcp` (relay không trạng thái)
 
 ## Agent (học từ openresearch_custom)
 
-orx có lớp `Harness` riêng cho từng agent (khoảng 30k dòng Rust) vì mỗi agent nói một giao thức khác nhau. Ở đây cả bốn agent đều nói ACP: Claude Code và Codex qua adapter npm chính thức, Gemini qua `--acp`, OpenCode qua `opencode acp`. Vì vậy chỉ cần **một** client ACP (`bridge/src/agents/acp-agent.ts`) và **một registry** (`registry.ts`), trong đó mỗi agent chỉ là "chạy thế nào và nhận biết có hay không". Agent ACP khác thêm vào bằng `agents.json`.
+orx có lớp `Harness` riêng cho từng agent (khoảng 30k dòng Rust) vì mỗi agent nói một giao thức khác nhau. Ở đây cả năm agent đều nói ACP: Claude Code và Codex qua adapter npm chính thức, Gemini qua `--acp`, Antigravity qua `agy acp`, OpenCode qua `opencode acp`. (Gemini CLI không còn nhận đăng nhập Google cá nhân, chỉ còn API key hoặc gói trả phí; tài khoản cá nhân dùng Antigravity.) Vì vậy chỉ cần **một** client ACP (`bridge/src/agents/acp-agent.ts`) và **một registry** (`registry.ts`), trong đó mỗi agent chỉ là "chạy thế nào và nhận biết có hay không". Agent ACP khác thêm vào bằng `agents.json`.
 
 Những gì giữ lại từ thiết kế orx:
 

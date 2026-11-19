@@ -117,8 +117,18 @@ const BUILTIN: AgentSpec[] = [
     name: "Gemini CLI",
     builtin: true,
     toolWaitMs: 300_000,
-    loginHint: "Sign in by running `gemini` once in a terminal, or set GEMINI_API_KEY.",
+    // A personal Google sign-in is refused since late 2026 (IneligibleTierError
+    // "This client is no longer supported"): only an API key or a paid tier works.
+    loginHint: "Set GEMINI_API_KEY, or use a paid Gemini Code Assist account. A personal Google sign-in no longer works in Gemini CLI: use Antigravity (`agy`) instead.",
     resolve: onPath("gemini", ["--acp"], "`gemini` is not on PATH. Install it with `npm i -g @google/gemini-cli`."),
+  },
+  {
+    id: "antigravity",
+    name: "Antigravity",
+    builtin: true,
+    toolWaitMs: 300_000,
+    loginHint: "Sign in by running `agy` once in a terminal.",
+    resolve: onPath("agy", ["acp"], "`agy` is not on PATH. Install the Antigravity CLI from https://antigravity.google."),
   },
   {
     id: "opencode",
