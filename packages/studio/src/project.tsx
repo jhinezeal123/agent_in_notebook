@@ -25,7 +25,7 @@ export function useCurrentProject() {
     hostRequest<string | null>("project.current").then((id) => setOpened((old) => (old === undefined ? id : old)), () => setOpened(null));
     return off;
   }, []);
-  const list = useMemo(() => [...(projects.data ?? [])].sort((a, b) => b.updatedAt - a.updatedAt), [projects.data]);
+  const list = useMemo(() => (projects.data ?? []).filter((p) => !p.scratch).sort((a, b) => b.updatedAt - a.updatedAt), [projects.data]);
   const project = projects.data && opened !== undefined ? pickProject(list, opened) : undefined;
   return { projects, list, project };
 }

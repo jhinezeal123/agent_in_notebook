@@ -8,12 +8,13 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { activePath } from "@orx/transcriptTree";
-import { fmtDuration, type ChatActiveRun, type ChatMessage, type ChatPart, type ChatSession, type Harness } from "@orx/api";
+import { fmtDuration, type ChatActiveRun, type ChatMessage, type ChatPart, type ChatSession, type EnvAnswer, type EnvRequestVar, type EnvScope, type Harness, type PromptAnswer } from "@orx/api";
 import { runConnectHost, runDisplay } from "@orx/runDisplay";
 import { statusLabel } from "@orx/components/StatusBadge";
 import { useModelName } from "@orx/components/pickerAgents";
 import { delegateLineage, delegateModelLabel, delegatesOf, delegateStatus, type DelegateStatus } from "@orx/delegates";
 import { firstLine } from "@orx/agentMessages";
+import { ltr } from "@orx/i18n";
 import { m } from "@orx/paraglide/messages.js";
 import { Markdown } from "./experiment.js";
 import { ResearchGate } from "./root.js";
@@ -24,8 +25,12 @@ export function ResearchChat({ projectId, sessionId }: { projectId: string; sess
   return <ResearchGate compact><ChatInner key={sessionId} projectId={projectId} sessionId={sessionId} /></ResearchGate>;
 }
 
+type PromptReply = Omit<PromptAnswer, "promptId">;
+
 /** The other chats of the project, by id, and opening one in the chat panel. */
 interface ChatLinks {
+  projectId: string;
+  modelName: ReturnType<typeof useModelName>;
   chat(id: string): ChatSession | undefined;
   open(id: string): void;
 }
@@ -63,9 +68,11 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
 
   const allSessions = useMemo(() => sessions.data ?? [], [sessions.data]);
   const links = useMemo<ChatLinks>(() => ({
+    projectId,
+    modelName,
     chat: (id) => allSessions.find((s) => s.id === id),
     open: (id) => void hostRequest("chat.select", { kind: "research", projectId, sessionId: id }),
-  }), [allSessions, projectId]);
+  }), [allSessions, projectId, modelName]);
   // Each delegate sits under the message that started it: the last one begun before it was.
   const delegatesByMessage = useMemo(() => {
     const out = new Map<string, DelegateRow[]>();
@@ -96,7 +103,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
       return false;
     }
   };
-  const respond = (promptId: string, answer: { approve?: boolean; answers?: string[] }) =>
+  const respond = (promptId: string, answer: PromptReply) =>
     void api.respondChat(sessionId, { promptId, ...answer }).catch((e) => setError(errorText(e)));
 
   return (
@@ -159,7 +166,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
   );
 }
 
-function Message({ message, onRespond }: { message: ChatMessage; onRespond: (promptId: string, answer: { approve?: boolean; answers?: string[] }) => void }) {
+function Message({ message, onRespond }: { message: ChatMessage; onRespond: (promptId: string, answer: PromptReply) => void }) {
   if (message.role === "user") {
     const notice = message.parts.find((p) => p.orx);
     if (notice) return <OrxNotice part={notice} />;
@@ -218,12 +225,13 @@ function ToolRow({ part }: { part: ChatPart }) {
   );
 }
 
-function Part({ part, onRespond }: { part: ChatPart; onRespond: (promptId: string, answer: { approve?: boolean; answers?: string[] }) => void }) {
+function Part({ part, onRespond }: { part: ChatPart; onRespond: (promptId: string, answer: PromptReply) => void }) {
   if (part.orx) return <OrxNotice part={part} />;
   switch (part.type) {
     case "text": return part.text ? <Markdown text={part.text} /> : null;
     case "reasoning": return part.text ? <details className="thought"><summary>Thinking</summary><Markdown text={part.text} /></details> : null;
     case "prompt": return part.prompt ? <Prompt part={part} onRespond={onRespond} /> : null;
+    case "steer": return part.text ? <div className="ub">{part.text}</div> : null;
     default: return null;
   }
 }
@@ -243,7 +251,7 @@ const SENT_KIND: Record<string, string> = { task: "Task from", message: "Message
 /** What another chat (or OpenResearch, about runs) sent this one: its sender opens that chat, the rest opens the whole message. */
 function SentCard({ part }: { part: ChatPart }) {
   const links = useContext(ChatLinksContext);
-  const modelName = useModelName();
+  const modelName = links?.modelName ?? (() => null);
   const [open, setOpen] = useState(false);
   const { kind, from } = part.orx!;
   const text = part.text ?? "";
@@ -274,7 +282,8 @@ const DELEGATE_STATUS: Record<DelegateStatus, string> = {
 
 /** A chat this one delegated to, under the turn that started it. */
 function DelegateCard({ row: { session, status }, onOpen }: { row: DelegateRow; onOpen: (id: string) => void }) {
-  const model = delegateModelLabel(session, useModelName());
+  const links = useContext(ChatLinksContext);
+  const model = delegateModelLabel(session, links?.modelName ?? (() => null));
   const ended = status === "finished" || status === "failed" || status === "stopped";
   const preview = ended ? firstLine(session.delegate?.answer || session.delegate?.error || "") : "";
   return (
@@ -292,9 +301,10 @@ function DelegateCard({ row: { session, status }, onOpen }: { row: DelegateRow; 
   );
 }
 
-function Prompt({ part, onRespond }: { part: ChatPart; onRespond: (promptId: string, answer: { approve?: boolean; answers?: string[] }) => void }) {
+function Prompt({ part, onRespond }: { part: ChatPart; onRespond: (promptId: string, answer: PromptReply) => void }) {
   const p = part.prompt!;
   const [picked, setPicked] = useState<string[]>([]);
+  if (p.kind === "env") return <EnvPrompt part={part} onRespond={onRespond} />;
   if (p.resolved) {
     const answer = p.answers?.join(", ") ?? (p.approved === undefined ? "" : p.approved ? "Allowed" : "Declined");
     return <div className="prompt done"><span className="muted">{p.kind === "question" ? p.question : p.kind === "plan" ? "Plan" : `Use ${p.tool ?? "a tool"}`}</span>{answer && <b> · {answer}</b>}</div>;
@@ -325,6 +335,115 @@ function Prompt({ part, onRespond }: { part: ChatPart; onRespond: (promptId: str
   );
 }
 
+function envPatternMatches(pattern: string, value: string): boolean {
+  // Keep inline validation safe without spawning a Web Worker (disallowed by VS Code webview CSP).
+  if (pattern.length > 256 || value.length > 4096) return true;
+  try {
+    return new RegExp(pattern).test(value);
+  } catch {
+    return true;
+  }
+}
+
+function EnvPrompt({ part, onRespond }: { part: ChatPart; onRespond: (promptId: string, answer: PromptReply) => void }) {
+  const p = part.prompt!;
+  const variables = p.variables ?? [];
+  if (p.resolved) {
+    const lines = variables.map((v) => {
+      const name = ltr(v.name);
+      if (v.savedTo === "global") return m.chat_env_saved_global({ name });
+      if (v.savedTo === "project") return m.chat_env_saved_project({ name });
+      return p.approved ? m.chat_env_left_unset({ name }) : null;
+    }).filter((text) => text !== null);
+    const text = p.approved === undefined
+      ? m.chat_env_ended()
+      : p.approved === false
+        ? m.chat_env_declined()
+        : lines.join(" · ") || m.chat_env_title();
+    return <div className="prompt done"><span className="muted">{text}</span></div>;
+  }
+  return <EnvPromptForm promptId={part.id} variables={variables} reason={p.question} onRespond={onRespond} />;
+}
+
+function EnvPromptForm({ promptId, variables, reason, onRespond }: {
+  promptId: string;
+  variables: EnvRequestVar[];
+  reason?: string;
+  onRespond: (promptId: string, answer: PromptReply) => void;
+}) {
+  const projectId = useContext(ChatLinksContext)?.projectId;
+  const { queries } = useWorkspace();
+  const saved = useQuery(queries.getEnvVarsQuery(projectId)).data;
+  const [values, setValues] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [selectedScope, setScope] = useState<EnvScope>("project");
+
+  const scope: EnvScope = projectId ? selectedScope : "global";
+  const savedVars = scope === "project" ? saved?.projectVars : saved?.vars;
+  const mismatches = useMemo(() => {
+    const out = new Set<string>();
+    for (const v of variables) {
+      const value = values.get(v.name)?.trim();
+      if (v.pattern && value && !envPatternMatches(v.pattern, value)) out.add(v.name);
+    }
+    return out;
+  }, [variables, values]);
+  const answers: EnvAnswer[] = variables.flatMap(({ name }) => {
+    const value = values.get(name)?.trim();
+    return value ? [{ name, value, scope, mismatched: mismatches.has(name) }] : [];
+  });
+  const save = () => { if (answers.length) onRespond(promptId, { approve: true, env: answers }); };
+
+  return (
+    <form className="prompt" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <b>{m.chat_env_title()}</b>
+      {reason && <p>{reason}</p>}
+      {variables.map((v) => {
+        const current = savedVars?.find((entry) => entry.key === v.name);
+        const value = values.get(v.name) ?? "";
+        const mismatched = mismatches.has(v.name);
+        return (
+          <label key={v.name} className="field">
+            <span className="row">
+              <code className="lab">{v.name}</code>
+              {current && <span className="pill">{m.chat_env_saved()}</span>}
+            </span>
+            {v.description && <span className="muted small">{v.description}</span>}
+            <input
+              className="inp"
+              type={v.secret ? "password" : "text"}
+              value={value}
+              placeholder={v.example}
+              aria-label={m.a11y_value_for({ name: ltr(v.name) })}
+              aria-invalid={mismatched || undefined}
+              autoComplete={v.secret ? "new-password" : "off"}
+              spellCheck={false}
+              onChange={(e) => {
+                const next = e.currentTarget.value;
+                setValues((all) => new Map(all).set(v.name, next));
+              }}
+            />
+            {mismatched && <span className="small warn">{v.example ? m.chat_env_mismatch_example({ example: ltr(v.example) }) : m.chat_env_mismatch()}</span>}
+            {current?.inProcessEnv && <span className="muted small">{m.chat_env_shell_wins({ name: ltr(v.name) })}</span>}
+          </label>
+        );
+      })}
+      {projectId && (
+        <label className="row small muted">
+          <span>{m.chat_env_save_scope()}</span>
+          <select className="inp narrow" value={scope} onChange={(e) => setScope(e.currentTarget.value as EnvScope)}>
+            <option value="project">{m.chat_env_save_to_project()}</option>
+            <option value="global">{m.chat_env_save_for_all_projects()}</option>
+          </select>
+        </label>
+      )}
+      <div className="opts">
+        <button type="submit" className="btn primary small" disabled={!answers.length}>{m.common_save()}</button>
+        <button type="button" className="btn small" onClick={() => onRespond(promptId, { approve: false })}>{m.chat_env_decline()}</button>
+      </div>
+    </form>
+  );
+}
+
 /** OpenResearch's ExperimentRunBanner: one row per run this chat started, folded when there are several. */
 function RunBanner({ runs }: { runs: ChatActiveRun[] }) {
   if (!runs.length) return null;
@@ -349,6 +468,7 @@ function RunRow({ item }: { item: ChatActiveRun }) {
     ? statusLabel(display.status, display.stopping)
     : run.status === "running" ? m.chat_experiment_running() : m.chat_experiment_starting();
   const connectHost = runConnectHost(run);
+  const waiting = display.waiting ?? (display.status === "queued" ? run.queueDetail : null);
   const name = experimentName || run.experimentId;
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -377,7 +497,7 @@ function RunRow({ item }: { item: ChatActiveRun }) {
           ? <Button small onClick={() => void hostRequest("open", { view: "settings", section: "compute", connectHost })}><Icon name="plug" /> {m.settings_connect()}</Button>
           : <Button small disabled={cancelling} onClick={() => void stop()}><Icon name="stop" /> {cancelling ? statusLabel(display.status, display.stopping) : m.common_stop()}</Button>}
       </span>
-      {display.status === "queued" && run.queueDetail && <span className="runrow-note muted" role="status">{run.queueDetail}</span>}
+      {waiting && <span className="runrow-note muted" role="status">{waiting}</span>}
       {error && <span className="runrow-note err-text" role="alert">{error}</span>}
     </div>
   );
