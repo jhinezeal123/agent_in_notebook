@@ -96,7 +96,7 @@ export function turnContext(info: NotebookInfo | null, cells: CellInfo[] | null,
   const lines = [
     `Notebook: ${info.title} (${PLATFORM_NAME[info.platform]})${file ? `, file ${file}` : ""}`,
     `Kernel: ${info.kernel}. Language: ${info.language}.`,
-    `Mode: ${SCOPE_LABEL[settings.scope]}. ${SCOPE_HINT[settings.scope]}${settings.review ? " Review is ON: each change waits for the user's approval." : ""}`,
+    `Access: ${SCOPE_LABEL[settings.scope]}. ${SCOPE_HINT[settings.scope]}${settings.review ? " Ask before changes is ON: each change waits for the user's approval." : ""}`,
   ];
   if (machine) lines.splice(2, 0, machine);
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.length ? targets.join(", ") : "none — ask the user to select one"}.`);

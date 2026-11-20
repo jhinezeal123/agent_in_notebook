@@ -167,8 +167,8 @@ describe.skipIf(!RUN)("Colab", () => {
     dumpOnFailure("write");
     const before = await nb.evaluate(() => (window as any).colab.global.notebook.cells.length);
     const first = await nb.evaluate(() => (window as any).colab.global.notebook.cells[0].getId());
-    await panel.getByLabel("Mode", { exact: true }).selectOption("write");
-    await panel.getByLabel("Review").uncheck();
+    await panel.getByLabel("Access", { exact: true }).selectOption("write");
+    await panel.getByLabel("Ask before changes").uncheck();
     // No runtime is connected: the notebook is still worked on as its file.
     await send(
       panel,
@@ -223,7 +223,7 @@ describe.skipIf(!RUN)("Colab", () => {
   }, 120_000);
 
   it("shows a change in Colab's inline diff and applies it from the chat", async () => {
-    await panel.getByLabel("Review").check();
+    await panel.getByLabel("Ask before changes").check();
     const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells[2].getId());
     await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "colab-github-demo.ipynb", cell_id: cellId, new_source: "print('reviewed')" } }]));
     // Colab's own Accept / Reject UI appears in the cell...
@@ -251,7 +251,7 @@ describe.skipIf(!RUN)("Colab", () => {
     await expect.poll(() => panel.locator(".badge.rejected").count()).toBe(1);
   }, 120_000);
 
-  it("refuses to run cells outside Autonomous mode", async () => {
+  it("refuses to run cells outside Write + run access", async () => {
     const cellId = await nb.evaluate(() => (window as any).colab.global.notebook.cells.find((c: any) => c.getType() === "code").getId());
     await send(panel, script([{ tool: "run_cells", args: { cell_ids: [cellId] } }]));
     await expect.poll(() => panel.locator(".msg.agent").last().textContent(), { timeout: 30_000 }).toContain("running cells is not allowed");
@@ -271,8 +271,8 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     await expect.poll(() => model.isEnabled(), { timeout: 30_000 }).toBe(true);
     expect(await panel.locator(".msg.user").count()).toBe(0);
     await model.selectOption("smart");
-    await panel.getByLabel("Mode", { exact: true }).selectOption("auto");
-    await panel.getByLabel("Review").uncheck();
+    await panel.getByLabel("Access", { exact: true }).selectOption("auto");
+    await panel.getByLabel("Ask before changes").uncheck();
 
     await send(
       panel,
@@ -296,7 +296,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     expect(src).toEqual(["# E2E", "x = 99\nprint(x + 1)", "raise ValueError('nope')"]);
 
     // Review: our card appears in the cell; accepting in the page applies it.
-    await panel.getByLabel("Review").check();
+    await panel.getByLabel("Ask before changes").check();
     await send(panel, script([{ tool: "NotebookEdit", args: { notebook_path: "e2e.agent.ipynb", cell_id: "calc", new_source: "x = 1\nprint(x)" } }]));
     const card = nb.locator(".ainb-review");
     await card.waitFor({ timeout: 30_000 });
@@ -319,7 +319,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     expect(await nb.evaluate(() => (window as any).jupyterapp.shell.currentWidget.content.widgets.find((w: any) => w.model.id === "calc").model.sharedModel.getSource())).toBe("x = 7\nprint(x) # user edit");
     expect(await card.count()).toBe(0);
 
-    // Review on + Autonomous: a run waits for permission.
+    // Ask before changes + Write + run: a run waits for permission.
     await send(panel, script([{ tool: "run_cells", args: { cell_ids: ["calc"] } }]));
     const prompt = panel.locator(".card.prompt.waiting");
     await prompt.waitFor({ timeout: 30_000 });
@@ -340,7 +340,7 @@ describe.skipIf(!RUN || !(JUPYTER || JUPYTER_URL))("Jupyter (Kaggle's editor)", 
     await prompt.getByRole("button", { name: "Don't run", exact: true }).click();
     await expect.poll(last, { timeout: 30_000 }).toContain("The user declined to run this command");
 
-    await panel.getByLabel("Review").uncheck();
+    await panel.getByLabel("Ask before changes").uncheck();
     if (!JUPYTER_URL) {
       // This Jupyter runs here; on Windows the kernel's machine has no terminal sessions to offer.
       if (process.platform !== "win32") return;

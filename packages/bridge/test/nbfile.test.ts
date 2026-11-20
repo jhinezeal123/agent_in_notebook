@@ -126,7 +126,7 @@ describe("the notebook as a file on its machine", () => {
     doc.cells[0].source = ["y = 22"];
     const res = await callTool(cellMode, "Write", { file_path: "test.ipynb", content: JSON.stringify(doc) });
     expect(res.isError).toBe(true);
-    expect(res.text).toMatch(/^Applied: cell c1 changed\.\nChange to cell c2: not applied\. Mode is 'Edit cell'/);
+    expect(res.text).toMatch(/^Applied: cell c1 changed\.\nChange to cell c2: not applied\. Access is 'Edit cell'/);
     expect(nb.cells.map((c) => c.source)).toEqual(["y = 2", "x = 11", "## Notes"]);
     expect(fileCells(nb)[0].source).toEqual(["y = 2"]);
     expect((await callTool(ctx, "Write", { file_path: file, content: "not json" })).text).toMatch(/content must be the notebook as \.ipynb JSON/);

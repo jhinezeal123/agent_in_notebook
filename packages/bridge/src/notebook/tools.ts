@@ -1066,7 +1066,7 @@ export function describeInfo(info: NotebookInfo, settings: ChatSettings, targets
     file ? `Notebook file: ${file}` : "",
     `Cells: ${info.cellCount}. Kernel: ${info.kernel}. Language: ${info.language}.`,
     `Active cell: ${info.activeCellId ?? "none"}${info.selectedCellIds.length > 1 ? `; selected: ${info.selectedCellIds.join(", ")}` : ""}.`,
-    `Mode: ${SCOPE_LABEL[settings.scope]}${settings.review ? " with review (each change waits for the user's approval)" : ""}.`,
+    `Access: ${SCOPE_LABEL[settings.scope]}${settings.review ? ", asking before changes (each change waits for the user's approval)" : ""}.`,
   ].filter(Boolean);
   if (settings.scope === "cell") lines.push(`Editable cell(s): ${targets.join(", ") || "none selected"}.`);
   return lines.join("\n");

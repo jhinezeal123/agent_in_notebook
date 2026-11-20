@@ -166,7 +166,7 @@ describe("the terminal on the notebook's machine", () => {
     expect((await callTool(fresh, "shell_interrupt", {})).text).toMatch(/^exit code 130/);
   });
 
-  it("is refused outside Autonomous mode, and asks first with review on", async () => {
+  it("is refused outside Write + run access, and asks first with Ask before changes on", async () => {
     const nb = new FakeNotebook([]);
     for (const [tool, args] of [["Bash", { command: "ls" }], ["run_code", { code: "1" }], ["shell_input", { text: "y" }], ["Write", { file_path: "a.txt", content: "x" }]] as const) {
       const res = await callTool(context(nb, { settings: { scope: "write" } }), tool, args);

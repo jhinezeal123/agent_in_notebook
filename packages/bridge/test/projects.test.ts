@@ -263,7 +263,7 @@ describe("project tools", () => {
     mkdirSync(join(p.artifactsDir, "notebooks"), { recursive: true });
     writeFileSync(join(p.artifactsDir, "notebooks", "theirs.ipynb"), "the user's notebook");
     const cell = await open("colab:/drive/modes-cell", { projectId: p.id, settings: { scope: "cell" } });
-    expect(await turn(cell.ext, cell.chatId, script([{ server: "project", tool: "save_notebook", args: {} }]))).toMatch(/RESULT save_notebook \(error\): Mode is 'Edit cell'/);
+    expect(await turn(cell.ext, cell.chatId, script([{ server: "project", tool: "save_notebook", args: {} }]))).toMatch(/RESULT save_notebook \(error\): Access is 'Edit cell'/);
     cell.ext.close();
 
     const reviewed = await open("colab:/drive/modes-review", { projectId: p.id, settings: { scope: "write", review: true } });
@@ -280,7 +280,7 @@ describe("project tools", () => {
     expect(readFileSync(join(p.artifactsDir, "notebooks", "theirs.ipynb"), "utf8")).toBe("the user's notebook");
     // Copying to the notebook's machine changes files there: not in Write mode.
     const write = await open("colab:/drive/modes-write", { projectId: p.id, settings: { scope: "write", review: false } });
-    expect(await turn(write.ext, write.chatId, script([{ server: "project", tool: "artifact_read", args: { path: "notebooks/theirs.ipynb", to_vm: "/content/x.ipynb" } }]))).toMatch(/RESULT artifact_read \(error\): Mode is 'Write'/);
+    expect(await turn(write.ext, write.chatId, script([{ server: "project", tool: "artifact_read", args: { path: "notebooks/theirs.ipynb", to_vm: "/content/x.ipynb" } }]))).toMatch(/RESULT artifact_read \(error\): Access is 'Write'/);
     write.ext.close();
     free.ext.close();
   });

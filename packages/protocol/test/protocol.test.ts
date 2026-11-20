@@ -64,7 +64,7 @@ describe("decide", () => {
     expect(decide(s({ scope: "cell" }), "read", null, [])).toMatchObject({ allow: true });
   });
 
-  it("saves to the project in Write and Autonomous, asking first with Review on", () => {
+  it("saves to the project in Write and Write + run, asking first with Ask before changes on", () => {
     expect(decide(s({ scope: "cell" }), "save", null, [])).toMatchObject({ allow: false });
     expect(decide(s({ scope: "write", review: false }), "save", null, [])).toEqual({ allow: true, review: false, askBeforeRun: false });
     expect(decide(s({ scope: "auto", review: true }), "save", null, [])).toEqual({ allow: true, review: false, askBeforeRun: true });

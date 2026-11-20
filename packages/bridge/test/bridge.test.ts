@@ -216,7 +216,7 @@ describe("chat with a notebook", () => {
     expect(text).toContain("[saw playbook]");
     expect(text).toContain("<notebook-context>");
     expect(text).toContain("[0] c1 code: import pandas as pd");
-    expect(text).toContain("Mode: Write");
+    expect(text).toContain("Access: Write");
     text = await turn(ext, chatId, "again");
     expect(text.match(/\[saw playbook\]/g)).toHaveLength(1);
 
@@ -388,10 +388,10 @@ describe("modes", () => {
         { tool: "run_cells", args: { cell_ids: ["c1"] } },
       ]),
     );
-    expect(text).toContain("RESULT NotebookEdit (error): Change to cell c2: not applied. Mode is 'Edit cell': only cell(s) c1 may be edited.");
+    expect(text).toContain("RESULT NotebookEdit (error): Change to cell c2: not applied. Access is 'Edit cell': only cell(s) c1 may be edited.");
     expect(text).toContain("RESULT NotebookEdit: Applied: cell c1 changed.");
-    expect(text).toMatch(/RESULT NotebookEdit \(error\): New code cell after cell c2: not applied\. Mode is 'Edit cell'/);
-    expect(text).toMatch(/RESULT run_cells \(error\): Mode is 'Edit cell': running cells is not allowed/);
+    expect(text).toMatch(/RESULT NotebookEdit \(error\): New code cell after cell c2: not applied\. Access is 'Edit cell'/);
+    expect(text).toMatch(/RESULT run_cells \(error\): Access is 'Edit cell': running cells is not allowed/);
     expect(nb.cells.map((c) => c.source)).toEqual(["a = 10", "b = 2"]);
     expect(nb.ran).toEqual([]);
 
@@ -415,7 +415,7 @@ describe("modes", () => {
     );
     expect(text).toContain("RESULT NotebookEdit: Applied: new code cell c2 inserted at index 1.");
     expect(text).toContain("RESULT NotebookEdit: Applied: cell c1 deleted.");
-    expect(text).toMatch(/RESULT run_all \(error\): Mode is 'Write': running cells is not allowed/);
+    expect(text).toMatch(/RESULT run_all \(error\): Access is 'Write': running cells is not allowed/);
     expect(nb.cells.map((c) => c.source)).toEqual(["print(a)"]);
     expect(nb.ran).toEqual([]);
     ext.close();
@@ -682,8 +682,16 @@ describe("plots and notebook-only mode", () => {
     ext2.close();
   });
 
-  it("refuses the agent's own tools in notebook-only mode but still asks about notebook tools", async () => {
-    const { ext, chatId } = await setup([]); // notebookOnly defaults to on
+  it("allows notebook tools without asking when Review is off", async () => {
+    const { ext, chatId } = await setup([]); // review off, notebookOnly on
+    const text = await turn(ext, chatId, script([{ permission: "mcp_notebook_Read" }]));
+    expect(text).toContain("PERMISSION: allow");
+    expect(ext.parts().some((p) => p.type === "prompt")).toBe(false);
+    ext.close();
+  });
+
+  it("refuses the agent's own tools in notebook-only mode but still asks about notebook tools under Review", async () => {
+    const { ext, chatId } = await setup([], { review: true }); // notebookOnly defaults to on
     let text = await turn(ext, chatId, script([{ permission: "Run shell: rm -rf ~" }]));
     expect(text).toContain("PERMISSION: deny");
     expect(ext.parts().some((p) => p.type === "notice" && p.text.includes('Refused "Run shell: rm -rf ~": Notebook only is on'))).toBe(true);

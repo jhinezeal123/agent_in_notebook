@@ -345,7 +345,7 @@ export function App() {
             tools={
               <>
                 {!mentor && <Picker
-                  label="Mode"
+                  label="Access"
                   class={`scope scope-${settings.scope}`}
                   value={settings.scope}
                   title={SCOPE_HINT[settings.scope]}
@@ -387,9 +387,9 @@ export function App() {
           />
           <div class="input-status">
             {!mentor && <>
-            <label class="toggle" title="Show each change as a diff to apply or reject">
+            <label class="toggle" title="Each change waits as a diff to apply or reject, and with Write + run each run or command waits for your OK. Off: the agent goes ahead without asking.">
               <input type="checkbox" class="switch" checked={settings.review} onChange={(e) => updateSettings({ ...settings, review: e.currentTarget.checked })} />
-              Review
+              Ask before changes
             </label>
             <label class="toggle" title="Refuse the agent's requests to use its own tools on this computer (shell, file edits, web). Notebook content could try to talk the agent into them.">
               <input type="checkbox" class="switch" checked={settings.notebookOnly} onChange={(e) => updateSettings({ ...settings, notebookOnly: e.currentTarget.checked })} />

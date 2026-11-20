@@ -40,7 +40,7 @@ export type PolicyDecision =
 export const SCOPE_LABEL: Record<Scope, string> = {
   cell: "Edit cell",
   write: "Write",
-  auto: "Autonomous",
+  auto: "Write + run",
 };
 
 export const SCOPE_HINT: Record<Scope, string> = {
@@ -70,8 +70,8 @@ export function decide(
           allow: false,
           reason:
             effectiveTargets.length === 0
-              ? "Mode is 'Edit cell' but no target cell is selected. Ask the user to select the cell to edit."
-              : `Mode is 'Edit cell': only cell(s) ${effectiveTargets.join(", ")} may be edited.`,
+              ? "Access is 'Edit cell' but no target cell is selected. Ask the user to select the cell to edit."
+              : `Access is 'Edit cell': only cell(s) ${effectiveTargets.join(", ")} may be edited.`,
         };
       }
       return { allow: true, review, askBeforeRun: false };
@@ -81,13 +81,13 @@ export function decide(
       if (scope === "cell") {
         return {
           allow: false,
-          reason: `Mode is 'Edit cell': you may only edit cell(s) ${effectiveTargets.join(", ") || "(none selected)"}; adding, deleting or moving cells is not allowed.`,
+          reason: `Access is 'Edit cell': you may only edit cell(s) ${effectiveTargets.join(", ") || "(none selected)"}; adding, deleting or moving cells is not allowed.`,
         };
       }
       return { allow: true, review: action === "move" ? false : review, askBeforeRun: false };
     case "save":
       if (scope === "cell") {
-        return { allow: false, reason: "Mode is 'Edit cell': saving to the project is not allowed. Tell the user what you would save instead." };
+        return { allow: false, reason: "Access is 'Edit cell': saving to the project is not allowed. Tell the user what you would save instead." };
       }
       return { allow: true, review: false, askBeforeRun: review };
     case "run":
@@ -98,8 +98,8 @@ export function decide(
           allow: false,
           reason:
             action === "execute"
-              ? `Mode is '${SCOPE_LABEL[scope]}': commands, code and changes to files on the notebook's machine are not allowed. Tell the user what you would run or change instead.`
-              : `Mode is '${SCOPE_LABEL[scope]}': running cells is not allowed. Tell the user which cells to run instead.`,
+              ? `Access is '${SCOPE_LABEL[scope]}': commands, code and changes to files on the notebook's machine are not allowed. Tell the user what you would run or change instead.`
+              : `Access is '${SCOPE_LABEL[scope]}': running cells is not allowed. Tell the user which cells to run instead.`,
         };
       }
       return { allow: true, review: false, askBeforeRun: review && action !== "interrupt" };

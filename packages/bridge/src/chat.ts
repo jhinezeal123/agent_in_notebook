@@ -1112,6 +1112,13 @@ ${st.place.branch}`);
       });
       return Promise.resolve(reject ? { outcome: { outcome: "selected", optionId: reject.optionId } } : { outcome: { outcome: "cancelled" } });
     }
+    if (!this.settings.review && this.isNotebookPermission(req)) {
+      // Some agents (Antigravity) ask before every MCP call whatever their mode.
+      // Our notebook tools have their own gate, Review: with it off the user
+      // chose not to be asked, so a second question would only stall the turn.
+      const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
+      if (allow) return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
+    }
     return this.ask(title, detail, req.options.map((o) => ({ id: o.optionId, name: o.name, kind: o.kind })), signal).then((answer) =>
       answer === "cancelled" ? { outcome: { outcome: "cancelled" } } : { outcome: { outcome: "selected", optionId: answer } },
     );
