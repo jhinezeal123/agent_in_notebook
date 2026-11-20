@@ -49,6 +49,7 @@ export interface OrxProject {
   name: string;
   repoPath: string;
   artifactsDir: string;
+  scratch?: boolean;
   updatedAt: number;
 }
 
@@ -163,7 +164,7 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     const res = await fetch(`${this.status.url}/api/projects`);
     if (!res.ok) throw new Error(`OpenResearch answered HTTP ${res.status}.`);
     const body = await res.json() as { projects?: OrxProject[] };
-    return body.projects ?? [];
+    return (body.projects ?? []).filter((p) => !p.scratch);
   }
 
   /** The project the right side bar shows. */

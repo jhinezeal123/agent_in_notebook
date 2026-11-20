@@ -66,6 +66,7 @@ function ResearchStart() {
   const [error, setError] = useState<string | null>(null);
 
   const projects = useQuery(queries.listProjectsQuery());
+  const realProjects = useMemo(() => (projects.data ?? []).filter((p) => !p.scratch), [projects.data]);
   const harnesses = useQuery(queries.getHarnessesQuery());
   const compute = useQuery(queries.getComputeSettingsQuery());
   const ready = (harnesses.data ?? []).filter((h: Harness) => h.agentReady);
@@ -75,9 +76,9 @@ function ResearchStart() {
   const resolved = useQuery({ ...queries.resolvePaperQuery(paper?.paperId ?? ""), enabled: !!paper });
   // Where new projects go: next to the most recent one, else where OpenResearch's own form puts them.
   const home = useMemo(() => {
-    const recent = [...(projects.data ?? [])].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    const recent = [...realProjects].sort((a, b) => b.updatedAt - a.updatedAt)[0];
     return recent ? parentOf(recent.path || recent.repoPath) : "~/OpenResearch";
-  }, [projects.data]);
+  }, [realProjects]);
   const slug = slugify(name);
   useEffect(() => { if (source !== "existing" && slug) setLocation(join(home, slug)); }, [slug, home, source]);
   useEffect(() => { if (paper && !name) setName(slugify((paper.title ?? paper.paperId).split(":")[0]!)); }, [paper]);
@@ -87,7 +88,7 @@ function ResearchStart() {
     setError(null);
     try {
       let project: Project | undefined;
-      if (source === "existing" && projectId) project = projects.data?.find((p) => p.id === projectId);
+      if (source === "existing" && projectId) project = realProjects.find((p) => p.id === projectId);
       else {
         const body = source === "paper"
           ? { creationMode: "paper" as const, name: name || slug, path: location, paperId: paper!.paperId, cloneUrl: resolved.data?.repoUrl ?? undefined, createFolder: true, requireNewFolder: false, initializeGit: true }
@@ -128,10 +129,10 @@ function ResearchStart() {
         )}
         {source === "existing" && (
           <>
-            {!!projects.data?.length && (
+            {!!realProjects.length && (
               <div className="radios">
                 <span className="lab">OpenResearch projects</span>
-                {[...projects.data].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8).map((p) => (
+                {[...realProjects].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8).map((p) => (
                   <label key={p.id}><input type="radio" name="proj" checked={projectId === p.id} onChange={() => { setProjectId(p.id); setFolder(null); }} /> {p.name} <small>{p.repoPath}</small></label>
                 ))}
               </div>

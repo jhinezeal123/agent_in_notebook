@@ -8,6 +8,7 @@ import { useWorkspace } from "@orx/workspace";
 import { buildHistoryNodes, layoutLineage, type HistoryRow } from "@orx/components/experimentLineageModel";
 import type { ChatSession, Project } from "@orx/api";
 import { delegateLineage, delegateModelLabel, delegateStatus } from "@orx/delegates";
+import { useModelName } from "@orx/components/pickerAgents";
 import { pickProject } from "./messages.js";
 import { ResearchGate } from "./root.js";
 import { Pane, useSelectedChat } from "./sidebar.js";
@@ -24,7 +25,7 @@ export function useCurrentProject() {
     hostRequest<string | null>("project.current").then((id) => setOpened((old) => (old === undefined ? id : old)), () => setOpened(null));
     return off;
   }, []);
-  const list = useMemo(() => [...(projects.data ?? [])].sort((a, b) => b.updatedAt - a.updatedAt), [projects.data]);
+  const list = useMemo(() => (projects.data ?? []).filter((p) => !p.scratch).sort((a, b) => b.updatedAt - a.updatedAt), [projects.data]);
   const project = projects.data && opened !== undefined ? pickProject(list, opened) : undefined;
   return { projects, list, project };
 }
@@ -91,6 +92,7 @@ function ProjectChatsInner() {
 /** The project's research chats; a click shows one in the middle. */
 function ChatList({ project }: { project: Project }) {
   const { queries, api } = useWorkspace();
+  const modelName = useModelName();
   const selected = useSelectedChat();
   const sessions = useQuery(queries.listChatSessionsQuery(project.id));
   const all = sessions.data ?? [];
@@ -126,9 +128,9 @@ function ChatList({ project }: { project: Project }) {
         const asking = s.awaitingInput || status === "asking" || status === "approval";
         return (
           <div key={s.id} className={`item${on ? " sel" : ""}`} style={{ paddingLeft: 20 + 14 * level }} onClick={() => void hostRequest("chat.select", { kind: "research", projectId: project.id, sessionId: s.id })}
-            title={level ? `Sub-agent: ${s.title || delegateModelLabel(s)}` : s.title ?? undefined}>
+            title={level ? `Sub-agent: ${s.title || delegateModelLabel(s, modelName)}` : s.title ?? undefined}>
             <Icon name={level ? "branch" : "comment"} />
-            <span className="lbl">{s.title || (level ? delegateModelLabel(s) || "Sub-agent" : "New chat")}</span>
+            <span className="lbl">{s.title || (level ? delegateModelLabel(s, modelName) || "Sub-agent" : "New chat")}</span>
             <span className="tail">
               {asking ? <span className="ask" title={status === "approval" ? "Waiting for your approval" : "Waiting for your answer"}>?</span>
                 : s.busy || status === "running" ? <span className="dot pulse" style={{ background: "var(--st-running)" }} title="Working" />

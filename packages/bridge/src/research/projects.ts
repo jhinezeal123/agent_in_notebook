@@ -32,6 +32,7 @@ export interface OrxProject {
   baselineBranch?: string;
   paperId?: string | null;
   githubUrl?: string | null;
+  scratch?: boolean;
   updatedAt: number;
 }
 
@@ -158,7 +159,7 @@ export class ResearchProjects {
 
   async listProjects(wait = false): Promise<OrxProject[]> {
     const r = await this.api<{ projects?: OrxProject[] }>("GET", "/api/projects", { wait });
-    return Array.isArray(r.projects) ? r.projects : [];
+    return (Array.isArray(r.projects) ? r.projects : []).filter((p) => !p.scratch);
   }
 
   /**

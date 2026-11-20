@@ -97,6 +97,7 @@ function typecheck() {
         "react/*": [`${rel(join(ui, "node_modules/@types/react"))}/*`],
         "react-dom/*": [`${rel(join(ui, "node_modules/@types/react-dom"))}/*`],
         "@tanstack/react-query": [rel(join(ui, "node_modules/@tanstack/react-query"))],
+        "@clo/react-mutation": [rel(join(ui, "node_modules/@clo/react-mutation/_dist/src/mod.d.ts"))],
         // OpenResearch's files outside ui/ (downstream/) find its packages here.
         "*": [`${rel(join(ui, "node_modules/@types"))}/*`, `${rel(join(ui, "node_modules"))}/*`],
       },
