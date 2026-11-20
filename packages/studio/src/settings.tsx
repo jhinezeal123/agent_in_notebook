@@ -223,7 +223,7 @@ function Environment() {
   const reload = () => void client.invalidateQueries({ queryKey: queries.getEnvVarsQuery().queryKey });
   const save = async () => {
     setError(null);
-    try { await api.setEnvVar(key.trim(), value); setKey(""); setValue(""); reload(); } catch (e) { setError(errorText(e)); }
+    try { await api.setEnvVar({ key: key.trim(), value }); setKey(""); setValue(""); reload(); } catch (e) { setError(errorText(e)); }
   };
   return (
     <>
@@ -232,7 +232,7 @@ function Environment() {
       <div className="tblwrap">
         <table className="tbl">
           <tbody>
-            {(vars.data ?? []).map((v) => (
+            {(vars.data?.vars ?? []).map((v) => (
               <tr key={v.key}>
                 <td className="mono">{v.key}</td>
                 <td className="mono muted">{v.value ?? v.maskedValue}{v.inProcessEnv && <span className="pill">Overridden by env</span>}</td>

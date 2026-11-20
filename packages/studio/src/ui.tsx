@@ -50,10 +50,10 @@ export function Icon({ name, title }: { name: keyof typeof PATHS | string; title
 }
 
 const STATUS_COLOR: Record<HistoryStatus, string> = {
-  done: "var(--st-done)", failed: "var(--st-failed)", running: "var(--st-running)", cancelled: "var(--st-cancelled)", lost: "var(--st-muted)", none: "var(--st-muted)",
+  done: "var(--st-done)", failed: "var(--st-failed)", running: "var(--st-running)", stale: "var(--st-queued)", cancelled: "var(--st-cancelled)", lost: "var(--st-muted)", none: "var(--st-muted)",
 };
 
-/** OpenResearch's marks: ● done, ◆ failed, ◐ running, ⊘ cancelled or lost, ○ not run. */
+/** OpenResearch's marks: ● done, ◆ failed, ◐ running, ◌ stale, ⊘ cancelled or lost, ○ not run. */
 export function StatusShape({ status, root }: { status: HistoryStatus; root?: boolean }) {
   const c = STATUS_COLOR[status];
   return (
@@ -63,6 +63,7 @@ export function StatusShape({ status, root }: { status: HistoryStatus; root?: bo
       {status === "failed" && <path d="M7 2.6 11.4 7 7 11.4 2.6 7z" fill={c} />}
       {status === "running" && <><circle cx="7" cy="7" r="3.6" fill="none" stroke={c} strokeWidth="1.5" /><path d="M7 3.4a3.6 3.6 0 0 1 0 7.2z" fill={c} /></>}
       {(status === "cancelled" || status === "lost") && <><circle cx="7" cy="7" r="3.6" fill="none" stroke={c} strokeWidth="1.4" /><path d="M4.6 9.4 9.4 4.6" stroke={c} strokeWidth="1.4" /></>}
+      {status === "stale" && <circle cx="7" cy="7" r="3.6" fill="none" stroke={c} strokeWidth="1.4" strokeDasharray="1.4 1.4" />}
       {status === "none" && <circle cx="7" cy="7" r="3.6" fill="none" stroke={c} strokeWidth="1.4" />}
     </svg>
   );

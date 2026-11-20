@@ -10,7 +10,9 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { queryOptions, useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutate } from "@clo/react-mutation";
 import { useWorkspace } from "@orx/workspace";
+import { mutAddOpenResearchSshKey, mutSignOutOpenResearch } from "@orx/queries/settings";
 import { m } from "@orx/paraglide/messages.js";
 import { fmtClock, ltr } from "@orx/i18n";
 import { worstPerAlias } from "@orx/engineHosts";
@@ -342,7 +344,7 @@ export function SshSection() {
       {hosts === null ? (
         <LoadingRow><Spinner /> {m.settings_page_reading_ssh_config()}</LoadingRow>
       ) : hosts.length === 0 ? (
-        <p className="empty-box">{m.settings_page_no_hosts_found_in_ssh_config()}</p>
+        <p className="empty-box">{m.ssh_no_hosts()}</p>
       ) : (
         <div className="hosts">
           {hosts.map((h) => {
@@ -644,19 +646,19 @@ export function SlurmSection() {
 // ------------------------------------------------------------------ OpenResearch
 
 function SshKeyCard({ sshKey }: { sshKey: NonNullable<OpenResearchSettings["sshKeyToAdd"]> }) {
-  const { useAddOpenResearchSshKey } = useWorkspace().queries;
-  const add = useAddOpenResearchSshKey();
+  const workspace = useWorkspace();
+  const add = useMutate(mutAddOpenResearchSshKey);
   const [added, setAdded] = useState(false);
   return (
     <div className="setting-card">
       <code dir="ltr" className="ch-break">{sshKey.path}</code>
       {sshKey.fingerprint ? <code dir="ltr" className="muted small ch-break">{sshKey.fingerprint}</code> : <span className="muted small">{m.settings_ssh_key_new()}</span>}
       <p dir="auto" className="muted small">{m.settings_ssh_key_upload_note()}</p>
-      {add.error && <ErrorText>{add.error.message}</ErrorText>}
+      {add.error != null && <ErrorText>{errorMessage(add.error)}</ErrorText>}
       {added && <p className="ok-text small" role="status">{m.settings_ssh_key_added()}</p>}
       <div className="row end">
-        <Button primary disabled={add.isPending} onClick={() => add.mutate(undefined, { onSuccess: () => setAdded(true) })}>
-          {add.isPending ? <Spinner /> : <Icon name="check" />} {add.isPending ? m.settings_ssh_key_adding() : add.isError ? m.app_retry() : m.settings_ssh_key_add()}
+        <Button primary disabled={add.isMutating} onClick={() => add.runWithOptions(workspace, { onSuccessUi: () => setAdded(true), onError: () => {} })}>
+          {add.isMutating ? <Spinner /> : <Icon name="check" />} {add.isMutating ? m.settings_ssh_key_adding() : add.isError ? m.app_retry() : m.settings_ssh_key_add()}
         </Button>
       </div>
     </div>
@@ -664,7 +666,8 @@ function SshKeyCard({ sshKey }: { sshKey: NonNullable<OpenResearchSettings["sshK
 }
 
 export function OpenResearchSection({ remote }: { remote: boolean }) {
-  const { getOpenResearchSettingsQuery, useOpenResearchAccount, useAlphaXivFolders, useSignOutOpenResearch } = useWorkspace().queries;
+  const workspace = useWorkspace();
+  const { getOpenResearchSettingsQuery, useOpenResearchAccount, useAlphaXivFolders } = workspace.queries;
 
   const settingsQuery = useQuery(getOpenResearchSettingsQuery());
   const accountQuery = useOpenResearchAccount();
@@ -681,7 +684,7 @@ export function OpenResearchSection({ remote }: { remote: boolean }) {
   const loadError = settingsQuery.error?.message;
   const busy = settingsQuery.isFetching;
   const refresh = () => { void accountQuery.refetch(); return settingsQuery.refetch(); };
-  const logout = useSignOutOpenResearch();
+  const logout = useMutate(mutSignOutOpenResearch);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [signInOpened, setSignInOpened] = useState(false);
@@ -769,7 +772,7 @@ export function OpenResearchSection({ remote }: { remote: boolean }) {
       {signInOpened && <p className="muted small" role="status">A terminal opened in VS Code. Sign in there, then press “{m.settings_check_again()}”.</p>}
       <div className="row end ch-actions">
         {(account?.apiUrl || s?.apiUrl) && <ExtLink href={`${(account?.apiUrl || s?.apiUrl || "").replace(/\/$/, "")}/auth/login`}>{m.settings_openresearch_dashboard()} ↗</ExtLink>}
-        {!remote && !signedOut && (account?.loggedIn || s?.loggedIn) && <Button disabled={busy || logout.isPending} onClick={() => setConfirmSignOut(true)}>{m.settings_openresearch_sign_out()}</Button>}
+        {!remote && !signedOut && (account?.loggedIn || s?.loggedIn) && <Button disabled={busy || logout.isMutating} onClick={() => setConfirmSignOut(true)}>{m.settings_openresearch_sign_out()}</Button>}
         <Button onClick={() => void refresh()} disabled={busy}><Icon name="refresh" /> {busy ? m.common_checking() : m.settings_check_again()}</Button>
         {!remote && s && signedOut && (
           <Button primary disabled={busy} onClick={() => {
@@ -783,7 +786,7 @@ export function OpenResearchSection({ remote }: { remote: boolean }) {
       {confirmSignOut && (
         <ConfirmModal title={m.settings_openresearch_sign_out_title()} text={m.settings_openresearch_sign_out_description()} confirm={m.settings_openresearch_sign_out()} destructive
           onCancel={() => setConfirmSignOut(false)}
-          onConfirm={() => { setConfirmSignOut(false); void logout.mutateAsync().catch((e: unknown) => setSignInError(errorMessage(e))); }} />
+          onConfirm={() => { setConfirmSignOut(false); logout.runWithOptions(workspace, { onError: (e) => setSignInError(errorMessage(e)) }); }} />
       )}
     </>
   );

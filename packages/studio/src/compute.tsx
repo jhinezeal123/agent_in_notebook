@@ -1,7 +1,7 @@
 // Settings > Compute: OpenResearch's compute tab in VS Code's look. The same
-// parts as in OpenResearch (run engine switch, running instances, default
-// destination with flavor, tiles for the ready and the other backends, a detail
-// page per backend, a quick setup dialog for the token-based ones), on the same
+// parts as in OpenResearch (running instances, default destination with flavor,
+// tiles for the ready and the other backends, a detail page per backend, a quick
+// setup dialog for the token-based ones), on the same
 // data (its queries, its strings and logos); only the elements are ours.
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -11,12 +11,12 @@ import { TARGET_LABELS } from "@orx/computeTargets";
 import { BackendBadge, BackendLogo } from "@orx/components/BackendLogos";
 import { worstPerAlias } from "@orx/engineHosts";
 import { runActive } from "@orx/runDisplay";
-import { fmtBytes, fmtDuration, fmtNumber, timeAgo, type ComputeSettings, type ComputeTargetId, type ComputeTargetSummary, type LocalMachine, type Run } from "@orx/api";
+import { fmtDuration, fmtNumber, timeAgo, type ComputeSettings, type ComputeTargetId, type ComputeTargetSummary, type LocalMachine, type Run } from "@orx/api";
 import { m } from "@orx/paraglide/messages.js";
-import { ltr } from "@orx/i18n";
+import { fmtBytes, ltr } from "@orx/i18n";
 import * as downstream from "@orx/../../downstream/catalog";
 import { Banner, Button, Icon, RunBadge, errorText } from "./ui.js";
-import { ConfirmModal, ExtLink, LoadingRow, Modal, Spinner, Badge, Switch, TextInput } from "./compute-ui.js";
+import { ConfirmModal, ExtLink, LoadingRow, Modal, Spinner, Badge, TextInput } from "./compute-ui.js";
 import { HfSection, K8sSection, ModalSection, RaySection, TinkerSection, VercelSection } from "./compute-quick.js";
 import { KaggleSection, OpenResearchSection, SlurmSection, SshSection } from "./compute-hosts.js";
 
@@ -120,39 +120,6 @@ function Picker({ choices, value, disabled, icon, onSelect }: { choices: Choice[
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ run engine
-
-function RunEngineSetting() {
-  const { getRunEngineQuery } = useWorkspace().queries;
-  const { setRunEngine } = useWorkspace().api;
-  const id = useId();
-  const engineQuery = useQuery(getRunEngineQuery());
-  const engineMutation = useMutation({ mutationFn: setRunEngine });
-  return (
-    <div className="setting-card">
-      <div className="setting-row">
-        <div>
-          <b id={`run-engine-label-${id}`}>{m.settings_run_engine_label()}</b>
-          <div id={`run-engine-description-${id}`} className="muted">
-            <p>{m.settings_run_engine_description()}</p>
-            <p>{m.settings_run_engine_note()}</p>
-            {engineQuery.data?.forcedBy === "canary" && <p>{m.settings_run_engine_canary()}</p>}
-            {engineQuery.data?.forcedBy === "environment" && <p>{m.settings_run_engine_override()}</p>}
-          </div>
-        </div>
-        <Switch
-          checked={engineQuery.data?.enabled ?? false}
-          disabled={!engineQuery.data || engineQuery.data.forcedBy !== null || engineMutation.isPending}
-          labelledBy={`run-engine-label-${id}`}
-          describedBy={`run-engine-description-${id}`}
-          onChange={(next) => engineMutation.mutate(next)}
-        />
-      </div>
-      {(engineQuery.error || engineMutation.error) && <p role="alert" className="err-text">{(engineMutation.error ?? engineQuery.error)?.message}</p>}
     </div>
   );
 }
@@ -490,7 +457,6 @@ export function ComputeTab({ onOpenEnvironment }: { onOpenEnvironment: () => voi
   }
   return (
     <>
-      <RunEngineSetting />
       <ComputeActivity onViewHistory={() => setHistory(true)} />
       {settingsQuery.error && !settings ? <Banner tone="error">{settingsQuery.error.message}</Banner>
         : !settings ? <LoadingRow><Spinner /> {m.settings_page_checking_compute_targets()}</LoadingRow>

@@ -11,6 +11,7 @@ import { activePath } from "@orx/transcriptTree";
 import { fmtDuration, type ChatActiveRun, type ChatMessage, type ChatPart, type ChatSession, type Harness } from "@orx/api";
 import { runConnectHost, runDisplay } from "@orx/runDisplay";
 import { statusLabel } from "@orx/components/StatusBadge";
+import { useModelName } from "@orx/components/pickerAgents";
 import { delegateLineage, delegateModelLabel, delegatesOf, delegateStatus, type DelegateStatus } from "@orx/delegates";
 import { firstLine } from "@orx/agentMessages";
 import { m } from "@orx/paraglide/messages.js";
@@ -45,6 +46,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
   const session = sessions.data?.find((s: ChatSession) => s.id === sessionId);
   const project = projects.data?.find((p) => p.id === projectId);
   const harness = harnesses.data?.find((h: Harness) => h.id === session?.harness);
+  const modelName = useModelName();
   const all = state.messagesBySession[sessionId] ?? [];
   const messages = useMemo(() => activePath(all, state.activeLeafBySession[sessionId]), [all, state.activeLeafBySession[sessionId]]);
   const busy = state.busySessions.has(sessionId) || !!session?.busy;
@@ -129,7 +131,7 @@ function ChatInner({ projectId, sessionId }: { projectId: string; sessionId: str
           {waiting.map((d) => (
             <div key={d.session.id} className="waitrow">
               <span className="ask">?</span>
-              <span className="waitrow-text"><b>{d.session.title?.trim() || delegateModelLabel(d.session)}</b> {d.status === "asking" ? "needs an answer" : "needs your approval"}</span>
+              <span className="waitrow-text"><b>{d.session.title?.trim() || delegateModelLabel(d.session, modelName)}</b> {d.status === "asking" ? "needs an answer" : "needs your approval"}</span>
               <Button small onClick={() => links.open(d.session.id)}>Open</Button>
             </div>
           ))}
@@ -241,12 +243,13 @@ const SENT_KIND: Record<string, string> = { task: "Task from", message: "Message
 /** What another chat (or OpenResearch, about runs) sent this one: its sender opens that chat, the rest opens the whole message. */
 function SentCard({ part }: { part: ChatPart }) {
   const links = useContext(ChatLinksContext);
+  const modelName = useModelName();
   const [open, setOpen] = useState(false);
   const { kind, from } = part.orx!;
   const text = part.text ?? "";
   const monitoring = kind === "monitoring";
   const chat = monitoring || !from ? undefined : links?.chat(from);
-  const sender = monitoring ? "OpenResearch" : chat?.title?.trim() || (chat ? delegateModelLabel(chat) : "another chat");
+  const sender = monitoring ? "OpenResearch" : chat?.title?.trim() || (chat ? delegateModelLabel(chat, modelName) : "another chat");
   return (
     <div className={`sent${open ? " open" : ""}`}>
       <div className="sent-head">
@@ -271,7 +274,7 @@ const DELEGATE_STATUS: Record<DelegateStatus, string> = {
 
 /** A chat this one delegated to, under the turn that started it. */
 function DelegateCard({ row: { session, status }, onOpen }: { row: DelegateRow; onOpen: (id: string) => void }) {
-  const model = delegateModelLabel(session);
+  const model = delegateModelLabel(session, useModelName());
   const ended = status === "finished" || status === "failed" || status === "stopped";
   const preview = ended ? firstLine(session.delegate?.answer || session.delegate?.error || "") : "";
   return (
