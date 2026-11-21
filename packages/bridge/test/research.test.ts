@@ -1,13 +1,16 @@
 // OpenResearch run hidden by the bridge: started (a stand-in for orx), joined
 // when one already runs, reported missing, and its run changes passed on.
 
-import { createServer, type Server } from "node:http";
-import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResearchRun, ResearchStatus } from "@ainb/protocol";
 import { Orx, toRun } from "../src/research/orx.js";
 
 const FAKE_ORX = resolve(__dirname, "fixtures/fake-orx.mjs");
+const COUNTING_ORX_UP = resolve(__dirname, "fixtures/counting-orx-up.mjs");
 
 let orx: Orx | undefined;
 afterEach(() => {
@@ -84,6 +87,90 @@ describe("OpenResearch sidecar", () => {
     const status = await failing.orx.start();
     expect(status.state).toBe("error");
     expect(status.error).toMatch(/already running on this computer/);
+  });
+
+  it("does not spawn again on automatic starts right after a failure, but a manual start may", async () => {
+    const log = join(mkdtempSync(join(tmpdir(), "ainb-orx-cooldown-")), "spawns.log");
+    process.env.COUNTING_ORX_UP_LOG = log;
+    const spawns = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0);
+    orx = new Orx({
+      log: () => {},
+      onStatus: () => {},
+      onRun: () => {},
+      knownPorts: [],
+      startTimeoutMs: 10_000,
+      locate: () => ({ path: "counting-orx", command: process.execPath, args: [COUNTING_ORX_UP] }),
+    });
+    try {
+      const first = await orx.start(); // a user action (the default): spawns
+      expect(first.state).toBe("error");
+      expect(first.error).toMatch(/already running on this computer/);
+      expect(spawns()).toBe(1);
+      // An automatic start inside the cooldown gets the same error at once, no second process.
+      expect(await orx.start(false)).toBe(first);
+      expect(spawns()).toBe(1);
+      // A user action may try again at once.
+      expect((await orx.start()).state).toBe("error");
+      expect(spawns()).toBe(2);
+      // After the cooldown, an automatic start tries again too.
+      const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+      try {
+        expect((await orx.start(false)).state).toBe("error");
+        expect(spawns()).toBe(3);
+      } finally {
+        later.mockRestore();
+      }
+    } finally {
+      delete process.env.COUNTING_ORX_UP_LOG;
+    }
+  });
+
+  it("backs off reconnecting a dropping event stream, and resets once it is healthy", async () => {
+    const attempts: number[] = [];
+    let healthy = false;
+    let live: ServerResponse | undefined;
+    const server: Server = createServer((req, res) => {
+      if (req.url === "/api/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, version: "1.2.3" }));
+        return;
+      }
+      if (req.url === "/api/events") {
+        attempts.push(Date.now());
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (healthy) {
+          live = res;
+          res.write(": hello\n\n");
+        } else res.end();
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const { orx } = make({ knownPorts: [port], missing: true });
+      expect(await orx.start()).toMatchObject({ state: "ready", owned: false });
+      // The stream keeps dropping: each reconnect waits longer than the last (2s, then 4s, ...).
+      await until(() => attempts.length >= 3, 15_000);
+      const firstGap = attempts[1]! - attempts[0]!;
+      const secondGap = attempts[2]! - attempts[1]!;
+      expect(firstGap).toBeGreaterThanOrEqual(1_900);
+      expect(secondGap).toBeGreaterThan(firstGap + 1_000);
+      // A stream that stays open and speaks resets the delay: the next drop reconnects after ~2s again.
+      healthy = true;
+      await until(() => attempts.length >= 4 && live !== undefined, 20_000);
+      const droppedAt = Date.now();
+      live!.destroy();
+      await until(() => attempts.length >= 5, 10_000);
+      const afterHealthy = attempts[4]! - droppedAt;
+      expect(afterHealthy).toBeGreaterThanOrEqual(1_900);
+      expect(afterHealthy).toBeLessThan(3_500);
+    } finally {
+      server.closeAllConnections?.();
+      server.close();
+    }
   });
 
   it("reads only well-formed runs", () => {

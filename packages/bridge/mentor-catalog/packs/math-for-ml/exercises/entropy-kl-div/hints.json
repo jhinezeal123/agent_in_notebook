@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_entropy_values_and_zeros",
+    "text": "Trong NumPy, `0.0 * np.log(0.0)` cho kết quả gì? Làm sao chỉ tính log trên các vị trí có xác suất dương?"
+  },
+  {
+    "level": 0,
+    "test": "test_kl_zero_support_edges",
+    "text": "Tại vị trí $q_i = 0$, kết quả khác nhau thế nào giữa trường hợp $p_i = 0$ và trường hợp $p_i > 0$?"
+  },
+  {
+    "level": 1,
+    "text": "Khởi tạo mảng số hạng bằng 0, dùng mặt nạ boolean để chỉ tính log ở các phần tử dương (tránh log(0)), và gán `+np.inf` ở các vị trí `p > 0` nhưng `q == 0`."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở mask tránh 0 log 0",
+    "text": "Entropy: tạo mảng 0 cùng shape p; chỉ tại mask (p > 0) gán -p * ln(p); cộng theo axis=-1.\nKL: tạo mảng 0; tại (p > 0) & (q > 0) gán p * ln(p / q); tại (p > 0) & (q == 0) gán +inf; cộng theo axis=-1."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở KL với mask",
+    "text": "```python\npos_both = (p > 0) & (q > 0)\nterms[pos_both] = p[pos_both] * np.log(p[pos_both] / q[pos_both])\nterms[(p > 0) & (q == 0)] = np.inf\n```"
+  }
+]

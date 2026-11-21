@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao ở bước $t=1$ với $g=1$, khi thiếu bias correction thì $m_1 / \\sqrt{v_1}$ lại lớn gấp ~3.16 lần so với 1?",
+    "tag": "dbg-adam-bias-ratio",
+    "answer": "Vì m_1 = 1 - b1 = 0.1 còn sqrt(v_1) = sqrt(1 - b2) = sqrt(0.001) ≈ 0.0316, nên m_1 / sqrt(v_1) ≈ 0.1 / 0.0316 ≈ 3.16 thay vì 1.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Bước thời gian `t` dùng trong công thức hiệu chỉnh độ lệch $1 - \\beta^t$ ở lần gọi `adam_step` đầu tiên bằng 0 hay bằng 1? Nếu dùng 0 thì chuyện gì xảy ra?",
+    "tag": "dbg-adam-t-zero",
+    "answer": "Phải bằng 1 (tăng t = state['t'] + 1 trước khi tính). Nếu dùng t = 0 thì 1 - beta^0 = 0 gây chia cho 0 (NaN/inf).",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Trong Adam, $\\varepsilon$ nằm ngoài $\\sqrt{\\hat{v}_t}$ hay trong căn? Khác gì so với LayerNorm?",
+    "tag": "dbg-adam-eps-pos",
+    "answer": "Trong Adam chuẩn (Kingma & Ba / PyTorch), eps nằm ngoài căn: sqrt(v_hat) + eps, khác với LayerNorm (eps trong căn).",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi gradient bằng 0 trên mọi bước đầu, trạng thái `m`, `v` và tham số đầu ra phải như thế nào?",
+    "tag": "dbg-adam-zero-grad",
+    "answer": "m và v đều bằng 0, mẫu số bằng eps > 0 nên tham số giữ nguyên không đổi và không bị NaN.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

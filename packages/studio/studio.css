@@ -427,3 +427,21 @@ h3 { font-size: 13px; margin: 0; font-weight: 600; }
 /* A list's own heading row inside a side bar view (the project's name and a + button). */
 .listhead { display: flex; align-items: center; gap: 6px; padding: 4px 8px 2px 12px; min-height: 22px; }
 .listhead > .dsc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+
+
+/* Đợt 3b-studio: Trackio metrics/compare (C1) & compute cost rates (C8) */
+.metric-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.metric-card { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.metric-name { font-size: 11px; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric-val { font-size: 16px; font-weight: 600; font-family: var(--vscode-editor-font-family, monospace); }
+.sparkline { color: var(--vscode-charts-blue, #4ea1ff); display: block; margin-top: 2px; }
+.metric-chart { margin-top: 8px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 6px; padding: 8px; }
+.metric-svg { width: 100%; height: auto; max-height: 200px; display: block; }
+.metric-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: 11px; }
+.metric-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.metric-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.small-select { width: auto; padding: 2px 6px; font-size: 12px; }
+.rates-box { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.rates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; margin-top: 6px; }
+.rate-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.rate-inp { width: 72px; padding: 2px 6px; }

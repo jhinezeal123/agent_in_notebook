@@ -1,0 +1,21 @@
+{
+  "id": "trace-logsumexp-block",
+  "title": "Đọc hiểu code: nhiệt độ, log-sum-exp và entropy",
+  "star": "trace-norm-softmax",
+  "skills": [
+    "formula",
+    "theory"
+  ],
+  "difficulty": 1350,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "trace_shapes",
+    "predict_behavior"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

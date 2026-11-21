@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_best_split_clean_separator",
+    "text": "Các ứng viên ngưỡng chia trên một cột nên là giá trị của chính điểm dữ liệu hay trung điểm giữa hai giá trị phân biệt kề nhau?"
+  },
+  {
+    "level": 0,
+    "test": "test_best_split_multiclass_random",
+    "text": "Độ bất thuần sau khi chia đã được tính trọng số theo tỉ lệ số mẫu `nl / n` và `nr / n` của hai nhánh chưa?"
+  },
+  {
+    "level": 1,
+    "text": "Với gini_impurity dùng np.unique(..., return_counts=True) để lấy tần suất p rồi tính 1 - sum(p^2). Với best_split, duyệt từng cột, lấy các giá trị duy nhất đã sắp xếp, tính các trung điểm và chọn cặp cho độ giảm Gini có trọng số lớn nhất."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở duyệt ngưỡng",
+    "text": "parent = gini(y); nếu n < 2 hoặc parent == 0 trả (None, None, 0.0)\nVới từng cột j:\n  vals = các giá trị phân biệt tăng dần của cột j\n  ngưỡng = trung điểm giữa vals[:-1] và vals[1:]\n  tính gain có trọng số (nl * gini(trái) + nr * gini(phải)) / n\n  cập nhật nghiệm tốt nhất nếu gain > best_gain"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở vòng lặp tính gain",
+    "text": "```python\nvals = np.unique(col)\nfor thr in 0.5 * (vals[:-1] + vals[1:]):\n    left = col <= thr\n    nl = int(left.sum())\n    gain = parent - (nl * gini_impurity(y[left]) + (n - nl) * gini_impurity(y[~left])) / n\n```"
+  }
+]

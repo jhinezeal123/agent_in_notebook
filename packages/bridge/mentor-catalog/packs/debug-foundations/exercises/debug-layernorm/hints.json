@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_eps_inside_sqrt",
+    "text": "Hãy kiểm tra kỹ vị trí dấu ngoặc của `np.sqrt(...)` ở mẫu số: `eps` đang nằm bên trong hay bên ngoài căn?"
+  },
+  {
+    "level": 0,
+    "test": "test_constant_row",
+    "text": "Khi hàng đầu vào hằng số (`var == 0`), mẫu số của bạn có bằng `sqrt(eps)` không?"
+  },
+  {
+    "level": 1,
+    "text": "Đưa phép cộng `eps` vào bên trong hàm căn bậc hai của phương sai."
+  },
+  {
+    "level": 2,
+    "when": "vị trí eps",
+    "text": "mẫu số chuẩn là căn bậc hai của (var + eps), không phải (căn của var) + eps."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở mẫu số",
+    "text": "```python\nreturn gamma * (x - mu) / np.sqrt(var + eps) + beta\n```"
+  }
+]

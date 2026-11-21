@@ -4,7 +4,7 @@
 // editor's theme.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { MENTOR_SKILL_LABEL, mentorRank, type MentorHome, type MentorKind, type MentorMistake, type MentorPaper, type MentorSkill, type MentorStarView, type MentorToday } from "@ainb/protocol";
+import { diffLines, MENTOR_SKILL_LABEL, mentorRank, type MentorAttemptDetail, type MentorHome, type MentorKind, type MentorMistake, type MentorPaper, type MentorSkill, type MentorStarView, type MentorToday } from "@ainb/protocol";
 import { heatWeeks, layout, MAP_H, MAP_W, ratingShare, topicHeight, type MapLayout, type MapStar } from "./constellation.js";
 
 export interface MentorHomeHost {
@@ -92,6 +92,18 @@ export function MentorHomeApp({ host }: { host: MentorHomeHost }) {
       <header class="mh-header">
         <div class="mh-brand"><span class="mh-brand-mark">✦</span> Mentor</div>
         <div class="mh-stats">
+          <button class="mh-link-btn" disabled={!!starting} title="Luyện phỏng vấn thử: câu hỏi vặn + code trắng bảng không gợi ý" onClick={() => start(undefined, "interview")}>
+            Phỏng vấn thử
+          </button>
+          <button class="mh-link-btn" title="Xuất hồ sơ tiến độ (Markdown)" onClick={() => void host.request("mentor.export", { format: "markdown", includeMistakes: true }).catch((e: Error) => setError(e.message))}>
+            Xuất MD
+          </button>
+          <button class="mh-link-btn" title="Sao lưu toàn bộ nhật ký (JSON)" onClick={() => void host.request("mentor.export", { format: "json", includeMistakes: true }).catch((e: Error) => setError(e.message))}>
+            Backup JSON
+          </button>
+          <button class="mh-link-btn" title="Nhập từ file backup JSON" onClick={() => void host.request("mentor.import").then(() => load(), (e: Error) => setError(e.message))}>
+            Nhập
+          </button>
           <span class={`mh-streak${home.streak.doneToday ? " lit" : ""}`} title={home.streak.doneToday ? "Hôm nay đã học" : "Hôm nay chưa học"}>
             <span class="mh-flame" aria-hidden="true">🔥</span>
             <b>{home.streak.current}</b> ngày
@@ -120,7 +132,7 @@ export function MentorHomeApp({ host }: { host: MentorHomeHost }) {
         <StreakCard home={home} />
         <ShelfCard home={home} host={host} starting={starting} onStart={start} onError={setError} />
         <MistakesCard mistakes={home.mistakes} />
-        <RecentCard home={home} onStart={start} />
+        <RecentCard home={home} host={host} onStart={start} />
       </div>
     </div>
   );
@@ -632,24 +644,74 @@ function PaperMap({ home, paper }: { home: MentorHome; paper: MentorPaper }) {
   );
 }
 
-function RecentCard({ home, onStart }: { home: MentorHome; onStart: (id: string) => void }) {
+function RecentCard({ home, host, onStart }: { home: MentorHome; host: MentorHomeHost; onStart: (id: string) => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const [attempts, setAttempts] = useState<MentorAttemptDetail[] | null>(null);
+  const [diffAttemptId, setDiffAttemptId] = useState<string | null>(null);
   if (!home.recent.length) return null;
   const when = (ms: number) => new Date(ms).toLocaleDateString("vi-VN", { day: "numeric", month: "numeric" });
+  const toggleHistory = () => {
+    const next = !showAll;
+    setShowAll(next);
+    if (next && attempts === null) {
+      void host.request<{ attempts: MentorAttemptDetail[] }>("mentor.attempts", { limit: 40 }).then((r) => setAttempts(r.attempts), () => setAttempts([]));
+    }
+  };
   return (
     <section class="mh-card mh-recent">
-      <h3>Gần đây</h3>
-      <ul>
-        {home.recent.map((r) => (
-          <li key={r.attemptId}>
-            <span class="mh-muted">{when(r.at)}</span>
-            <button class="mh-link-btn" onClick={() => onStart(r.exerciseId)}>{r.title}</button>
-            <span class={`mh-chip small ${r.stage === "done" ? "mastered" : "learning"}`}>
-              {r.kind === "review" ? "ôn · " : ""}
-              {r.stage === "done" ? (r.revealed ? "đã xem lời giải" : r.score !== undefined ? `${Math.round(r.score * 100)} điểm` : "xong") : "đang làm"}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <div class="mh-row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <h3>{showAll ? "Nhật ký làm bài" : "Gần đây"}</h3>
+        <button class="mh-link-btn" onClick={toggleHistory}>{showAll ? "Thu gọn" : "Xem lịch sử & so sánh"}</button>
+      </div>
+      {!showAll ? (
+        <ul>
+          {home.recent.map((r) => (
+            <li key={r.attemptId}>
+              <span class="mh-muted">{when(r.at)}</span>
+              <button class="mh-link-btn" onClick={() => onStart(r.exerciseId)}>{r.title}</button>
+              <span class={`mh-chip small ${r.stage === "done" ? "mastered" : "learning"}`}>
+                {r.kind === "review" ? "ôn · " : r.kind === "interview" ? "pv · " : ""}
+                {r.stage === "done" ? (r.revealed ? "đã xem lời giải" : r.score !== undefined ? `${Math.round(r.score * 100)} điểm` : "xong") : "đang làm"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <ul>
+          {attempts === null && <li class="mh-muted">Đang tải nhật ký…</li>}
+          {attempts?.map((a) => {
+            const openDiff = diffAttemptId === a.attemptId;
+            const rows = openDiff && a.referenceCode ? diffLines(a.learnerCode ?? "", a.referenceCode) : [];
+            return (
+              <li key={a.attemptId} style={{ flexDirection: "column", alignItems: "stretch", gap: "4px" }}>
+                <div class="mh-row" style={{ gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                  <span class="mh-muted">{when(a.startedAt)}</span>
+                  <button class="mh-link-btn" onClick={() => onStart(a.exerciseId)}>{a.title}</button>
+                  <span class={`mh-chip small ${a.stage === "done" ? "mastered" : "learning"}`}>
+                    {a.kind === "review" ? "ôn · " : a.kind === "interview" ? "pv · " : ""}
+                    {a.stage === "done" ? (a.revealed ? "xem đáp án" : a.score !== undefined ? `${Math.round(a.score * 100)}đ` : "xong") : a.stage}
+                  </span>
+                  <span class="mh-muted small">hint {a.hintLevel} · chấm {a.judges} · ~{a.activeMinutes}p</span>
+                  {a.referenceCode && (
+                    <button class="mh-link-btn" onClick={() => setDiffAttemptId(openDiff ? null : a.attemptId)}>
+                      {openDiff ? "Ẩn so sánh" : "So sánh với lời giải mẫu"}
+                    </button>
+                  )}
+                </div>
+                {openDiff && a.referenceCode && (
+                  <pre class="mh-ref-diff" style={{ overflowX: "auto", fontSize: "11px", padding: "6px 8px", borderRadius: "6px", background: "rgba(0,0,0,0.35)" }}>
+                    {rows.map((row, idx) => (
+                      <div key={idx} style={{ color: row.op === "add" ? "#7ee787" : row.op === "del" ? "#ffa198" : "inherit" }}>
+                        {row.op === "add" ? "+ " : row.op === "del" ? "- " : "  "}{row.text}
+                      </div>
+                    ))}
+                  </pre>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }

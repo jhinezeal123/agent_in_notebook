@@ -21,6 +21,14 @@ const REVIEW_STEPS = `5. This is a spaced review, the warm-up of the session: th
    - Remembering means passing with a hint of at most level 1: say so if they reach for more, but do not refuse what the level allows.
    - The judge's passing verdict ends the review by itself and schedules the next one; then give one line on what they recalled well and one thing to keep in mind.`;
 
+function interviewSteps(ex: Exercise): string {
+  const needed = Math.max(2, ex.probes);
+  return `5. This is a mock ML interview: the learner implements the exercise from a blank cell with NO hints (hint level is locked at 0 — never give code, pseudo-code, or step-by-step direction; only clarify requirements if asked).
+   - build: wait for their implementation and judge runs. You may ask a quick probing question while they design or after a failing test, grading substantive answers with mentor_probe_result (2 right, 1 partly, 0 wrong).
+   - defend: starts when the judge passes. Ask deep follow-up probing questions one at a time (prioritize weak misconception tags listed in <mentor-state> if relevant, otherwise pick edge cases, complexity, numerical stability, or "what breaks if..."). Grade each answer with mentor_probe_result; after ${needed} total graded answers, call mentor_stage with stage "done", then give a short interview scorecard (implementation clarity, edge cases, conceptual depth, and one concrete area to practice).
+   - done: the bridge shows the result. Answer follow-up questions; grade nothing more.`;
+}
+
 function variantSteps(ex: Exercise, parent: string): string {
   return `5. This is a variation of "${parent}", which the learner has already done: a small change, and the point is to predict its effect before coding it. Steps (<mentor-state> says which one you are in):
    - lab (the prediction): the question they answer in the prediction cell is: ${ex.predict}
@@ -73,7 +81,7 @@ Rules
 ${HINT_RULES.map((r) => `   ${r}`).join("\n")}
 3. Right or wrong is decided by the judge, which runs hidden tests when the learner presses "Chấm bài"; you get the verdict in <mentor-verdict>. Never say code is correct before a passing verdict. You may run scratch code with run_code to show behaviour (a shape, a tiny numeric example, a plot); never to test their solution against an answer.
 4. You see the learner's current solution and sketch cells in <mentor-state> when they change; mentor_read_cells reads them again.
-${kind === "review" ? REVIEW_STEPS : ex.role === "experiment" ? experimentSteps(ex) : ex.variantOf ? variantSteps(ex, parent ?? ex.variantOf) : `5. Steps (<mentor-state> says which one you are in):
+${kind === "review" ? REVIEW_STEPS : kind === "interview" ? interviewSteps(ex) : ex.role === "experiment" ? experimentSteps(ex) : ex.variantOf ? variantSteps(ex, parent ?? ex.variantOf) : `5. Steps (<mentor-state> says which one you are in):
    - lab (${MENTOR_STAGE_LABEL.lab}): the notebook has formula cells with plots. Ask the learner to explain the formula in their own words; point out what is wrong or missing with a question, not a lecture. Then ask one or two trap questions from the bank below, adapted to what they said, with a follow-up on their answer. A wrong answer: call mentor_misconception. When they have explained it and answered, call mentor_stage with stage "build".
    - build (${MENTOR_STAGE_LABEL.build}): ask for a sketch first (steps, shapes in and out). Challenge the sketch with questions. Then they code. When they are stuck, ask a question that narrows the problem. After a failing verdict, ask about the first failing test (what input would expose it) rather than pointing at the line.
    - defend (${MENTOR_STAGE_LABEL.defend}): starts when the judge passes. Ask probing questions one at a time: why a line is needed, what breaks without it, what a shape is, how it behaves at an edge case. Grade each answer with mentor_probe_result (2 right, 1 partly, 0 wrong) and say briefly why; a wrong answer is also a mentor_misconception. After ${ex.probes} graded answers, call mentor_stage with stage "done", then give a two-line wrap-up: what they nailed, what to revisit.
@@ -113,12 +121,14 @@ function warmupLines(s: MentorSession): string[] {
 export function mentorState(s: MentorSession, cells: string | null, learner: string): string {
   const a = s.attempt;
   const v = s.verdict;
+  const weak = a.kind === "interview" ? s.mentor.weakTags(5) : [];
   const lines = [
-    a.kind === "review" ? "Kind: spaced review (blank cell, from memory)." : "",
+    a.kind === "review" ? "Kind: spaced review (blank cell, from memory)." : a.kind === "interview" ? "Kind: mock interview (blank cell, no hints, probing questions)." : "",
     `Step: ${a.stage} (${MENTOR_STAGE_LABEL[a.stage]}).`,
     `Hint level allowed: ${a.hintLevel} (${MENTOR_HINT_LABEL[a.hintLevel]}).${a.revealed ? " The reference solution was shown: the learner must still type and pass it themself." : ""}`,
     `Judge runs: ${a.judges}${v ? `; last: ${v.ok ? "PASSED" : v.error ? "did not run" : `${v.passed}/${v.total} passed`}` : ""}.`,
-    a.stage === "defend" ? `Probing answers graded: ${a.probes.length}/${s.probesNeeded}.` : "",
+    a.stage === "defend" || a.kind === "interview" ? `Probing answers graded: ${a.probes.length}/${s.probesNeeded}.` : "",
+    weak.length ? `Learner's frequent misconception tags (good interview probe angles): ${weak.map((w) => `${w.tag} (${w.count}x)`).join(", ")}.` : "",
     ...warmupLines(s),
     ...s.takeNotes(),
     learner,

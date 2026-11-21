@@ -11,7 +11,8 @@ import type { ChatSettings, ChatSnapshot, Part } from "@ainb/protocol";
 import { Bridge } from "../src/server.js";
 import { runInSession } from "../src/notebook/setup.js";
 import { ChatStore, keyHash } from "../src/store.js";
-import { worktreePath } from "../src/project/worktree.js";
+import { CodeSync } from "../src/project/vmrepo.js";
+import { ensureWorktree, worktreePath } from "../src/project/worktree.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
 import { FakeOrx } from "./fixtures/fake-orx-api.js";
 
@@ -19,6 +20,7 @@ const TOKEN = "test-token-0123456789abcdef";
 const CLI = resolve(__dirname, "../dist/cli.js");
 const FAKE_AGENT = resolve(__dirname, "fixtures/fake-agent.mjs");
 const FAKE_ORX = resolve(__dirname, "fixtures/fake-orx.mjs");
+const COUNTING_ORX = resolve(__dirname, "fixtures/counting-orx.mjs");
 const MISSING = () => ({ missing: "OpenResearch is not used in these tests." });
 
 let home: string;
@@ -160,7 +162,7 @@ describe("which project a notebook belongs to", () => {
 });
 
 describe("what the agent is told about the project", () => {
-  it("gives the project once, without its experiments or runs, and nothing about later changes", async () => {
+  it("gives the project once with its experiments summary, and notifies the chat when a run finishes (C4)", async () => {
     const p = orx.addProject("Speech", { code: { "README.md": "# Speech\nTrain a small ASR model.", "src/train.py": "lr = 0.1\n" } });
     orx.experiments.push({ id: "exp_1", projectId: p.id, slug: "baseline", branchName: "orx/baseline", title: "Baseline", description: "The paper's setup", archived: false, createdAt: 1, updatedAt: 1 });
     mkdirSync(join(p.artifactsDir, "reports"), { recursive: true });
@@ -171,18 +173,17 @@ describe("what the agent is told about the project", () => {
     expect(first).toContain("Project: Speech");
     expect(first).toContain("Train a small ASR model.");
     expect(first).toContain("artifacts/reports/plan.md");
-    expect(first).not.toContain("orx/baseline");
-    expect(first).not.toMatch(/## Experiments|Latest runs/);
+    expect(first).toContain("## Experiments (1)");
+    expect(first).toContain("Baseline [exp_1]");
     expect(await turn(ext, chatId, "ECHO_PROJECT")).toContain("[no project block]");
 
-    // A run ends and a figure appears: the agent hears of it from the user, not from the bridge.
+    // A run ends: the open project notebook chat receives a run card with an Inspect action.
     const run = { id: "run_1", experimentId: "exp_1", projectId: p.id, status: "done", resultMarkdown: "WER 12.3%", createdAt: 2, startedAt: 2, endedAt: 3 };
     orx.runs.push(run);
     mkdirSync(join(p.artifactsDir, "figures"), { recursive: true });
     writeFileSync(join(p.artifactsDir, "figures", "wer.png"), "png");
     orx.emit("run.updated", { run });
-    await sleep(300);
-    expect(await turn(ext, chatId, "ECHO_PROJECT")).toContain("[no project block]");
+    await ext.waitFor(() => ext.parts().some((part) => part.type === "card" && part.card.title.includes("Project run finished")), 5_000, "run finished card");
     ext.close();
   });
 
@@ -368,6 +369,42 @@ describe("the research literature", () => {
     }
   });
 
+  it("reads later pages of a paper from cache, and runs orx again for another paper or a failure", async () => {
+    const log = join(mkdtempSync(join(tmpdir(), "ainb-orx-count-")), "runs.log");
+    process.env.COUNTING_ORX_LOG = log;
+    const counting = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: { knownPorts: [orxPort], locate: () => ({ path: "counting-orx", command: process.execPath, args: [COUNTING_ORX] }) }, log: () => {} });
+    const countingPort = await counting.listen();
+    try {
+      const p = orx.addProject("Counted papers");
+      const { ext, chatId } = await open("colab:/drive/counted-papers", { projectId: p.id, port: countingPort });
+      const text = await turn(ext, chatId, script([
+        { server: "project", tool: "paper_read", args: { id: "count.0001", full: true } },
+        { server: "project", tool: "paper_read", args: { id: "count.0001", full: true, offset: 40000 } },
+        { server: "project", tool: "paper_read", args: { id: "count.0002", full: true } },
+        { server: "project", tool: "paper_read", args: { id: "count.0001" } },
+        { server: "project", tool: "paper_read", args: { id: "fail.0001" } },
+        { server: "project", tool: "paper_read", args: { id: "fail.0001" } },
+      ]));
+      expect(text).toContain("COUNTED FULL TEXT of count.0001");
+      expect(text).toMatch(/\(characters 0-40000 of \d+; continue with offset=40000\)/);
+      expect(text).toContain("THE END");
+      expect(text).toContain("# Counted report on count.0001");
+      expect(text).toMatch(/RESULT paper_read \(error\): alphaXiv has no paper fail\.0001/);
+      // Two pages of one paper: one CLI run. Another id, the abstract, and each failure: their own runs.
+      expect(readFileSync(log, "utf8").trim().split("\n")).toEqual([
+        "paper --full -- count.0001",
+        "paper --full -- count.0002",
+        "paper -- count.0001",
+        "paper -- fail.0001",
+        "paper -- fail.0001",
+      ]);
+      ext.close();
+    } finally {
+      await counting.close();
+      delete process.env.COUNTING_ORX_LOG;
+    }
+  });
+
   it("says when orx is not installed", async () => {
     const p = orx.addProject("No orx");
     const { ext, chatId } = await open("colab:/drive/no-orx", { projectId: p.id });
@@ -530,6 +567,46 @@ describe("the project's code on the notebook's machine", () => {
     } finally {
       a.ext.close();
     }
+  });
+
+  it("keeps the clone's place while the kernel is busy, and forgets it when the machine is replaced", async () => {
+    const p = orx.addProject("Busy kernel", { code: { "a.py": "x = 1\n" }, git: true });
+    const nb = new FakeNotebook([]);
+    const { seen } = machine(nb);
+    const wt = await ensureWorktree(p.repoPath, p.id, "colab:/drive/busy-kernel", "test.ipynb");
+    const sync = new CodeSync(async (op) => nb.handle(op), "test-busy-kernel");
+    const project = { id: p.id, name: p.name, repoPath: p.repoPath, githubUrl: p.githubUrl };
+    const worktree = async () => wt;
+    const clones = () => seen.filter((c) => c.includes("git clone")).length;
+    const checks = () => seen.filter((c) => c.includes("ainb-ready")).length;
+
+    const first = await sync.ensure(project, worktree);
+    expect(first.state).toBe("ready");
+    const place = first.state === "ready" ? first.place : null;
+    expect(place).not.toBeNull();
+    expect(clones()).toBe(1);
+    expect(checks()).toBe(1);
+
+    // A cell is running on Colab: every kernel call answers "busy", but the clone is intact.
+    nb.busy = true;
+    expect(await sync.ensure(project, worktree)).toEqual({ state: "ready", place });
+    expect(sync.current).toEqual(place);
+    expect(clones()).toBe(1); // no clone again
+    expect(checks()).toBe(1); // no verification script again
+
+    // The machine was replaced: a busy kernel must not restore the old machine's place.
+    sync.invalidate();
+    const replaced = await sync.ensure(project, worktree);
+    expect(replaced.state).toBe("error");
+    expect(sync.current).toBeNull();
+    expect(clones()).toBe(1);
+
+    // Once the machine answers again, the clone is verified and used as before.
+    nb.busy = false;
+    const after = await sync.ensure(project, worktree);
+    expect(after.state).toBe("ready");
+    expect(after.state === "ready" ? after.place : null).toEqual(place);
+    expect(checks()).toBe(2);
   });
 
   it("tells the agent the code stays read-only when the project has no GitHub repository", async () => {

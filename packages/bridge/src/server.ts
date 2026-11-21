@@ -12,11 +12,12 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
-import { WebSocketServer, type WebSocket } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import {
   ATTACHED_CELLS_MAX,
   DEFAULT_SETTINGS,
+  FINAL_RUN_STATUSES,
   isBrowserOp,
   RpcPeer,
   WIRE_VERSION,
@@ -34,6 +35,7 @@ import {
   type NotebookInfo,
   type NotebookOp,
   type ParamsOf,
+  type ResearchRun,
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
@@ -44,6 +46,7 @@ import { listTools } from "./notebook/tools.js";
 import { PROJECT_TOOLS } from "./project/tools.js";
 import { ProjectLinks } from "./research/links.js";
 import { describeFailure, ResearchProjects } from "./research/projects.js";
+import { KaggleQuotaWatcher } from "./research/quota.js";
 import { forgetSetup, runSetup } from "./notebook/setup.js";
 import { ChatStore, pruneDir } from "./store.js";
 import { MentorChat, WorkshopChat, mentorOf, requireMentor, workshopOf } from "./mentor/chat.js";
@@ -87,9 +90,19 @@ export interface BridgeOptions {
 }
 
 type ClientKind = "browser" | "vscode";
-interface Client {
-  connection?: { ws: WebSocket; rpc: RpcPeer };
+interface ClientConnection {
+  ws: WebSocket;
+  rpc: RpcPeer;
+  missedPongs: number;
+  snapshotPending: boolean;
 }
+interface Client {
+  connection?: ClientConnection;
+}
+
+const WS_DROP_PATCH_BYTES = 8 * 1024 * 1024;
+const WS_CLOSE_BACKPRESSURE_BYTES = 64 * 1024 * 1024;
+const WS_MAX_MISSED_PONGS = 3;
 
 /** Where a chat's notebook is: VS Code's own, or a Chrome tab the browser extension serves. */
 interface Target {
@@ -108,6 +121,21 @@ export class Bridge {
    */
   private readonly chats = new Map<number, Chat>();
   private readonly targets = new Map<Chat, Target>();
+  /** Last boot id seen per chat, so adoptRenamed runs on open / boot change instead of every poll. */
+  private readonly seenBoot = new WeakMap<Chat, string>();
+  /** Debounced mentor.updated timer (A7.1) so rapid events trigger one home/status refresh. */
+  private mentorUpdateTimer?: ReturnType<typeof setTimeout>;
+  private emitMentorUpdated(): void {
+    if (this.mentorUpdateTimer) clearTimeout(this.mentorUpdateTimer);
+    this.mentorUpdateTimer = setTimeout(() => {
+      this.mentorUpdateTimer = undefined;
+      this.toEditor("mentor.updated", {});
+    }, 300);
+    this.mentorUpdateTimer.unref?.();
+  }
+  private readonly notifiedRuns = new Set<string>();
+  /** Proactive Kaggle quota & idle session watcher (never starts orx). */
+  readonly quota: KaggleQuotaWatcher;
   /** Notebooks open in Chrome tabs, for the editor's picker. */
   private readonly browserNotebooks = new Map<number, NotebookInfo>();
   private readonly verifying = new Set<string>();
@@ -133,11 +161,19 @@ export class Bridge {
     this.orx = new Orx({
       ...opts.research,
       log: (m) => this.log(m),
-      onStatus: (status) => this.toEditor("research.status", status),
-      onRun: (run) => this.toEditor("research.run", run),
+      onStatus: (status) => {
+        this.toEditor("research.status", status);
+        if (status.state === "ready") void this.quota.check(false).catch(() => {});
+      },
+      onRun: (run) => this.onResearchRun(run),
     });
     this.links = new ProjectLinks(this.store, new ResearchProjects(this.orx, (m) => this.log(m)), (m) => this.log(m));
-    this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.toEditor("mentor.updated", {}), log: (m) => this.log(m) });
+    this.quota = new KaggleQuotaWatcher(this.orx, {
+      onUpdate: (status) => this.toEditor("research.quota", status),
+      log: (m) => this.log(m),
+    });
+    this.quota.start();
+    this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.emitMentorUpdated(), log: (m) => this.log(m) });
     this.workshops = new WorkshopHub(this.mentor, {
       authorChat: (paperId, tabId) => this.authorChat(paperId, tabId),
       exec: async (tabId, code, waitMs) => {
@@ -174,7 +210,11 @@ export class Bridge {
     // Tool calls can wait on the user for minutes.
     this.server.requestTimeout = 0;
     this.server.headersTimeout = 60_000;
-    this.wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
+    this.wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: 32 * 1024 * 1024,
+      perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, concurrencyLimit: 4 },
+    });
     this.server.on("upgrade", (req, socket, head) => {
       const path = new URL(req.url ?? "/", "http://x").pathname;
       const kind = path === "/ext" && this.originAllowed(req.headers.origin) ? "browser"
@@ -188,7 +228,19 @@ export class Bridge {
     });
     // Keeps the extension's service worker alive and detects dead sockets.
     this.pingTimer = setInterval(() => {
-      for (const client of Object.values(this.clients)) client.connection?.rpc.emit("ping", { t: Date.now() });
+      for (const [kind, client] of Object.entries(this.clients)) {
+        const conn = client.connection;
+        if (!conn) continue;
+        if (++conn.missedPongs > WS_MAX_MISSED_PONGS) {
+          this.log(`${kind} extension stopped answering pings: closing so it can reconnect.`);
+          conn.ws.close(4002, "ping timeout");
+          continue;
+        }
+        conn.rpc.emit("ping", { t: Date.now() });
+        if (conn.ws.readyState === WebSocket.OPEN) {
+          try { conn.ws.ping(); } catch { /* closing */ }
+        }
+      }
     }, 20_000);
     this.pingTimer.unref();
   }
@@ -221,7 +273,9 @@ export class Bridge {
 
   async close(): Promise<void> {
     clearTimeout(this.editorGone);
+    clearTimeout(this.mentorUpdateTimer);
     clearInterval(this.pingTimer);
+    this.quota.stop();
     this.dropAllChats();
     this.orx.close();
     for (const client of Object.values(this.clients)) {
@@ -243,7 +297,30 @@ export class Bridge {
   private onExtension(ws: WebSocket, kind: ClientKind): void {
     const client = this.clients[kind];
     let authed = false;
-    const rpc = new RpcPeer({ send: (env: Envelope) => ws.send(JSON.stringify(env)), timeoutMs: 30_000 });
+    let conn: ClientConnection | undefined;
+    const rpc = new RpcPeer({
+      send: (env: Envelope) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const buffered = ws.bufferedAmount;
+        if (buffered > WS_CLOSE_BACKPRESSURE_BYTES) {
+          this.log(`${kind} socket backed up (${Math.round(buffered / (1024 * 1024))} MB): closing so it can reconnect.`);
+          ws.close(4002, "backpressure");
+          return;
+        }
+        if (buffered > WS_DROP_PATCH_BYTES && env.kind === "evt") {
+          // Drop intermediate streaming patches under pressure; the UI resyncs via chat.get on any gap.
+          if (env.method === "chat.patch") return;
+          if (env.method === "chat.snapshot") {
+            if (conn?.snapshotPending) return;
+            if (conn) conn.snapshotPending = true;
+          }
+        } else if (conn?.snapshotPending && buffered <= WS_DROP_PATCH_BYTES) {
+          conn.snapshotPending = false;
+        }
+        ws.send(JSON.stringify(env));
+      },
+      timeoutMs: 30_000,
+    });
     const authTimer = setTimeout(() => !authed && ws.close(4401, "no hello"), 10_000);
 
     rpc.handle("hello", (p: ParamsOf<BridgeMethods, "hello">) => {
@@ -262,22 +339,32 @@ export class Bridge {
       if (previous) {
         this.log(`A newer ${kind} connection replaced the previous one.`);
         if (kind === "vscode") this.dropAllChats();
-        else this.forgetBrowserNotebooks();
+        else {
+          this.forgetBrowserNotebooks();
+          this.toEditor("browser.status", { connected: false });
+        }
         previous.ws.close(4000, "replaced");
       }
-      client.connection = { ws, rpc };
+      conn = { ws, rpc, missedPongs: 0, snapshotPending: false };
+      client.connection = conn;
       if (kind === "vscode") {
         clearTimeout(this.editorGone);
         this.editorGone = undefined;
+      } else {
+        this.toEditor("browser.status", { connected: true });
       }
       this.log(`${kind} extension connected.`);
-      return { bridgeVersion: BRIDGE_VERSION, agents: describeAgents() };
+      return { bridgeVersion: BRIDGE_VERSION, agents: describeAgents(), browserConnected: !!this.clients.browser.connection };
     });
     const isCurrent = () => client.connection?.rpc === rpc;
     if (kind === "vscode") this.registerEditor(rpc, isCurrent);
     this.registerNotebookHost(kind, rpc, isCurrent);
 
+    ws.on("pong", () => {
+      if (conn) conn.missedPongs = 0;
+    });
     ws.on("message", (data) => {
+      if (conn) conn.missedPongs = 0;
       let env: Envelope;
       try {
         env = JSON.parse(String(data));
@@ -295,7 +382,10 @@ export class Bridge {
         // The chats are the editor's: they go with it. Chats on Chrome tabs
         // wait for the browser to come back (it announces its tabs again).
         if (kind === "vscode") this.dropAllChats();
-        else this.forgetBrowserNotebooks();
+        else {
+          this.forgetBrowserNotebooks();
+          this.toEditor("browser.status", { connected: false });
+        }
         this.log(`${kind} extension disconnected.`);
         if (kind === "vscode") this.watchEditor();
       }
@@ -312,7 +402,7 @@ export class Bridge {
         return fn(p);
       };
 
-    const changed = () => this.toEditor("agents.changed", { agents: describeAgents() });
+    const changed = () => this.toEditor("agents.changed", { agents: describeAgents(true) });
     const checkIdle = (id: string | undefined) => {
       for (const chat of this.chats.values()) {
         if (chat.spec.id === id && (chat.status === "running" || chat.status === "starting")) throw new Error("Wait for this agent to finish starting or stop its turn before editing it.");
@@ -327,7 +417,7 @@ export class Bridge {
       }
     };
     rpc.handle("agents.list", guard<"agents.list">((p) => {
-      const agents = describeAgents();
+      const agents = describeAgents(!!p.refresh);
       if (p.refresh) changed();
       return { agents };
     }));
@@ -418,6 +508,7 @@ export class Bridge {
         return { chats };
       }),
     );
+    rpc.handle("chats.search", guard<"chats.search">((p) => ({ hits: this.store.search(String(p.query ?? ""), p.limit) })));
     rpc.handle("chat.saveNotebook", guard<"chat.saveNotebook">(async (p) => ({ path: await this.chatById(p.chatId).saveNotebookNow() })));
     rpc.handle("chat.verifyNotebook", guard<"chat.verifyNotebook">(async (p) => {
       await this.chatById(p.chatId).verifyAndSave();
@@ -465,6 +556,9 @@ export class Bridge {
     rpc.handle("chat.answer", guard<"chat.answer">((p) => ({ answered: this.chatById(p.chatId).answer(p.promptId, p.optionId) })));
     rpc.handle("chat.review", guard<"chat.review">(async (p) => ({ resolved: await this.chatById(p.chatId).resolveReview(p.reviewId, p.accept) })));
     rpc.handle("chat.undo", guard<"chat.undo">((p) => this.chatById(p.chatId).undo(String(p.messageId))));
+    rpc.handle("chat.changes", guard<"chat.changes">((p) => ({ changes: this.chatById(p.chatId).journalEntries()[String(p.messageId)] ?? [] })));
+    rpc.handle("chat.pin", guard<"chat.pin">((p) => ({ pinned: this.chatById(p.chatId).pin(String(p.messageId), !!p.pinned) })));
+    rpc.handle("chat.dequeue", guard<"chat.dequeue">((p) => ({ removed: this.chatById(p.chatId).dequeueMessage(String(p.messageId)) })));
     rpc.handle("chat.cardAction", guard<"chat.cardAction">((p) => ({ accepted: this.chatById(p.chatId).cardAction(String(p.cardId), String(p.actionId)) })));
     rpc.handle("notebook.setup", guard<"notebook.setup">((p) => {
       const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
@@ -472,10 +566,11 @@ export class Bridge {
       return runSetup((op, timeoutMs) => this.notebookOp(target, op, timeoutMs), `${target.kind}:${target.tabId}`, String(p.script ?? ""), waitMs);
     }));
     rpc.handle("mentor.home", guard<"mentor.home">(() => this.mentorHome()));
+    rpc.handle("mentor.status", guard<"mentor.status">(() => this.mentor.status()));
     rpc.handle("mentor.places", guard<"mentor.places">(() => this.mentorPlaces.list()));
     rpc.handle("mentor.start", guard<"mentor.start">((p) => this.mentorPlaces.start({
       exerciseId: typeof p?.exerciseId === "string" && p.exerciseId ? p.exerciseId : undefined,
-      kind: p?.kind === "review" ? "review" : "learn",
+      kind: p?.kind === "review" ? "review" : p?.kind === "interview" ? "interview" : "learn",
       tabId: Number.isSafeInteger(p?.tabId) ? p.tabId : undefined,
       replace: p?.replace === true,
     })));
@@ -507,7 +602,7 @@ export class Bridge {
         ...(src.id ? { id: src.id } : {}), title: src.title, ...(src.authors ? { authors: src.authors } : {}), ...(src.year ? { year: src.year } : {}),
         ...(src.url ? { url: src.url } : {}), ...(src.arxiv ? { arxiv: src.arxiv } : {}), source: src.text, kind: src.kind,
       });
-      this.mentor.reloadCatalog();
+      this.mentor.reloadPapers();
       return this.mentorPlaces.openWorkshop(paperId, p.tabId, p.replace);
     }));
     rpc.handle("mentor.paper.open", guard<"mentor.paper.open">((p) => this.mentorPlaces.openWorkshop(p.paperId, p.tabId, p.replace)));
@@ -542,7 +637,7 @@ export class Bridge {
     rpc.handle("mentor.paper.archive", guard<"mentor.paper.archive">((p) => {
       if (!this.mentor.shelf.has(p.paperId)) throw new Error("Chỉ cất được paper bạn tự thêm.");
       this.mentor.shelf.write(p.paperId, { archived: !!p.archived });
-      this.mentor.reloadCatalog();
+      this.mentor.reloadPapers();
       return { ok: true as const };
     }));
     rpc.handle("mentor.focus", guard<"mentor.focus">((p) => {
@@ -554,6 +649,17 @@ export class Bridge {
       this.reportExercise(chat, String(p.reason ?? "").slice(0, 1000));
       return { ok: true as const };
     }));
+    rpc.handle("mentor.attempts", guard<"mentor.attempts">((p) => ({
+      attempts: this.mentor.attemptHistory({
+        ...(typeof p?.exerciseId === "string" && p.exerciseId ? { exerciseId: p.exerciseId } : {}),
+        ...(typeof p?.limit === "number" ? { limit: p.limit } : {}),
+      }),
+    })));
+    rpc.handle("mentor.export", guard<"mentor.export">((p) => this.mentor.exportProfile({
+      format: p?.format === "json" ? "json" : "markdown",
+      includeMistakes: p?.includeMistakes !== false,
+    })));
+    rpc.handle("mentor.import", guard<"mentor.import">((p) => this.mentor.importProfile(String(p?.data ?? ""))));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
       if (p?.orxPath !== undefined) {
@@ -564,6 +670,8 @@ export class Bridge {
       }
       return this.orx.restart();
     }));
+    rpc.handle("research.quota", guard<"research.quota">((p) => (p?.refresh ? this.quota.check(true) : this.quota.last.checkedAt ? this.quota.last : this.quota.check(false))));
+    rpc.handle("research.closeSession", guard<"research.closeSession">((p) => this.quota.closeSession(String(p.sessionId))));
     rpc.handle(
       "browser.notebooks",
       guard<"browser.notebooks">(() => ({ notebooks: [...this.browserNotebooks].map(([tabId, info]) => ({ tabId, info })) })),
@@ -673,6 +781,20 @@ export class Bridge {
     this.clients.vscode.connection?.rpc.emit(event, params);
   }
 
+  /** Forward OpenResearch run updates to the editor, refresh project briefs, and notify open project notebook chats on completion (C4). */
+  private onResearchRun(run: ResearchRun): void {
+    this.toEditor("research.run", run);
+    if (run.projectId) this.links.markDirty(run.projectId);
+    if (!run.projectId || !FINAL_RUN_STATUSES.includes(run.status)) return;
+    const key = `${run.id}:${run.status}`;
+    if (this.notifiedRuns.has(key)) return;
+    this.notifiedRuns.add(key);
+    if (this.notifiedRuns.size > 200) this.notifiedRuns.delete(this.notifiedRuns.values().next().value!);
+    for (const chat of this.chats.values()) {
+      if (chat.status !== "closed" && chat.project?.id === run.projectId) chat.onProjectRunFinished(run);
+    }
+  }
+
   private chatById(id: string): Chat {
     for (const c of this.chats.values()) if (c.id === id) return c;
     throw new Error("This chat no longer exists. Start a new one.");
@@ -694,8 +816,10 @@ export class Bridge {
    */
   private adoptRenamed(target: Target, key: string, boot: string): void {
     const chat = [...this.chats.values()].find((c) => c.notebookKey === key && sameAs(this.targets.get(c), target));
+    if (!chat || this.seenBoot.get(chat) === boot) return;
+    this.seenBoot.set(chat, boot);
     // Only Kaggle gives every notebook a machine of its own; Colab and Jupyter servers share one.
-    if (!key.startsWith("kaggle:") || !chat || chat.messages.some((m) => m.role === "user")) return;
+    if (!key.startsWith("kaggle:") || chat.messages.some((m) => m.role === "user")) return;
     const open = new Set([...this.chats.values()].map((c) => c.notebookKey));
     for (const info of this.browserNotebooks.values()) open.add(info.key);
     const from = this.store.listMeta()
@@ -711,7 +835,11 @@ export class Bridge {
   }
 
   private dropAllChats(): void {
-    for (const chat of [...this.chats.values()]) this.dropChat(chat);
+    for (const chat of [...this.chats.values()]) {
+      const target = this.targets.get(chat);
+      this.dropChat(chat);
+      if (target) forgetSetup(`${target.kind}:${target.tabId}`);
+    }
   }
 
   private notebookOp(target: Target, op: NotebookOp, timeoutMs?: number): Promise<unknown> {

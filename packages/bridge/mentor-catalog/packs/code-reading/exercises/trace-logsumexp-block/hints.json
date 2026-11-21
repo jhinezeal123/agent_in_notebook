@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_shapes",
+    "text": "So sánh dòng tính `m`, `lse` (có `keepdims=True`) với dòng tính `H` (không có `keepdims`): shape khác nhau thế nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_lse_shift_and_entropy",
+    "text": "Trước khi tính `lse`, `Z` đã được chia cho `tau`. Vậy nếu tăng `Z` thêm `shift` thì `S` tăng thêm bao nhiêu?"
+  },
+  {
+    "level": 1,
+    "text": "Hàm đang tính softmax theo nhiệt độ tau và Shannon entropy (log tự nhiên). Khi Z hằng số, phân bố P là đều 1/K nên entropy bằng ln(K); khi dịch Z thêm shift, S tăng thêm shift/tau kéo theo lse tăng cùng lượng đó."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở công thức",
+    "text": "m và lse có keepdims=True -> (B, 1); H không keepdims -> (B,)\nlse(S + c) = lse(S) + c với c = shift / tau\nPhân bố đều trên K lớp có entropy tự nhiên = ln(K)"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở predict_behavior",
+    "text": "```python\ndef predict_behavior(B, K, tau, shift):\n    return {\n        \"lse_shift_delta\": float(shift) / float(tau),\n        \"P_row_sums\": np.ones(B, dtype=float),\n        \"H_constant_Z\": np.full(B, np.log(K), dtype=float),\n    }\n```"
+  }
+]

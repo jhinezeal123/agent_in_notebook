@@ -27,14 +27,24 @@ export const SCROLLBACK = 10_000;
 const READ_CHUNK = 256 * 1024;
 /** Log replayed into a new emulator when the bridge finds a session it did not start (it restarted). */
 const REPLAY_BYTES = 2 * 1024 * 1024;
+/** Idle daemon exits cleanly after this many seconds at an idle prompt (never kills a running foreground command). */
+export const DAEMON_IDLE_SECONDS = 2 * 60 * 60;
+/** Hard cap on a terminal session's append-only log file (64 MB); exceeding it closes the session cleanly. */
+export const DAEMON_MAX_LOG_BYTES = 64 * 1024 * 1024;
+/** Maximum named terminal sessions kept per chat. */
+export const MAX_SESSIONS = 8;
+/** Best-effort per-session timeout when closing idle sessions on chat close. */
+const CLOSE_IDLE_TIMEOUT_MS = 2_500;
 const OSC = 7770;
 
 export const SESSION_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 
-/** Runs on the VM, detached from the kernel: argv = dir, cols, rows, cwd. */
+/** Runs on the VM, detached from the kernel: argv = dir, cols, rows, cwd [, idle_s, max_log]. */
 const DAEMON = String.raw`
-import os, pty, select, shutil, struct, sys, fcntl, termios
+import os, pty, select, shutil, signal, struct, sys, fcntl, termios, time
 d, cols, rows, cwd = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+idle_s = int(sys.argv[5]) if len(sys.argv) > 5 else 7200
+max_log = int(sys.argv[6]) if len(sys.argv) > 6 else 67108864
 if os.fork():
     os._exit(0)
 shell = shutil.which("bash") or "/bin/sh"
@@ -50,14 +60,29 @@ def put(name, value):
     with open(os.path.join(d, name + ".tmp"), "w") as f:
         f.write(str(value))
     os.replace(os.path.join(d, name + ".tmp"), os.path.join(d, name))
+def idle_prompt():
+    try:
+        return os.tcgetpgrp(fd) == pid
+    except OSError:
+        return False
 put("child", pid)
 fin = os.open(os.path.join(d, "in"), os.O_RDWR | os.O_NONBLOCK)
 out = os.open(os.path.join(d, "out"), os.O_WRONLY | os.O_APPEND)
 put("pid", os.getpid())
+last_activity = time.monotonic()
+written = 0
 while True:
     try:
-        ready = select.select([fd, fin], [], [])[0]
+        ready = select.select([fd, fin], [], [], 60)[0]
     except InterruptedError:
+        continue
+    if not ready:
+        if idle_s > 0 and time.monotonic() - last_activity >= idle_s and idle_prompt():
+            try:
+                os.kill(pid, signal.SIGHUP)
+            except OSError:
+                pass
+            break
         continue
     if fd in ready:
         try:
@@ -66,9 +91,23 @@ while True:
             data = b""
         if not data:
             break
+        last_activity = time.monotonic()
+        if max_log > 0 and written + len(data) > max_log:
+            notice = b"\r\n[ainb: terminal log reached 64 MB limit; closing session]\r\n"
+            try:
+                os.write(out, notice)
+            except OSError:
+                pass
+            try:
+                os.kill(pid, signal.SIGHUP)
+            except OSError:
+                pass
+            break
         os.write(out, data)
+        written += len(data)
     if fin in ready:
         data = os.read(fin, 65536)
+        last_activity = time.monotonic()
         while data:
             data = data[os.write(fd, data):]
 _, status = os.waitpid(pid, 0)
@@ -120,7 +159,8 @@ def _ainb_shell(args):
             if not os.path.isdir(cwd):
                 cwd = os.getcwd()
             with open(os.path.join(d, "daemon.log"), "wb") as log:
-                subprocess.Popen([sys.executable, "-c", args["daemon"], d, str(args["cols"]), str(args["rows"]), cwd],
+                subprocess.Popen([sys.executable, "-c", args["daemon"], d, str(args["cols"]), str(args["rows"]), cwd,
+                                  str(args.get("idle_s", 7200)), str(args.get("max_log", 67108864))],
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, start_new_session=True, close_fds=True).wait(10)
             end = time.monotonic() + 10
             while not alive() and time.monotonic() < end:
@@ -341,7 +381,15 @@ export class ShellSession {
     this.reset();
     this.state = "new";
     this.exitCode = undefined;
-    const r = await call<{ state: string; size: number; log?: string }>(exec, "open", this.name, { daemon: DAEMON, cols: COLS, rows: ROWS, cwd: start.cwd, env: start.env });
+    const r = await call<{ state: string; size: number; log?: string }>(exec, "open", this.name, {
+      daemon: DAEMON,
+      cols: COLS,
+      rows: ROWS,
+      cwd: start.cwd,
+      env: start.env,
+      idle_s: DAEMON_IDLE_SECONDS,
+      max_log: DAEMON_MAX_LOG_BYTES,
+    });
     if (r.state === "failed") throw new VmError(`The terminal did not start on the notebook's machine.${r.log ? `\n${r.log}` : ""}`);
     if (r.state === "alive") {
       // Rebuild the screen from the end of the log; its marks say whether a command runs.
@@ -490,6 +538,11 @@ export class ShellSession {
     this.term.dispose();
     this.state = "exited";
   }
+
+  /** Free the local xterm buffer without touching the remote VM daemon. */
+  disposeLocal(): void {
+    this.term.dispose();
+  }
 }
 
 /** The chat's sessions, by name, one operation at a time on each. */
@@ -499,7 +552,20 @@ export class ShellSessions {
 
   get(name: string): ShellSession {
     let s = this.sessions.get(name);
-    if (!s) this.sessions.set(name, (s = new ShellSession(name)));
+    if (!s) {
+      if (this.sessions.size >= MAX_SESSIONS) {
+        for (const [k, existing] of [...this.sessions]) {
+          if (existing.state === "exited") {
+            existing.disposeLocal();
+            this.sessions.delete(k);
+          }
+        }
+      }
+      if (this.sessions.size >= MAX_SESSIONS) {
+        throw new VmError(`Too many terminal sessions (limit ${MAX_SESSIONS}). Reuse an existing session: ${this.names().join(", ")}.`);
+      }
+      this.sessions.set(name, (s = new ShellSession(name)));
+    }
     return s;
   }
 
@@ -517,5 +583,36 @@ export class ShellSessions {
       run.catch(() => {}),
     );
     return run;
+  }
+
+  /**
+   * Best-effort close of idle terminal sessions on the VM when a chat closes.
+   * Running sessions are left alone (commands run as long as they need), while
+   * all local xterm buffers are disposed so a closed chat does not leak RAM.
+   */
+  async closeIdle(exec: KernelExec): Promise<void> {
+    const entries = [...this.sessions.values()];
+    this.sessions.clear();
+    await Promise.all(
+      entries.map(async (s) => {
+        if (s.state === "idle") {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              s.close(exec),
+              new Promise<void>((resolve) => {
+                timer = setTimeout(resolve, CLOSE_IDLE_TIMEOUT_MS);
+                timer.unref?.();
+              }),
+            ]);
+          } catch {
+            // Best-effort: never block or throw when closing a chat.
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        }
+        s.disposeLocal();
+      }),
+    );
   }
 }

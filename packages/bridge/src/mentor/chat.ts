@@ -162,15 +162,23 @@ export class MentorChat implements ChatRole {
     }
   }
 
-  /** The attempt is done: its rating change and the streak, as a card. */
+  /** The attempt is done: its rating change and the streak, as a card (and persist snapshot for C5). */
   private showResult(result: MentorResult): void {
     const s = this.session;
-    const streak = s.mentor.home().streak.current;
+    const streak = s.mentor.status().streak;
+    // Persist completed attempt snapshot (verdict + code) so attempt history survives 30-day chat prune.
+    const learnerCode = s.mentor.store.solution(s.exercise.id) ?? s.mentor.store.work(s.attemptId)?.solution.join("\n\n") ?? undefined;
+    s.mentor.store.saveAttemptSnapshot(s.attemptId, {
+      savedAt: Date.now(),
+      ...(s.verdict ? { verdict: s.verdict } : {}),
+      ...(learnerCode ? { learnerCode } : {}),
+    });
     const gained = result.deltas.reduce((sum, d) => sum + d.after - d.before, 0);
+    const kindLabel = s.attempt.kind === "review" ? "Ôn xong" : s.attempt.kind === "interview" ? "Xong phỏng vấn" : "Xong bài";
     const card = this.port.addCard({
       kind: "mentor",
       tone: "ok",
-      title: `${s.attempt.kind === "review" ? "Ôn xong" : "Xong bài"}${result.revealed ? " (đã xem lời giải mẫu)" : ` · ${gained >= 0 ? "+" : ""}${gained} rating`}`,
+      title: `${kindLabel}${result.revealed ? " (đã xem lời giải mẫu)" : ` · ${gained >= 0 ? "+" : ""}${gained} rating`}`,
       actions: [],
       mentor: { type: "result", result, streak },
     }, () => {});

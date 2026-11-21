@@ -8,6 +8,8 @@ import { MENTOR_HINT_LABEL, MENTOR_HINT_MAX, MENTOR_SKILL_LABEL, MENTOR_STAGE_LA
 const STEPS: MentorStage[] = ["lab", "build", "defend"];
 const VARIANT_HINT = "Viết dự đoán vào cell Dự đoán và gửi mentor, trước khi code";
 const REVIEW_HINT = "Cài lại từ trí nhớ, rồi bấm Chấm bài: qua máy chấm là xong buổi ôn";
+const INTERVIEW_BUILD_HINT = "Phỏng vấn thử: tự cài từ cell trống (không có gợi ý), qua máy chấm rồi trả lời câu hỏi vặn sâu";
+const INTERVIEW_DEFEND_HINT = "Trả lời câu hỏi phản biện sâu của người phỏng vấn";
 const EXPERIMENT_HINT = "Viết dự đoán và gửi mentor; rồi chạy các cell để train, train xong bấm Chấm bài";
 
 const STEP_HINT: Record<MentorStage, string> = {
@@ -34,10 +36,11 @@ export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome, onCo
   const experiment = mentor.paper?.role === "experiment";
   const done = mentor.stage === "done";
   const review = mentor.kind === "review";
-  const steps: MentorStage[] = review ? ["build"] : STEPS;
+  const interview = mentor.kind === "interview";
+  const steps: MentorStage[] = review ? ["build"] : interview ? ["build", "defend"] : STEPS;
   const variant = !!mentor.variantOf;
-  const stepLabel = (s: MentorStage) => (review ? "Cài lại từ cell trống" : (variant || experiment) && s === "lab" ? "Dự đoán" : experiment && s === "build" ? "Train" : MENTOR_STAGE_LABEL[s]);
-  const stepHint = (s: MentorStage) => (review ? REVIEW_HINT : experiment && s !== "defend" && s !== "done" ? EXPERIMENT_HINT : variant && s === "lab" ? VARIANT_HINT : STEP_HINT[s]);
+  const stepLabel = (s: MentorStage) => (review ? "Cài lại từ cell trống" : interview && s === "build" ? "Code (không gợi ý)" : interview && s === "defend" ? "Hỏi vặn" : (variant || experiment) && s === "lab" ? "Dự đoán" : experiment && s === "build" ? "Train" : MENTOR_STAGE_LABEL[s]);
+  const stepHint = (s: MentorStage) => (review ? REVIEW_HINT : interview && s === "build" ? INTERVIEW_BUILD_HINT : interview && s === "defend" ? INTERVIEW_DEFEND_HINT : experiment && s !== "defend" && s !== "done" ? EXPERIMENT_HINT : variant && s === "lab" ? VARIANT_HINT : STEP_HINT[s]);
   const at = steps.indexOf(mentor.stage);
   const next = Math.min(MENTOR_HINT_MAX, mentor.hintLevel + 1);
   const v = mentor.verdict;
@@ -53,8 +56,8 @@ export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome, onCo
     <section class="mentor-bar" aria-label="Bài Mentor">
       <div class="mentor-bar-body chat-width">
         <div class="mentor-head">
-          <span class="mentor-mark" aria-hidden="true">{review ? "🔁" : "✦"}</span>
-          <span class="mentor-title" title={variant ? `Biến thể của: ${mentor.variantOf}` : mentor.title}>{review ? `Ôn lại: ${mentor.title}` : variant ? `Biến thể: ${mentor.title}` : mentor.title}</span>
+          <span class="mentor-mark" aria-hidden="true">{review ? "🔁" : interview ? "🎯" : "✦"}</span>
+          <span class="mentor-title" title={variant ? `Biến thể của: ${mentor.variantOf}` : mentor.title}>{review ? `Ôn lại: ${mentor.title}` : interview ? `Phỏng vấn: ${mentor.title}` : variant ? `Biến thể: ${mentor.title}` : mentor.title}</span>
           <button class="linkish mentor-home-link" onClick={onHome} title="Mở trang Mentor (bản đồ, rating, chuỗi ngày)">Trang Mentor</button>
         </div>
         {mentor.paper && (
@@ -90,14 +93,18 @@ export function MentorBar({ mentor, busy, onJudge, onHint, onStage, onHome, onCo
         {!done && (
           <div class="mentor-actions">
             <button class="primary small" disabled={busy} onClick={onJudge} title="Chạy bộ test ẩn trên cell bài làm của bạn">Chấm bài</button>
-            <button
-              class="secondary small"
-              disabled={busy || mentor.hintLevel >= MENTOR_HINT_MAX}
-              onClick={hint}
-              title={mentor.hintLevel >= MENTOR_HINT_MAX ? "Đã ở mức cao nhất" : `Mức tiếp theo: ${MENTOR_HINT_LABEL[next]}`}
-            >
-              Xin gợi ý <span class="mentor-hint-level">{mentor.hintLevel}/{MENTOR_HINT_MAX}</span>
-            </button>
+            {!interview ? (
+              <button
+                class="secondary small"
+                disabled={busy || mentor.hintLevel >= MENTOR_HINT_MAX}
+                onClick={hint}
+                title={mentor.hintLevel >= MENTOR_HINT_MAX ? "Đã ở mức cao nhất" : `Mức tiếp theo: ${MENTOR_HINT_LABEL[next]}`}
+              >
+                Xin gợi ý <span class="mentor-hint-level">{mentor.hintLevel}/{MENTOR_HINT_MAX}</span>
+              </button>
+            ) : (
+              <span class="mentor-flag" title="Chế độ phỏng vấn thử không có gợi ý">không gợi ý</span>
+            )}
             {mentor.stage === "lab" && (
               <button class="linkish" disabled={busy} onClick={() => onStage("build")} title={variant ? "Bỏ qua phần dự đoán (được ghi lại)" : "Bỏ qua phần kể lại công thức (được ghi lại)"}>Sang Dựng</button>
             )}

@@ -12,6 +12,8 @@ const TOKEN_TTL_MS = 5 * 60_000;
 const GIT_MS = 120_000;
 
 let cached: { token: string; at: number } | undefined;
+/** The `gh auth token` run in flight, shared by callers that arrive while it runs. */
+let pending: Promise<string> | undefined;
 /** Tokens handed out, so what the agent reads never shows them. */
 const known = new Set<string>();
 
@@ -28,7 +30,8 @@ export async function githubToken(): Promise<string> {
     return env;
   }
   if (cached && Date.now() - cached.at < TOKEN_TTL_MS) return cached.token;
-  const token = await new Promise<string>((resolve, reject) => {
+  // One spawn for everyone asking at once; a failure is shared too, and the next call may try again.
+  pending ??= new Promise<string>((resolve, reject) => {
     execFile(
       "gh",
       ["auth", "token", "--hostname", "github.com"],
@@ -44,11 +47,13 @@ export async function githubToken(): Promise<string> {
         resolve(stdout.trim());
       },
     );
-  });
-  if (!token) throw new GitFailed("The GitHub CLI gave no token. Run \"gh auth login\" once.");
-  cached = { token, at: Date.now() };
-  known.add(token);
-  return token;
+  }).then((token) => {
+    if (!token) throw new GitFailed("The GitHub CLI gave no token. Run \"gh auth login\" once.");
+    cached = { token, at: Date.now() };
+    known.add(token);
+    return token;
+  }).finally(() => { pending = undefined; });
+  return pending;
 }
 
 /**

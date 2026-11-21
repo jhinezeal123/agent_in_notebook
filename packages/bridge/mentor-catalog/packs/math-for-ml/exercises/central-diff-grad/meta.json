@@ -1,0 +1,21 @@
+{
+  "id": "central-diff-grad",
+  "title": "Kiểm tra đạo hàm bằng sai phân trung tâm",
+  "star": "numerical-grad",
+  "skills": [
+    "formula",
+    "train"
+  ],
+  "difficulty": 1300,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "numerical_grad",
+    "grad_rel_error"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

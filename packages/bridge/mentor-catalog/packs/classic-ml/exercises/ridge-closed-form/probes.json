@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao trong Ridge/L2 regularization ta thường KHÔNG phạt hệ số chệch (bias) $b$?",
+    "tag": "cml-ridge-no-bias-pen",
+    "answer": "Phạt b làm mô hình phụ thuộc vào gốc tọa độ của nhãn y (dịch y thêm +100 sẽ thay đổi nghiệm); giữ b tự do đảm bảo trung bình dự đoán luôn khớp trung bình y.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Vì sao khi hàm mất mát có hệ số $\\frac{1}{N}$ phía trước MSE thì nghiệm lại khác với khi bỏ $\\frac{1}{N}$ (nếu giữ nguyên giá trị $\\lambda$)?",
+    "tag": "cml-ridge-n-scaling",
+    "answer": "Nếu bỏ 1/N thì phần dữ liệu lớn gấp N lần so với số hạng phạt lambda * ||w||^2, tương đương chia nhỏ hệ số phạt hiệu dụng xuống lambda / N.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao nên dùng `np.linalg.solve(A, rhs)` thay vì `np.linalg.inv(A) @ rhs`?",
+    "tag": "cml-ridge-solve-vs-inv",
+    "answer": "`solve` nhanh hơn, tốn ít phép tính hơn và ổn định số hơn nhiều khi ma trận A có số điều kiện (condition number) lớn.",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu ta thêm một cột 1 vào `X` để ghép $(w, b)$ thành một vector rồi muốn KHÔNG phạt $b$, ma trận phạt $\\lambda I$ phải sửa ô nào?",
+    "tag": "cml-ridge-diag-zero",
+    "answer": "Đặt phần tử đường chéo ứng với cột bias bằng 0 thay vì 1.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

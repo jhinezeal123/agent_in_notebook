@@ -1,10 +1,10 @@
 import { memo } from "preact/compat";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { chatImageDataUrl, diffLines, diffStats, withContext, type AttachedCell, type ChatCard, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
+import { chatImageDataUrl, diffLines, diffStats, withContext, type AppliedChange, type AttachedCell, type ChatCard, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 import { externalChatUrl } from "./chat-links.js";
 import { chatImageSource } from "./images.js";
 import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
-import { groupParts, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
+import { groupParts, messageTime, messageTitle, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
 import { usePanelHost, type PanelHost } from "./host.js";
 import { Icon } from "./icons.js";
@@ -19,6 +19,20 @@ export interface PartActions {
   insertCell(source: string, cellType: "code" | "markdown"): void;
   /** Revert the notebook changes of one agent turn. */
   undo(messageId: string): Promise<void>;
+  /** Fetch the notebook changes one agent turn applied, from the journal (B2.1). */
+  changes?(messageId: string): Promise<AppliedChange[]>;
+  /** Pin or unpin a message so it survives 200-message trimming (B4.3). */
+  pin?(messageId: string, pinned: boolean): void;
+  /** Remove a single queued user message before its turn starts (B1.3). */
+  dequeue?(messageId: string): void;
+  /** Open a plot image in a zoomable VS Code editor tab (B5.2). */
+  openImage?(mime: string, data: string, alt?: string): void;
+  /** Open a review's before/after in VS Code's side-by-side diff editor (B2.2). */
+  openReviewDiff?(review: ReviewInfo): void;
+  /** Put a sent user message back in the composer: its text and attached cells. */
+  edit(text: string, cells: AttachedCell[]): void;
+  /** Send a user message again as a new one; the old message stays in the transcript. */
+  resend(text: string, cells: AttachedCell[]): void;
 }
 
 type PromptPart = Extract<Part, { type: "prompt" }>;
@@ -93,11 +107,21 @@ function showImageFallback(image: HTMLImageElement): void {
   image.closest(".chat-image")?.classList.add("image-unavailable");
 }
 
-function ChatImage({ mime, data, alt = "Image from agent" }: Extract<Part, { type: "image" }>) {
+function ChatImage({ mime, data, alt = "Image from agent", onOpen }: Extract<Part, { type: "image" }> & { onOpen?: () => void }) {
   const src = chatImageDataUrl(mime, data);
   return (
-    <div class={`chat-image${src ? "" : " image-unavailable"}`}>
-      {src && <img src={src} alt={alt} loading="lazy" decoding="async" onError={(event) => showImageFallback(event.currentTarget)} />}
+    <div class={`chat-image${src ? "" : " image-unavailable"}${onOpen ? " zoomable" : ""}`}>
+      {src && (
+        <img
+          src={src}
+          alt={alt}
+          title={onOpen ? "Click to zoom in VS Code" : undefined}
+          loading="lazy"
+          decoding="async"
+          onClick={onOpen}
+          onError={(event) => showImageFallback(event.currentTarget)}
+        />
+      )}
       <span class="image-fallback">Image unavailable</span>
     </div>
   );
@@ -133,19 +157,58 @@ export function AttachedChip({ cell, onFocus, onRemove }: { cell: AttachedCell; 
  */
 export const Message = memo(MessageView);
 
-function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions: PartActions; live?: boolean }) {
+function MessageView({
+  msg,
+  actions,
+  live = false,
+  queued = false,
+  highlight = false,
+  activeHit = false,
+}: {
+  msg: ChatMessage;
+  actions: PartActions;
+  live?: boolean;
+  queued?: boolean;
+  highlight?: boolean;
+  activeHit?: boolean;
+}) {
   const host = usePanelHost();
+  const hitCls = `${highlight ? " search-hit" : ""}${activeHit ? " search-active" : ""}${msg.pinned ? " is-pinned" : ""}`;
   if (msg.role === "user") {
     const text = msg.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     const cells = msg.parts.flatMap((p) => (p.type === "cells" ? p.cells : []));
     return (
-      <div class="msg user">
+      <div class={`msg user${hitCls}`} data-msg-id={msg.id} title={messageTitle(msg.createdAt)}>
         <Markdown text={text} />
         {cells.length > 0 && (
           <div class="msg-cells">
             {cells.map((cell) => <AttachedChip key={cell.cellId} cell={cell} onFocus={() => actions.focusCell(cell.cellId)} />)}
           </div>
         )}
+        <div class="msg-foot">
+          <span class="msg-time">{messageTime(msg.createdAt)}</span>
+          {queued && (
+            <span class="badge queued" title="Waiting for the agent to finish the current turn">
+              queued
+              {actions.dequeue && (
+                <button class="queued-remove" title="Remove from queue" aria-label="Remove queued message" onClick={() => actions.dequeue?.(msg.id)}>×</button>
+              )}
+            </span>
+          )}
+          {msg.pinned && <span class="badge pinned-badge">pinned</span>}
+          <button class="linkish" title="Put this message back in the input box, with its cells" onClick={() => actions.edit(text, cells)}>Edit</button>
+          <button class="linkish" title="Send this message again as a new one; this one stays" onClick={() => actions.resend(text, cells)}>Resend</button>
+          {actions.pin && (
+            <button
+              class={`icon pin-btn${msg.pinned ? " active" : ""}`}
+              title={msg.pinned ? "Unpin message" : "Pin message (survives 200-message trim)"}
+              aria-label={msg.pinned ? "Unpin message" : "Pin message"}
+              onClick={() => actions.pin?.(msg.id, !msg.pinned)}
+            >
+              <Icon name="pin" />
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -156,7 +219,7 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
   const items = groupParts(parts);
   const text = msg.role === "agent" && !live ? messageText(msg) : "";
   return (
-    <div class={`msg ${msg.role}`}>
+    <div class={`msg ${msg.role}${hitCls}`} data-msg-id={msg.id} title={messageTitle(msg.createdAt)}>
       {items.map((item, i) =>
         item.kind === "tools" ? (
           <ToolGroup key={i} tools={item.tools} />
@@ -164,9 +227,21 @@ function MessageView({ msg, actions, live = false }: { msg: ChatMessage; actions
           <PartView key={i} part={item.part} actions={actions} liveThought={live && i === items.length - 1} />
         ),
       )}
-      {!live && (text || msg.changes) && (
+      {!live && (text || msg.changes || msg.pinned) && (
         <div class="msg-foot">
+          <span class="msg-time">{messageTime(msg.createdAt)}</span>
+          {msg.pinned && <span class="badge pinned-badge">pinned</span>}
           {text && <CopyButton host={host} text={text} />}
+          {actions.pin && msg.role === "agent" && (
+            <button
+              class={`icon pin-btn${msg.pinned ? " active" : ""}`}
+              title={msg.pinned ? "Unpin message" : "Pin message (survives 200-message trim)"}
+              aria-label={msg.pinned ? "Unpin message" : "Pin message"}
+              onClick={() => actions.pin?.(msg.id, !msg.pinned)}
+            >
+              <Icon name="pin" />
+            </button>
+          )}
           {msg.changes && <Changes msg={msg} count={msg.changes.count} undone={!!msg.changes.undone} actions={actions} />}
         </div>
       )}
@@ -189,36 +264,102 @@ function CopyButton({ host, text }: { host: PanelHost; text: string }) {
   );
 }
 
-/** What the turn changed in the notebook, with an undo that asks once before acting. */
+/** What the turn changed in the notebook, with an audit diff view (B2.1) and undo that asks once before acting. */
 function Changes({ msg, count, undone, actions }: { msg: ChatMessage; count: number; undone: boolean; actions: PartActions }) {
   const [step, setStep] = useState<"idle" | "confirm" | "working">("idle");
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [entries, setEntries] = useState<AppliedChange[] | null>(null);
   const label = `${count} notebook change${count === 1 ? "" : "s"}`;
-  if (undone) return <div class="changes muted">{label} · undone</div>;
+
+  const toggleView = () => {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    if (entries !== null || !actions.changes) return;
+    setLoading(true);
+    void actions.changes(msg.id).then((list) => setEntries(list), () => setEntries([])).finally(() => setLoading(false));
+  };
+
   return (
-    <div class="changes">
-      {step === "confirm" ? (
-        <>
-          <span title="Cells edited since this turn are kept as they are.">Undo {label}?</span>
-          <button
-            class="primary small"
-            onClick={() => {
-              setStep("working");
-              void actions.undo(msg.id).finally(() => setStep("idle"));
-            }}
-          >
-            Undo
-          </button>
-          <button class="secondary small" onClick={() => setStep("idle")}>
-            Keep
-          </button>
-        </>
-      ) : (
-        <>
-          <span class="muted">{label}</span>
-          <button class="linkish" disabled={step === "working"} title="Put the notebook back as it was before this turn" onClick={() => setStep("confirm")}>
-            {step === "working" ? "Undoing…" : "Undo"}
-          </button>
-        </>
+    <div class="changes-wrap">
+      <div class={`changes${undone ? " muted" : ""}`}>
+        {step === "confirm" ? (
+          <>
+            <span title="Cells edited since this turn are kept as they are.">Undo {label}?</span>
+            <button
+              class="primary small"
+              onClick={() => {
+                setStep("working");
+                void actions.undo(msg.id).finally(() => setStep("idle"));
+              }}
+            >
+              Undo
+            </button>
+            <button class="secondary small" onClick={() => setStep("idle")}>
+              Keep
+            </button>
+          </>
+        ) : (
+          <>
+            <span class="muted">{label}{undone ? " · undone" : ""}</span>
+            {actions.changes && (
+              <button class="linkish" aria-expanded={open} title="View the cell diffs applied in this turn" onClick={toggleView}>
+                {open ? "Hide" : "View"}
+              </button>
+            )}
+            {!undone && (
+              <button class="linkish" disabled={step === "working"} title="Put the notebook back as it was before this turn" onClick={() => setStep("confirm")}>
+                {step === "working" ? "Undoing…" : "Undo"}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      {open && (
+        <div class="audit-drawer">
+          {loading && <div class="muted small">Loading changes…</div>}
+          {!loading && entries && !entries.length && <div class="muted small">Change details are no longer stored.</div>}
+          {!loading && entries?.map((ch, idx) => <AuditEntry key={idx} change={ch} actions={actions} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuditEntry({ change, actions }: { change: AppliedChange; actions: PartActions }) {
+  const before = change.kind === "insert" ? "" : change.kind === "move" ? "" : change.before;
+  const after = change.kind === "delete" ? "" : change.kind === "move" ? "" : change.after;
+  const lines = useMemo(() => (change.kind === "move" ? [] : diffLines(before, after)), [change.kind, before, after]);
+  const stats = diffStats(lines);
+  const rows = useMemo(() => withContext(lines, 2), [lines]);
+  return (
+    <div class="audit-entry">
+      <div class="audit-head">
+        <span class="audit-kind">{change.kind}</span>
+        <button class="cell-ref" onClick={() => actions.focusCell(change.cellId)}>
+          {change.cellType} [{change.index}]
+        </button>
+        {change.kind === "move" ? (
+          <span class="muted small">[{change.index}] → [{change.toIndex ?? change.index}]</span>
+        ) : (
+          <span class="stats">
+            <span class="add">+{stats.added}</span> <span class="del">−{stats.removed}</span>
+          </span>
+        )}
+      </div>
+      {change.kind !== "move" && rows.length > 0 && (
+        <div class="diff">
+          {rows.slice(0, 120).map((r, i) =>
+            r.op === "skip" ? (
+              <div key={i} class="row s">⋯ {r.count} unchanged</div>
+            ) : (
+              <div key={i} class={`row ${r.op === "add" ? "a" : r.op === "del" ? "d" : ""}`}>
+                <span class="sign">{r.op === "add" ? "+" : r.op === "del" ? "−" : " "}</span>
+                <span class="text">{r.text || " "}</span>
+              </div>
+            ),
+          )}
+        </div>
       )}
     </div>
   );
@@ -229,7 +370,7 @@ function PartView({ part, actions, liveThought }: { part: Part; actions: PartAct
     case "text":
       return <Markdown text={part.text} actions={actions} />;
     case "image":
-      return <ChatImage {...part} />;
+      return <ChatImage {...part} onOpen={actions.openImage ? () => actions.openImage!(part.mime, part.data, part.alt) : undefined} />;
     case "thought":
       return <Thought text={part.text} live={liveThought} />;
     case "tool":
@@ -404,8 +545,20 @@ export function Review({ review, status, actions }: { review: ReviewInfo; status
   const stats = diffStats(lines);
   const rows = useMemo(() => withContext(lines, review.kind === "update" ? 2 : 1_000_000), [lines, review.kind]);
   const [expanded, setExpanded] = useState(status === "pending");
+  const cellLabel = review.index !== undefined ? `[${review.index}] ${review.label || review.cellId.slice(0, 10)}` : review.cellId.slice(0, 10);
   return (
-    <div class={`card review ${status}`}>
+    <div
+      class={`card review ${status}`}
+      data-review-id={review.reviewId}
+      tabIndex={status === "pending" ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (status !== "pending") return;
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+        if (e.key === "a" || e.key === "A") { e.preventDefault(); actions.review(review.reviewId, true); }
+        else if (e.key === "r" || e.key === "R") { e.preventDefault(); actions.review(review.reviewId, false); }
+      }}
+    >
       <div class="review-head">
         <button class="linkish" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? "Hide the diff" : "Show the diff"}>
           <Icon name={expanded ? "chev-d" : "chev-r"} />
@@ -413,12 +566,17 @@ export function Review({ review, status, actions }: { review: ReviewInfo; status
         <span class="card-title">
           {REVIEW_TITLE[review.kind]} ·{" "}
           <button class="cell-ref" title="Show this cell in the notebook" onClick={() => actions.focusCell(review.cellId)}>
-            {review.cellType} {review.cellId.slice(0, 10)}
+            {review.cellType} {cellLabel}
           </button>
         </span>
         <span class="stats">
           <span class="add">+{stats.added}</span> <span class="del">−{stats.removed}</span>
         </span>
+        {actions.openReviewDiff && (
+          <button class="linkish small" title="Open side-by-side diff in VS Code" onClick={() => actions.openReviewDiff?.(review)}>
+            Diff
+          </button>
+        )}
         {status !== "pending" && (
           <span class={`badge ${status}`} title={REVIEW_BADGE[status].title}>
             {REVIEW_BADGE[status].text}
@@ -443,12 +601,13 @@ export function Review({ review, status, actions }: { review: ReviewInfo; status
       )}
       {status === "pending" && (
         <div class="card-actions">
-          <button class="primary" onClick={() => actions.review(review.reviewId, true)}>
+          <button class="primary" title="Apply (shortcut: A when card is focused)" onClick={() => actions.review(review.reviewId, true)}>
             {review.kind === "delete" ? "Delete" : "Apply"}
           </button>
-          <button class="secondary" onClick={() => actions.review(review.reviewId, false)}>
+          <button class="secondary" title="Reject (shortcut: R when card is focused)" onClick={() => actions.review(review.reviewId, false)}>
             Reject
           </button>
+          <span class="muted small review-hint">A / R</span>
         </div>
       )}
     </div>

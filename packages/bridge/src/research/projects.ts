@@ -87,7 +87,8 @@ export class ResearchProjects {
   private async base(wait: boolean): Promise<string> {
     const status = this.orx.status;
     if (status.state === "ready" && status.url) return status.url;
-    const starting = this.orx.start();
+    // Automatic (not a user action): a start that just failed is not spawned again every turn.
+    const starting = this.orx.start(false);
     if (wait) {
       const s = await Promise.race([starting, new Promise<null>((r) => setTimeout(() => r(null), START_WAIT_MS).unref())]);
       if (s?.state === "ready" && s.url) return s.url;

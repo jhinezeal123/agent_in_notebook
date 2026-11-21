@@ -87,13 +87,16 @@ export class BridgeLink {
     rpc.on("browser.focused", ({ tabId }: BridgeEvents["browser.focused"]) => {
       if (this.rpc === rpc) this.onBrowser({ focused: tabId });
     });
+    rpc.on("browser.status", ({ connected }: BridgeEvents["browser.status"]) => {
+      if (this.rpc === rpc) this.setState({ browserConnected: connected });
+    });
     rpc.on("research.status", (status: BridgeEvents["research.status"]) => {
       if (this.rpc === rpc) this.onResearch({ status });
     });
     rpc.on("research.run", (run: BridgeEvents["research.run"]) => {
       if (this.rpc === rpc) this.onResearch({ run });
     });
-    for (const method of ["chat.snapshot", "chat.patch", "chat.status", "chat.usage", "chat.run", "chat.machine", "chat.machineReplaced", "chat.mentor", "chat.workshop", "mentor.updated"]) {
+    for (const method of ["chat.snapshot", "chat.patch", "chat.meta", "chat.status", "chat.usage", "chat.run", "chat.machine", "chat.machineReplaced", "chat.mentor", "chat.workshop", "mentor.updated", "research.quota"]) {
       rpc.on(method, (params: unknown) => {
         if (this.rpc === rpc) this.publish({ event: "bridge", params: { method, params } });
       });
@@ -120,13 +123,13 @@ export class BridgeLink {
     });
     socket.on("open", async () => {
       try {
-        const { agents, bridgeVersion } = await rpc.request<{ agents: AgentInfo[]; bridgeVersion: string }>("hello", {
+        const { agents, bridgeVersion, browserConnected } = await rpc.request<{ agents: AgentInfo[]; bridgeVersion: string; browserConnected?: boolean }>("hello", {
           token: config.token, wire: WIRE_VERSION, extensionVersion: this.version,
         }, 6000);
         if (this.socket !== socket) return;
         paired = true;
         this.rpc = rpc;
-        this.setState({ conn: "connected", agents, bridgeVersion });
+        this.setState({ conn: "connected", agents, bridgeVersion, browserConnected: !!browserConnected });
       } catch (cause) {
         error = (cause as Error).message;
         socket.close(4401);

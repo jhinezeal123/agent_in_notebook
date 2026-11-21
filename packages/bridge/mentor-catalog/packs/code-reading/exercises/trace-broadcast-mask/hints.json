@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_shapes_general",
+    "text": "Ở dòng tính `mu`, `keepdims=True` giữ lại chiều `axis=1` với kích thước bằng bao nhiêu?"
+  },
+  {
+    "level": 0,
+    "test": "test_invariants_match_block",
+    "text": "Nếu `mu` là trung bình của `X` trên các vị trí có `w = 1`, thì tổng độ lệch `(X - mu) * w` theo trục `T` bằng bao nhiêu?"
+  },
+  {
+    "level": 1,
+    "text": "Theo dõi từng trục qua `[:, :, None]` và `keepdims=True`; nhận ra `mu` là trung bình có mask nên tổng phần dư `R` theo trục thời gian luôn triệt tiêu về 0 và độ lệch chuẩn bất biến với dịch chuyển hằng số."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở shape và bất biến",
+    "text": "w: (B, T, 1)\nmu: giữ chiều axis=1 nên là (B, 1, D)\nR: giữ shape X\nout: giảm trục 1 nên (B, D)\nTổng phần dư quanh trung bình = 0; vị trí mask=False bị nhân 0; độ lệch chuẩn không đổi khi tịnh tiến theo shift(B,1,D)."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở phần dict trả về",
+    "text": "```python\ndef trace_shapes(B, T, D):\n    return {\"w\": (B, T, 1), \"mu\": (B, 1, D), \"R\": (B, T, D), \"out\": (B, D)}\n```"
+  }
+]

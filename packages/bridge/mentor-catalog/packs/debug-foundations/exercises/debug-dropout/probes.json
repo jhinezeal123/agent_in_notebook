@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao các thư viện hiện đại dùng inverted dropout (scale lúc train) thay vì scale lúc eval?",
+    "tag": "dbg-dropout-inverted-why",
+    "answer": "Vì lúc suy luận (inference/eval) không cần biết p và không cần phép nhân phụ, tầng dropout trở thành phép đồng nhất hoàn toàn.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Nếu trong `dropout_forward` bạn chia cho $(1 - p)$ lúc train nhưng quên chia cho $(1 - p)$ trong `dropout_backward`, điều gì sai?",
+    "tag": "dbg-dropout-bwd-scale",
+    "answer": "Gradient truyền ngược sẽ bị nhỏ hơn đúng đạo hàm thật hệ số (1 - p), làm tốc độ học sai lệch khi p lớn.",
+    "kind": "break",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi $p = 1.0$ lúc train, phép chia `x / (1 - p)` gây lỗi gì và kết quả đúng phải là gì?",
+    "tag": "dbg-dropout-p1",
+    "answer": "Chia cho 0 gây NaN/inf (ngay cả khi nhân với mask False vì 0 * inf = NaN). Khi p == 1.0 phải trả về mảng 0 cùng mask toàn False.",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Tại sao ở chế độ `training=False` ta nên trả về `x.copy()` thay vì trả thẳng tham chiếu `x`?",
+    "tag": "dbg-dropout-eval-copy",
+    "answer": "Tránh việc caller sửa đổi đầu ra tại chỗ vô tình làm biến đổi luôn mảng đầu vào gốc.",
+    "kind": "why",
+    "stage": "defend"
+  }
+]

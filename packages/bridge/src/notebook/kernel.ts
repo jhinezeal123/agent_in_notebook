@@ -2,6 +2,7 @@
 // kernel, outside any cell. Each snippet defines one function in a namespace
 // of its own, calls it with JSON arguments, and prints a marked JSON line.
 
+import { createHash } from "node:crypto";
 import type { ExecResult } from "@ainb/protocol";
 
 /** How the bridge reaches the kernel: run code and wait at most `waitMs`. */
@@ -21,12 +22,62 @@ export class VmError extends Error {}
 /** Each call waits at most this long; longer means it queued behind a cell. */
 export const CALL_WAIT_MS = 15_000;
 const MARK = "\u001eainb ";
+const MISSING_HELPER = "__ainb_missing_helper";
 
-/** The code that runs `fn(args)` from `source`. */
+/** Helper hashes we have already installed at least once in this process. */
+const knownHelpers = new Set<string>();
+const hashCache = new Map<string, string>();
+
+function helperHash(fullSource: string): string {
+  let h = hashCache.get(fullSource);
+  if (!h) {
+    h = createHash("sha256").update(fullSource).digest("hex").slice(0, 12);
+    hashCache.set(fullSource, h);
+  }
+  return h;
+}
+
+/**
+ * The code that runs `fn(args)` from `source`.
+ * Passing `_ainb_raw` in the exec namespace dict avoids triple-escaping `args`
+ * (which carries 512KB–1MB file chunks) inside the outer `JSON.stringify(body)`.
+ */
 export function program(source: string, fn: string, args: Record<string, unknown>): string {
-  const body = `${source}\nimport json as _json\n${fn}(_json.loads(${JSON.stringify(JSON.stringify(args))}))\n`;
-  // JSON string literals are valid Python string literals.
-  return `exec(${JSON.stringify(body)}, {"__name__": "__ainb__"})`;
+  const body = `${source}\nimport json as _json\n${fn}(_json.loads(_ainb_raw))\n`;
+  return `exec(${JSON.stringify(body)}, {"__name__": "__ainb__", "_ainb_raw": ${JSON.stringify(JSON.stringify(args))}})`;
+}
+
+/** Tiny stub that loads `/tmp/ainb-<uid>/helpers-<hash>.py` if present on the VM, else reports missing. */
+function cachedLoader(hash: string, fn: string): string {
+  return String.raw`
+import os as _os, tempfile as _tf
+_hd = _os.path.join("/tmp" if _os.name == "posix" else _tf.gettempdir(), "ainb-%s" % (_os.getuid() if hasattr(_os, "getuid") else _os.getlogin()))
+_hp = _os.path.join(_hd, "helpers-${hash}.py")
+if _os.path.exists(_hp):
+    with open(_hp, "r", encoding="utf-8") as _hf:
+        exec(_hf.read(), globals())
+else:
+    def ${fn}(_a):
+        print("\x1eainb {\"${MISSING_HELPER}\":true}")
+`;
+}
+
+/** Write the helper source atomically to `/tmp/ainb-<uid>/helpers-<hash>.py` so later calls only send the stub. */
+function installPrefix(hash: string, fullSource: string): string {
+  return String.raw`
+import os as _os, tempfile as _tf
+try:
+    _hd = _os.path.join("/tmp" if _os.name == "posix" else _tf.gettempdir(), "ainb-%s" % (_os.getuid() if hasattr(_os, "getuid") else _os.getlogin()))
+    _hp = _os.path.join(_hd, "helpers-${hash}.py")
+    if not _os.path.exists(_hp):
+        _os.makedirs(_hd, mode=0o700, exist_ok=True)
+        _ht = _hp + ".%d.tmp" % _os.getpid()
+        with open(_ht, "w", encoding="utf-8") as _hf:
+            _hf.write(${JSON.stringify(fullSource)})
+        _os.replace(_ht, _hp)
+except OSError:
+    pass
+`;
 }
 
 /** Python that `source` can use to answer: `_ainb_done(result)`. */
@@ -36,10 +87,10 @@ def _ainb_done(res):
     print("\x1eainb " + json.dumps(res))
 `;
 
-export async function helperCall<T>(exec: KernelExec, source: string, fn: string, args: Record<string, unknown>, waitMs = CALL_WAIT_MS): Promise<T> {
+async function runSnippet<T>(exec: KernelExec, code: string, waitMs: number): Promise<T & { [MISSING_HELPER]?: boolean }> {
   let res: ExecResult;
   try {
-    res = await exec(program(DONE + source, fn, args), waitMs);
+    res = await exec(code, waitMs);
   } catch (e) {
     const msg = (e as Error).message;
     if (/kernel is busy/i.test(msg)) throw new KernelBusy(msg);
@@ -56,5 +107,22 @@ export async function helperCall<T>(exec: KernelExec, source: string, fn: string
   }
   const parsed = JSON.parse(line.slice(MARK.length));
   if (parsed.error) throw new VmError(parsed.error);
-  return parsed as T;
+  return parsed as T & { [MISSING_HELPER]?: boolean };
+}
+
+export async function helperCall<T>(exec: KernelExec, source: string, fn: string, args: Record<string, unknown>, waitMs = CALL_WAIT_MS): Promise<T> {
+  const full = DONE + source;
+  const hash = helperHash(full);
+  if (knownHelpers.has(hash)) {
+    const cached = await runSnippet<T>(exec, program(cachedLoader(hash, fn), fn, args), waitMs);
+    if (!cached[MISSING_HELPER]) return cached;
+  }
+  const result = await runSnippet<T>(exec, program(installPrefix(hash, full) + full, fn, args), waitMs);
+  knownHelpers.add(hash);
+  return result;
+}
+
+/** Reset the in-process helper install cache (tests). */
+export function resetHelperCache(): void {
+  knownHelpers.clear();
 }

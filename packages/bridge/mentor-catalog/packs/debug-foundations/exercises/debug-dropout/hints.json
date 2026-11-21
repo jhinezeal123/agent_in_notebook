@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_eval_identity",
+    "text": "Trong inverted dropout, khi `training=False` đầu ra phải liên hệ thế nào với `x`?"
+  },
+  {
+    "level": 0,
+    "test": "test_edge_p",
+    "text": "Nếu `p == 1.0` mà bạn tính `x / (1 - p)` rồi mới nhân mask, `inf * 0` trong NumPy cho ra gì?"
+  },
+  {
+    "level": 1,
+    "text": "Chuyển phép chia cho (1 - p) từ lúc eval sang lúc train (cả forward lẫn backward), trả về bản sao nguyên vẹn khi eval, và tách riêng nhánh p == 1.0 để tránh chia cho 0."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở inverted dropout",
+    "text": "Eval: trả về x.copy(), None\nTrain: nếu p == 1.0 trả về zeros và mask toàn False; ngược lại chia phần tử giữ lại cho (1 - p).\nBackward: nhân mask và chia (1 - p) tương tự."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở p == 1.0 và where",
+    "text": "```python\nif p == 1.0:\n    return np.zeros_like(x), np.zeros(x.shape, dtype=bool)\nmask = rng.random(x.shape) >= p\nreturn np.where(mask, x / (1.0 - p), 0.0), mask\n```"
+  }
+]

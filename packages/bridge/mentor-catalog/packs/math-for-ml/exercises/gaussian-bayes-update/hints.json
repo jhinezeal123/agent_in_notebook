@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_sequential_equals_batch",
+    "text": "Với $n$ quan sát độc lập cùng phương sai `obs_var`, tổng độ chính xác (precision) của dữ liệu là $1/\\text{obs\\_var}$ hay $n/\\text{obs\\_var}$?"
+  },
+  {
+    "level": 0,
+    "test": "test_predictive_includes_obs_noise",
+    "text": "Bất định của một quan sát mới $x_{\\text{new}} = \\theta + \\epsilon$ gồm mấy nguồn phương sai độc lập?"
+  },
+  {
+    "level": 1,
+    "text": "Chuyển sang độ chính xác (nghịch đảo phương sai): cộng precision tiên nghiệm với n/obs_var để tìm var_post; dùng var_post nhân tổng có trọng số để tìm mu_post; và cộng thêm obs_var cho phương sai tiên đoán."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở công thức",
+    "text": "prec_post = 1/var0 + n/obs_var\nvar_post = 1 / prec_post\nmu_post = var_post * (mu0/var0 + sum(x)/obs_var)\npredictive: cùng mean, phương sai = var_post + obs_var"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở posterior_normal",
+    "text": "```python\nprec0 = 1.0 / float(var0)\nvar_post = 1.0 / (prec0 + x.size / float(obs_var))\nmu_post = var_post * (float(mu0) * prec0 + float(x.sum()) / float(obs_var))\n```"
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Nhìn toàn bộ hàm `mystery_block_a(X, mask)`, biến `out` đang tính đại lượng thống kê quen thuộc nào trên các token hợp lệ?",
+    "tag": "cr-masked-std-meaning",
+    "answer": "Độ lệch chuẩn (standard deviation, biased) theo trục thời gian T của các token không bị mask cho từng (batch, feature).",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Tại sao `out` bất biến khi cộng `shift` dạng `(B, 1, D)` vào `X`, nhưng lại KHÔNG bất biến nếu `shift` thay đổi theo từng vị trí `t`?",
+    "tag": "cr-shift-invariance",
+    "answer": "Khi shift không phụ thuộc t, trung bình có mask mu tăng đúng bằng shift nên (X + shift) - (mu + shift) triệt tiêu hoàn toàn; nếu shift phụ thuộc t thì không triệt tiêu.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu trong `mystery_block_a` bỏ `[:, 0, :]` ở dòng `denom` và chia trực tiếp `(R*R).sum(axis=1) / denom`, shape của `out` biến thành gì?",
+    "tag": "cr-denom-broadcast-trap",
+    "answer": "`(R*R).sum(axis=1)` có shape (B, D) còn `denom` có shape (B, 1, 1); NumPy broadcast thành (B, B, D) gây lỗi ngầm cực kỳ nguy hiểm!",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu một hàng có toàn bộ `mask == False`, dòng `np.maximum(..., 1.0)` ngăn lỗi gì và `out` của hàng đó bằng bao nhiêu?",
+    "tag": "cr-all-false-mask",
+    "answer": "Ngăn chia cho 0 (NaN); vì w = 0 nên R = 0 và out bằng 0.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

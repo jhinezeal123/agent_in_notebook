@@ -10,7 +10,8 @@ export function splitLines(text: string): string[] {
   return text.replace(/\r\n?/g, "\n").split("\n");
 }
 
-export function diffLines(before: string, after: string): DiffLine[] {
+/** `maxCells`: the LCS table's budget; past it the middle is shown as replaced (a display may ask for less). */
+export function diffLines(before: string, after: string, maxCells: number = MAX_CELLS): DiffLine[] {
   const a = splitLines(before);
   const b = splitLines(after);
 
@@ -32,7 +33,7 @@ export function diffLines(before: string, after: string): DiffLine[] {
   const n = midA.length;
   const m = midB.length;
 
-  if (n * m > MAX_CELLS) {
+  if (n * m > maxCells) {
     midA.forEach((t, i) => out.push({ op: "del", text: t, oldNo: start + i + 1 }));
     midB.forEach((t, j) => out.push({ op: "add", text: t, newNo: start + j + 1 }));
   } else {

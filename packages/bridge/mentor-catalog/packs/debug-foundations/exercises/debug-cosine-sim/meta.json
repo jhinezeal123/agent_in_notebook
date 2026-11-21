@@ -1,0 +1,21 @@
+{
+  "id": "debug-cosine-sim",
+  "title": "Tìm lỗi: ma trận tương đồng cosine vượt [-1, 1]",
+  "star": "debug-tensor",
+  "skills": [
+    "train",
+    "tensor"
+  ],
+  "difficulty": 1200,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 2,
+  "functions": [
+    "cosine_sim"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "scaffoldFixed": true
+}

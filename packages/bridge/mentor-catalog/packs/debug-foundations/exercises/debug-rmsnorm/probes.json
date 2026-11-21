@@ -1,0 +1,30 @@
+[
+  {
+    "q": "RMSNorm khác LayerNorm ở đúng hai điểm nào (về công thức và tham số)?",
+    "tag": "dbg-rms-vs-ln",
+    "answer": "RMSNorm không trừ trung bình (không re-center) trước khi chuẩn hóa, và không có tham số dịch beta (chỉ có gamma).",
+    "kind": "compare",
+    "stage": "lab"
+  },
+  {
+    "q": "Tại sao các LLM hiện đại (LLaMA, Gemma) chuộng RMSNorm hơn LayerNorm?",
+    "tag": "dbg-rms-why-llm",
+    "answer": "Bỏ bước tính và trừ mean giúp giảm chi phí tính toán và đồng bộ bộ nhớ mà vẫn giữ hiệu năng tương đương do phần scaling (re-scaling) mới đóng vai trò chính.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Với $\\gamma = \\mathbf{1}$, chuẩn căn trung bình bình phương (RMS) của đầu ra RMSNorm trên mỗi token xấp xỉ bao nhiêu?",
+    "tag": "dbg-rms-unit",
+    "answer": "Xấp xỉ 1 (chính xác bằng 1 khi eps -> 0 và x != 0).",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu tính RMS bằng `np.linalg.norm(x)` thay vì `sqrt(mean(x^2))`, đầu ra sẽ lệch đi bao nhiêu lần?",
+    "tag": "dbg-rms-l2-factor",
+    "answer": "Lệch đi hệ số sqrt(D) vì L2 norm không chia cho D trước khi lấy căn.",
+    "kind": "break",
+    "stage": "defend"
+  }
+]

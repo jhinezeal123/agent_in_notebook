@@ -9,7 +9,7 @@
 
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import { notebookKey, type ChatProject, type NotebookChatSummary, type ResearchStatus } from "@ainb/protocol";
+import { notebookKey, type ChatProject, type KaggleQuotaStatus, type NotebookChatSummary, type ResearchStatus } from "@ainb/protocol";
 import { DEFAULT_KERNEL_SETUP, pickProject, type AgentLogin, type FromHost, type HostEvents, type KaggleAccount, type KaggleNotebookLaunch, type KernelSetup, type NotebookEntry, type ProjectChoice, type SelectedChat, type StudioView, type ToHost } from "../../studio/src/messages.js";
 import type { ChangeSet, ChangedFile } from "./changes.js";
 import { listKaggleAccounts, openKaggleNotebook } from "./kaggle-notebooks.js";
@@ -78,6 +78,9 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly statusItem: vscode.StatusBarItem;
   /** Live runs: their project, and whether they still wait in their provider's queue. */
   private running = new Map<string, { projectId: string; queued: boolean }>();
+  /** Latest Kaggle quota snapshot from the bridge watcher (C3). */
+  private quota?: KaggleQuotaStatus;
+  private warnedQuota = new Set<string>();
   /** The project a Kaggle notebook being opened from the launcher joins. */
   private kaggleProject?: { id: string; until: number };
 
@@ -264,6 +267,37 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     }
   }
 
+  /** Proactive Kaggle quota / idle-session update from bridge watcher (C3). */
+  onQuota(status: KaggleQuotaStatus): void {
+    this.quota = status;
+    this.renderStatus();
+    if (!status.configured) return;
+    if (status.lowGpuAccounts.length) {
+      const key = `low:${status.lowGpuAccounts.join(",")}`;
+      if (!this.warnedQuota.has(key)) {
+        this.warnedQuota.add(key);
+        const open = "Open Compute";
+        void vscode.window
+          .showWarningMessage(`Kaggle GPU quota is running low for ${status.lowGpuAccounts.join(", ")}.`, open)
+          .then((pick) => { if (pick === open) this.open({ view: "settings", section: "compute" }); });
+      }
+    }
+    for (const s of status.idleSessions) {
+      if (s.idleMs < 30 * 60_000) continue;
+      const key = `idle:${s.id}`;
+      if (this.warnedQuota.has(key)) continue;
+      this.warnedQuota.add(key);
+      const closeBtn = "Close session";
+      const open = "Open Compute";
+      void vscode.window
+        .showWarningMessage(`Idle Kaggle session ${s.id.slice(0, 12)} (${s.account}) has no active run and is burning GPU quota.`, closeBtn, open)
+        .then((pick) => {
+          if (pick === closeBtn) void this.deps.bridge("research.closeSession", { sessionId: s.id }).catch(() => {});
+          else if (pick === open) this.open({ view: "settings", section: "compute" });
+        });
+    }
+  }
+
   private renderStatus(): void {
     const s = this.status;
     if (s.state === "off") { this.statusItem.hide(); return; }
@@ -273,7 +307,14 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
     this.statusItem.text = s.state === "ready"
       ? `$(beaker) ${counts || "OpenResearch"}`
       : s.state === "starting" ? "$(loading~spin) OpenResearch" : "$(warning) OpenResearch";
-    this.statusItem.tooltip = s.state === "ready" ? `OpenResearch ${s.version ?? ""} at ${s.url}${s.owned ? "" : " (already running)"}` : s.error ?? "OpenResearch is starting";
+    const quotaLine = this.quota?.configured
+      ? this.quota.accounts
+          .filter((a) => a.gpu)
+          .map((a) => `Kaggle ${a.account}: ${a.gpu!.remaining.toFixed(1)}h/${a.gpu!.total}h GPU left`)
+          .join(" · ")
+      : "";
+    const baseTip = s.state === "ready" ? `OpenResearch ${s.version ?? ""} at ${s.url}${s.owned ? "" : " (already running)"}` : s.error ?? "OpenResearch is starting";
+    this.statusItem.tooltip = quotaLine ? `${baseTip}\n${quotaLine}` : baseTip;
     this.statusItem.show();
   }
 
@@ -453,6 +494,7 @@ export class Studio implements vscode.WebviewViewProvider, vscode.Disposable {
         return;
       }
       case "agents.list": case "agents.save": case "agents.remove": case "agents.test":
+      case "research.quota": case "research.closeSession":
         return this.deps.bridge(method, p);
       case "kernel.get": return { ...DEFAULT_KERNEL_SETUP, ...this.deps.context.globalState.get<KernelSetup>(KERNEL_KEY) };
       case "kernel.set": {

@@ -15,8 +15,10 @@ import { Denied, TOOLS, tool, type ToolContext, type ToolDef } from "../notebook
 import { loadExercise, type Exercise } from "./catalog.js";
 import type { Mentor } from "./index.js";
 import { paperEventId } from "./model.js";
+import { starStates, overallOf } from "./model.js";
 import { checkPlan, paperExerciseId, PaperShelf, PlanSchema, slugOf } from "./papers.js";
-import { referenceContext, reportText, verifyExercise, type VerifyReport } from "./verify.js";
+import { KernelPool } from "./pool.js";
+import { referenceContext, reportText, trainsOnGpu, verifyExercise, type VerifyReport } from "./verify.js";
 
 /** Checks the author may run on one component before it is given up. */
 export const CHECKS_PER_COMPONENT = 4;
@@ -61,6 +63,8 @@ export class WorkshopHub {
   private readonly lastReport = new Map<string, VerifyReport>();
   /** Drafts that passed and went on the shelf during the run in progress (paper/slug). */
   private readonly fresh = new Set<string>();
+  /** Shared KernelPool per active authoring paper on persistent kernels (A7.3). */
+  private readonly pools = new Map<string, KernelPool>();
   /** Why the run in progress cannot go on (the machine is off), by paper: it stops without blaming the exercises. */
   private readonly halted = new Map<string, { why: string; advice: string }>();
   private readonly listeners = new Set<(paperId: string) => void>();
@@ -142,7 +146,7 @@ export class WorkshopHub {
       plan, title: plan.title, ...(plan.authors ? { authors: plan.authors } : {}), ...(plan.year ? { year: plan.year } : {}), goal: plan.goal,
       approved, status: approved ? info.status : "planning",
     });
-    this.mentor.reloadCatalog();
+    this.mentor.reloadPapers();
     this.changed(paperId);
     return [];
   }
@@ -152,7 +156,7 @@ export class WorkshopHub {
     if (!info.plan) throw new Error("Mentor chưa đưa kế hoạch nào.");
     if (!info.approvedOnce) this.mentor.record({ t: "paper", attemptId: paperEventId(paperId), paperId, what: "planned" });
     this.shelf.write(paperId, { approved: true, approvedOnce: true, status: "authoring" });
-    this.mentor.reloadCatalog();
+    this.mentor.reloadPapers();
     this.changed(paperId);
     return this.view(paperId);
   }
@@ -166,7 +170,7 @@ export class WorkshopHub {
     const all = [info.reports[slug], reason.trim()].filter(Boolean).join("\n").slice(-1500);
     this.shelf.write(paperId, { reports: { ...info.reports, [slug]: all } });
     // The shelf shows the paper as the catalog read it.
-    this.mentor.reloadCatalog();
+    this.mentor.reloadPapers();
     this.changed(paperId);
     return true;
   }
@@ -228,6 +232,7 @@ export class WorkshopHub {
         this.halt(paperId, down);
         return;
       }
+      await this.startPool(paperId, tabId);
       chat = this.host.authorChat(paperId, tabId);
       const givenNeeded = plan.components.some((c) => c.mode === "given") && !this.shelf.read(paperId).given.trim();
       if (givenNeeded && !stopped()) {
@@ -291,13 +296,16 @@ export class WorkshopHub {
       }
     } finally {
       chat?.close();
+      const pool = this.pools.get(paperId);
+      this.pools.delete(paperId);
+      await pool?.close().catch(() => {});
       const halted = this.halted.get(paperId);
       this.halted.delete(paperId);
       const now = this.shelf.read(paperId);
       // Ready once every component is an exercise: one that could not be written keeps the paper in the writing step.
       const left = built.filter((c) => !exists(c.slug)).length;
       this.shelf.write(paperId, { status: left ? "authoring" : "ready" });
-      this.mentor.reloadCatalog();
+      this.mentor.reloadPapers();
       this.progress.set(paperId, {
         ...this.counts(paperId), running: false,
         ...(halted ? { note: `đã dừng: ${halted.why}` } : opts.signal.aborted ? { note: "đã dừng" } : {}),
@@ -305,6 +313,36 @@ export class WorkshopHub {
       this.changed(paperId);
       if (halted) this.host.say(paperId, `Mentor dừng soạn bài: ${halted.why} ${halted.advice}`);
     }
+  }
+
+  /** Start a shared KernelPool for this authoring run when the workshop kernel persists globals (A7.3). */
+  private async startPool(paperId: string, tabId: number): Promise<void> {
+    try {
+      await this.host.exec(tabId, 'globals()["_ainb_pool_probe"] = 1', 15_000);
+      const check = await this.host.exec(tabId, 'print("<<POOL-PERSIST " + ("1" if globals().pop("_ainb_pool_probe", None) == 1 else "0") + ">>")', 15_000);
+      const out = check.outputs.filter((o) => o.kind === "stream").map((o) => o.text ?? "").join("");
+      if (!out.includes("<<POOL-PERSIST 1>>")) return;
+      const pool = new KernelPool((code, waitMs) => this.host.exec(tabId, code, waitMs));
+      await pool.start();
+      this.pools.set(paperId, pool);
+    } catch {
+      // Non-persistent or busy kernel: fall back cleanly to sequential verification.
+    }
+  }
+
+  private async verifyOnWorkshop(paperId: string, ex: Exercise, exec: Exec): Promise<VerifyReport> {
+    const context = referenceContext(this.mentor.catalog, ex);
+    const pool = this.pools.get(paperId);
+    if (pool) {
+      try {
+        return await verifyExercise(ex, pool.exec(ex.id, trainsOnGpu(ex, context)), { context, concurrent: true });
+      } catch {
+        // Pool lost (e.g. kernel restarted): drop pool and fall back once to direct exec.
+        this.pools.delete(paperId);
+        await pool.close().catch(() => {});
+      }
+    }
+    return verifyExercise(ex, exec, { context });
   }
 
   /**
@@ -321,23 +359,42 @@ export class WorkshopHub {
     this.mentor.voidExercise(id, "Bài đã được soạn lại.");
     const catalog = this.mentor.catalog;
     const builtOn = (ex: Exercise): boolean => ex.uses.some((u) => u === id || builtOn(catalog.exercise(u) ?? ({ uses: [] } as unknown as Exercise)));
-    for (const dep of catalog.exercises.filter((e) => e.paper === paperId && e.id !== id && builtOn(e))) {
+    const deps = catalog.exercises.filter((e) => e.paper === paperId && e.id !== id && builtOn(e));
+    const exec: Exec = (code, waitMs) => this.host.exec(tabId, code, waitMs);
+    const recordFailure = (dep: Exercise, report: VerifyReport) => {
+      if (report.ok) return;
+      const depSlug = slugOf(paperId, dep.id);
+      const why = report.checks.filter((x) => !x.ok).map((x) => `${x.id}: ${x.note ?? ""}`).join("; ");
+      const now = this.shelf.read(paperId).reports;
+      this.shelf.write(paperId, { reports: { ...now, [depSlug]: [now[depSlug], `Bài “${this.shelf.read(paperId).plan?.components.find((c) => c.slug === slug)?.title ?? slug}” mà nó dựng trên vừa được soạn lại, và bài này không còn qua kiểm chứng (${why.slice(0, 300)}).`].filter(Boolean).join("\n") } });
+    };
+    if (this.pools.has(paperId) && deps.length > 1) {
+      progress.current = deps.map((d) => d.title).join(", ");
+      progress.note = "kiểm lại song song vì bài dựng trên đã đổi";
+      this.changed(paperId);
+      await Promise.all(deps.map(async (dep) => {
+        if (this.halted.has(paperId)) return;
+        try {
+          recordFailure(dep, await this.verifyOnWorkshop(paperId, dep, exec));
+        } catch (e) {
+          this.halt(paperId, `máy của notebook xưởng không chạy được code (${(e as Error).message.slice(0, 160)}).`);
+        }
+      }));
+      return;
+    }
+    for (const dep of deps) {
       if (this.halted.has(paperId)) break;
       progress.current = dep.title;
       progress.note = "kiểm lại vì bài nó dựng trên đã đổi";
       this.changed(paperId);
       let report: VerifyReport;
       try {
-        report = await verifyExercise(dep, (code, waitMs) => this.host.exec(tabId, code, waitMs), { context: referenceContext(catalog, dep) });
+        report = await this.verifyOnWorkshop(paperId, dep, exec);
       } catch (e) {
         this.halt(paperId, `máy của notebook xưởng không chạy được code (${(e as Error).message.slice(0, 160)}).`);
         break;
       }
-      if (report.ok) continue;
-      const depSlug = slugOf(paperId, dep.id);
-      const why = report.checks.filter((x) => !x.ok).map((x) => `${x.id}: ${x.note ?? ""}`).join("; ");
-      const now = this.shelf.read(paperId).reports;
-      this.shelf.write(paperId, { reports: { ...now, [depSlug]: [now[depSlug], `Bài “${this.shelf.read(paperId).plan?.components.find((c) => c.slug === slug)?.title ?? slug}” mà nó dựng trên vừa được soạn lại, và bài này không còn qua kiểm chứng (${why.slice(0, 300)}).`].filter(Boolean).join("\n") } });
+      recordFailure(dep, report);
     }
   }
 
@@ -414,7 +471,7 @@ export class WorkshopHub {
     };
     let report: VerifyReport;
     try {
-      report = await verifyExercise(ex, exec, { context: referenceContext(this.mentor.catalog, ex) });
+      report = await this.verifyOnWorkshop(paperId, ex, exec);
     } catch (e) {
       return machineDown(`máy của notebook xưởng không chạy được code (${(e as Error).message.slice(0, 160)}).`);
     }
@@ -425,7 +482,7 @@ export class WorkshopHub {
     if (report.ok) {
       this.shelf.publish(paperId, slug, report);
       this.fresh.add(key);
-      this.mentor.reloadCatalog();
+      this.mentor.reloadPapers();
     } else if (progress) {
       progress.note = `lần ${n}: ${report.checks.find((c) => !c.ok)?.id ?? "hỏng"}`;
     }
@@ -439,7 +496,7 @@ export class WorkshopHub {
       throw new Denied("The paper's given code is fixed: exercises are already verified against it and the learner may have done them. Put what this exercise needs in its own given.py.");
     }
     this.shelf.saveGiven(paperId, code);
-    this.mentor.reloadCatalog();
+    this.mentor.reloadPapers();
     this.changed(paperId);
   }
 }
@@ -469,9 +526,11 @@ export class WorkshopSession {
     if (v.authoring) lines.push(`Exercises written: ${v.authoring.done}/${v.authoring.total}${v.authoring.failed ? `, ${v.authoring.failed} could not be written` : ""}${v.authoring.running ? " (writing now)" : ""}.`);
     if (this.role === "plan") {
       const m = this.hub.mentor;
-      const home = m.home();
-      const learnt = home.stars.filter((s) => s.state === "mastered").map((s) => s.id);
-      lines.push(`The learner: overall rating ${home.overall ?? "none yet"}; stars learnt: ${learnt.join(", ") || "none"}.`);
+      const st = m.state();
+      const overall = overallOf(st.ratings);
+      const stars = starStates(st, m.catalog);
+      const learnt = [...stars.entries()].filter(([, v]) => v === "mastered").map(([id]) => id);
+      lines.push(`The learner: overall rating ${overall ?? "none yet"}; stars learnt: ${learnt.join(", ") || "none"}.`);
     }
     return `<workshop-state>\n${lines.join("\n")}\n</workshop-state>`;
   }

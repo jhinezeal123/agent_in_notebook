@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao viết thẳng `p * np.log(p)` thất bại khi có một lớp mang xác suất `p_i = 0`?",
+    "tag": "math-zero-log-zero",
+    "answer": "Vì `np.log(0.0)` cho `-inf`, và trong IEEE 754 `0.0 * (-inf)` cho `NaN` thay vì 0.",
+    "kind": "trap",
+    "stage": "lab"
+  },
+  {
+    "q": "Vì sao tối thiểu hóa Forward KL $D_{\\mathrm{KL}}(p \\parallel q)$ có xu hướng phủ kín mọi đỉnh (mode-covering), còn Reverse KL $D_{\\mathrm{KL}}(q \\parallel p)$ lại chọn một đỉnh (mode-seeking)?",
+    "tag": "math-forward-reverse-kl",
+    "answer": "Trong Forward KL, bất cứ nơi nào p > 0 mà q -> 0 đều bị phạt tới +inf nên q buộc phải phủ hết support của p; ngược lại Reverse KL chỉ phạt nơi q > 0 mà p nhỏ nên q có thể co gọn vào 1 mode.",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Liên hệ giữa cross-entropy $H(p, q)$, entropy $H(p)$ và $D_{\\mathrm{KL}}(p \\parallel q)$ là gì? Vì sao khi train phân loại ta tối thiểu cross-entropy thay vì KL?",
+    "tag": "math-ce-kl-relation",
+    "answer": "H(p, q) = H(p) + D_KL(p || q). Vì H(p) không phụ thuộc tham số của mô hình q, gradient của cross-entropy và KL theo q giống hệt nhau.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Trong bài này, trường hợp $p_i = 0$ và $q_i = 0$ cho số hạng bằng 0 hay `+inf`? Còn $p_i > 0, q_i = 0$?",
+    "tag": "math-kl-support-edge",
+    "answer": "p_i = 0, q_i = 0 đóng góp 0 (theo quy ước 0 log 0 = 0); còn p_i > 0, q_i = 0 khiến D_KL = +inf vì p không tuyệt đối liên tục đối với q.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

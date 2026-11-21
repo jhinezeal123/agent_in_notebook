@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao khi $\\sigma^2 \\approx 1$ hai cách đặt $\\varepsilon$ gần như giống nhau, nhưng khi $\\sigma^2 \\approx 10^{-6}$ lại khác xa hàng chục lần?",
+    "tag": "dbg-ln-eps-scale",
+    "answer": "Khi var = 1e-6 và eps = 1e-5: sqrt(var + eps) ≈ 3.3e-3, còn sqrt(var) + eps ≈ 1.01e-3 — lệch hơn 3 lần do căn bậc hai làm tăng bậc của eps.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Về mặt đạo hàm ngược (backprop), đặt $\\varepsilon$ ngoài căn gây nguy hiểm gì khi một hàng gần như hằng số?",
+    "tag": "dbg-ln-eps-grad",
+    "answer": "Đạo hàm của sqrt(var) chứa 1/(2*sqrt(var)), nổ ra vô cùng khi var → 0, trong khi đạo hàm của sqrt(var + eps) luôn bị chặn bởi 1/(2*sqrt(eps)).",
+    "kind": "break",
+    "stage": "defend"
+  },
+  {
+    "q": "LayerNorm dùng phương sai chia cho $D$ (ddof=0) hay $D-1$ (ddof=1)? Vì sao?",
+    "tag": "dbg-ln-ddof",
+    "answer": "Chia cho D (ddof=0, biased variance) theo đúng định nghĩa LayerNorm và PyTorch nn.LayerNorm; đặc biệt nếu D=1 thì ddof=1 sẽ chia cho 0.",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu đầu vào là một hàng hằng số $x = [5, 5, 5, 5]$, đầu ra của LayerNorm phải là gì?",
+    "tag": "dbg-ln-const-row",
+    "answer": "x - mu = 0 nên toàn bộ phần chuẩn hóa bằng 0, đầu ra đúng bằng beta (không được ra NaN).",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

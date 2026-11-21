@@ -1,0 +1,22 @@
+{
+  "id": "debug-adam-step",
+  "title": "Tìm lỗi: bước đầu tiên của Adam quá nhỏ",
+  "star": "debug-train-optim",
+  "skills": [
+    "train",
+    "formula"
+  ],
+  "difficulty": 1500,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "adam_init",
+    "adam_step"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "scaffoldFixed": true
+}

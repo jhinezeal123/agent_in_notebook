@@ -19,6 +19,17 @@ const LANGS = ["python", "r", "julia"] as const;
 export class ColabAdapter implements NotebookAdapter {
   readonly platform = "colab" as const;
 
+  // No runStates() here on purpose (A4.1): the only known way to read a cell's
+  // execution count is getModel().toJson(), which serializes the whole cell
+  // including outputs — exactly the cost the watcher's getCells({}) fallback
+  // already pays. A cached count would miss runs the cache never saw, so the
+  // fallback stays; the adaptive poll in main.ts is the win instead.
+
+  private selectionTimer: ReturnType<typeof setInterval> | null = null;
+  private selectionEl: Any = null;
+  private selectionFire: (() => void) | null = null;
+  private disposed = false;
+
   private get nb(): Any {
     const nb = (window as Any).colab?.global?.notebook;
     if (!nb) throw new OpError("Colab's notebook is not loaded yet.");
@@ -105,8 +116,15 @@ export class ColabAdapter implements NotebookAdapter {
   getCells(opts: { cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean }): CellInfo[] {
     const all = this.cells().map((c, i) => [c, i] as const);
     let picked = all;
-    if (opts.cellIds) picked = opts.cellIds.map((id) => all.find(([c]) => c.getId() === id)).filter((x): x is (typeof all)[number] => !!x);
-    else if (opts.start !== undefined || opts.end !== undefined) picked = all.slice(opts.start ?? 0, (opts.end ?? all.length - 1) + 1);
+    if (opts.cellIds) {
+      // One index per read instead of a linear scan for every asked id (A4.2).
+      const byId = new Map<string, (typeof all)[number]>();
+      for (const entry of all) {
+        const id = entry[0].getId();
+        if (!byId.has(id)) byId.set(id, entry);
+      }
+      picked = opts.cellIds.map((id) => byId.get(id)).filter((x): x is (typeof all)[number] => !!x);
+    } else if (opts.start !== undefined || opts.end !== undefined) picked = all.slice(opts.start ?? 0, (opts.end ?? all.length - 1) + 1);
     return picked.map(([c, i]) => this.toInfo(c, i, !!opts.includeOutputs));
   }
 
@@ -247,8 +265,10 @@ export class ColabAdapter implements NotebookAdapter {
   }
 
   onSelectionChange(cb: () => void): void {
+    if (this.selectionFire) return; // one subscription per adapter
     let last = "";
     const fire = () => {
+      if (this.disposed) return;
       try {
         const i = this.info();
         const key = `${i.activeCellId}|${i.selectedCellIds.join(",")}`;
@@ -260,11 +280,44 @@ export class ColabAdapter implements NotebookAdapter {
         // notebook reloading
       }
     };
+    const fromListener = () => {
+      // The listener really fires in this Colab build: the poll below was only
+      // proving that, and is no longer needed (A4.2).
+      if (this.selectionTimer) {
+        clearInterval(this.selectionTimer);
+        this.selectionTimer = null;
+      }
+      fire();
+    };
+    let attached = false;
     try {
-      this.nb.getElement?.()?.addEventListener("focusChanged", fire);
+      const el = this.nb.getElement?.();
+      if (el && typeof el.addEventListener === "function") {
+        el.addEventListener("focusChanged", fromListener);
+        this.selectionEl = el;
+        this.selectionFire = fromListener;
+        attached = true;
+      }
     } catch {
       // fall back to polling below
     }
-    setInterval(fire, 1000);
+    // No listener: poll as before. Listener attached: addEventListener accepts
+    // any event name, so only a real firing proves "focusChanged" exists in
+    // this minified build — until then a slow poll keeps selection alive, and
+    // it stops for good on the first firing.
+    this.selectionTimer = setInterval(fire, attached ? 5000 : 1000);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.selectionTimer) clearInterval(this.selectionTimer);
+    this.selectionTimer = null;
+    try {
+      if (this.selectionEl && this.selectionFire) this.selectionEl.removeEventListener("focusChanged", this.selectionFire);
+    } catch {
+      // the element is already gone
+    }
+    this.selectionEl = null;
+    this.selectionFire = null;
   }
 }

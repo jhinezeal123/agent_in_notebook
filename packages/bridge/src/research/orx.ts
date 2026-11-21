@@ -41,6 +41,12 @@ export interface OrxOptions {
 export const ORX_DEFAULT_PORT = 4791;
 const READY_LINE = /dashboard on (http:\/\/127\.0\.0\.1:\d+)/;
 const STDERR_KEEP = 4000;
+/** Automatic starts wait this long after a failed one: a crash at startup must not spawn an orx per turn. */
+const START_COOLDOWN_MS = 60_000;
+/** The event stream reconnects after 2s, doubling to 30s while it keeps dropping, plus a little jitter. */
+const RETRY_BASE_MS = 2000;
+const RETRY_MAX_MS = 30_000;
+const RETRY_JITTER_MS = 500;
 
 export class Orx {
   status: ResearchStatus = { state: "off" };
@@ -51,6 +57,10 @@ export class Orx {
   private closed = false;
   /** Bumped by every stop, so a stale start or event stream gives up. */
   private generation = 0;
+  /** When the last start failed; automatic starts inside the cooldown get that error instead of a spawn. */
+  private lastStartFailureAt = 0;
+  /** How long the next event-stream reconnect waits; a healthy stream resets it. */
+  private retryDelay = RETRY_BASE_MS;
 
   constructor(private readonly opts: OrxOptions) {}
 
@@ -77,9 +87,15 @@ export class Orx {
     });
   }
 
-  /** Start OpenResearch (or join a running one). Safe to call repeatedly. */
-  start(): Promise<ResearchStatus> {
+  /**
+   * Start OpenResearch (or join a running one). Safe to call repeatedly.
+   * `manual` (the default, as the editor's status/configure calls use): a user
+   * asked, so a recent failure does not hold it back. Automatic calls (each
+   * chat turn) pass false: inside the cooldown they get the last error at once.
+   */
+  start(manual = true): Promise<ResearchStatus> {
     if (this.status.state === "ready") return Promise.resolve(this.status);
+    if (!manual && !this.starting && Date.now() - this.lastStartFailureAt < START_COOLDOWN_MS) return Promise.resolve(this.status);
     this.starting ??= this.doStart().finally(() => { this.starting = undefined; });
     return this.starting;
   }
@@ -101,6 +117,7 @@ export class Orx {
   private stop(): void {
     this.generation++;
     clearTimeout(this.retry);
+    this.retryDelay = RETRY_BASE_MS;
     this.events?.destroy();
     this.events = undefined;
     const child = this.child;
@@ -169,6 +186,7 @@ export class Orx {
       if (this.child === child) this.child = undefined;
       if (child.exitCode === null) child.kill();
       if (generation !== this.generation) return this.status;
+      this.lastStartFailureAt = Date.now();
       this.setStatus({ state: "error", orxPath, error: (e as Error).message });
       return this.status;
     }
@@ -176,6 +194,8 @@ export class Orx {
 
   private ready(status: ResearchStatus, generation: number): ResearchStatus {
     this.setStatus(status);
+    // A server just found healthy starts its reconnects at the base delay.
+    this.retryDelay = RETRY_BASE_MS;
     this.follow(status.url!, generation);
     return status;
   }
@@ -183,12 +203,20 @@ export class Orx {
   /** Read OpenResearch's event stream: run changes go on to the editor. */
   private follow(url: string, generation: number): void {
     if (generation !== this.generation || this.closed) return;
+    let dropped = false;
     const lost = () => {
-      if (generation !== this.generation || this.closed) return;
+      // One reconnect per drop: end and error can both fire for the same stream.
+      if (dropped || generation !== this.generation || this.closed) return;
+      dropped = true;
       this.events = undefined;
       // Ours stopped (its exit handler says so), or one we joined went away, or the stream dropped.
       void getJson(`${url}/api/health`, 1500).then(
-        () => { this.retry = setTimeout(() => this.follow(url, generation), 2000); },
+        () => {
+          // Back off while the stream keeps dropping, so a flapping server is not hammered every 2s.
+          const wait = this.retryDelay + Math.floor(Math.random() * RETRY_JITTER_MS);
+          this.retryDelay = Math.min(this.retryDelay * 2, RETRY_MAX_MS);
+          this.retry = setTimeout(() => this.follow(url, generation), wait);
+        },
         () => {
           if (generation !== this.generation) return;
           this.generation++;
@@ -201,6 +229,8 @@ export class Orx {
       res.setEncoding("utf8");
       let buffer = "";
       res.on("data", (chunk: string) => {
+        // The stream is alive and speaking: the next drop reconnects promptly again.
+        this.retryDelay = RETRY_BASE_MS;
         buffer += chunk.replace(/\r\n/g, "\n");
         let end: number;
         while ((end = buffer.indexOf("\n\n")) >= 0) {

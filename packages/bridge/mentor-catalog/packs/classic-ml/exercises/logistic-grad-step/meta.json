@@ -1,0 +1,21 @@
+{
+  "id": "logistic-grad-step",
+  "title": "Logistic Regression: mất mát ổn định số & bước gradient",
+  "star": "logreg",
+  "skills": [
+    "formula",
+    "train"
+  ],
+  "difficulty": 1250,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "logistic_loss_and_grad",
+    "logistic_step"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

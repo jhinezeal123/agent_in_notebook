@@ -1,0 +1,40 @@
+{
+  "protocol": 1,
+  "id": "classic-ml",
+  "name": "ML cổ điển",
+  "description": "Ridge regression, Logistic regression ổn định số, một bước k-means Lloyd, và chọn ngưỡng chia Gini cho cây quyết định bằng NumPy.",
+  "constellation": {
+    "id": "classic-ml",
+    "name": "ML cổ điển",
+    "description": "Hồi quy tuyến tính/Ridge, phân loại logistic, phân cụm k-means và cây quyết định.",
+    "daily": false
+  },
+  "stars": [
+    {
+      "id": "linreg",
+      "name": "Ridge regression"
+    },
+    {
+      "id": "logreg",
+      "name": "Logistic regression",
+      "after": [
+        "linreg",
+        "softmax"
+      ]
+    },
+    {
+      "id": "kmeans",
+      "name": "k-means",
+      "after": [
+        "broadcasting"
+      ]
+    },
+    {
+      "id": "decision-tree",
+      "name": "Cây quyết định (Gini)",
+      "after": [
+        "linreg"
+      ]
+    }
+  ]
+}

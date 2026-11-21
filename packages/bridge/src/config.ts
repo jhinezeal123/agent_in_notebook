@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { BRIDGE_DEFAULT_PORT } from "@ainb/protocol";
 
 export const BRIDGE_VERSION = "0.1.0";
@@ -21,15 +21,46 @@ export interface BridgeConfig {
   port: number;
 }
 
+/** Write through a temporary file and rename it into place, so a crash never leaves half a config. */
+function writeAtomic(file: string, text: string, mode: number): void {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, text, { mode });
+    renameSync(temporary, file);
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary);
+  }
+}
+
+/** Set a broken config file aside as <name>.bak, best effort: the data in it is the user's. */
+function keepBroken(file: string, error: unknown): void {
+  const name = basename(file);
+  let kept = false;
+  try {
+    renameSync(file, `${file}.bak`);
+    kept = true;
+  } catch {
+    try {
+      copyFileSync(file, `${file}.bak`);
+      kept = true;
+    } catch {
+      // Could not be set aside; the caller still writes a fresh, valid config.
+    }
+  }
+  console.error(`${name} is not valid JSON${kept ? ` (kept as ${name}.bak)` : ""}: ${(error as Error).message}`);
+}
+
 /** Load the config file, creating it (with a fresh pairing token) on first run. */
 export function loadConfig(): BridgeConfig {
   const file = join(dataDir(), "config.json");
   let cfg: Partial<BridgeConfig> = {};
   if (existsSync(file)) {
     try {
-      cfg = JSON.parse(readFileSync(file, "utf8"));
-    } catch {
-      cfg = {};
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      if (parsed && typeof parsed === "object") cfg = parsed;
+    } catch (e) {
+      // A broken config must not cost the user their pairing quietly: keep the file, make a new one.
+      keepBroken(file, e);
     }
   }
   const full: BridgeConfig = {
@@ -37,7 +68,7 @@ export function loadConfig(): BridgeConfig {
     port: typeof cfg.port === "number" ? cfg.port : BRIDGE_DEFAULT_PORT,
   };
   if (full.token !== cfg.token || full.port !== cfg.port) {
-    writeFileSync(file, JSON.stringify(full, null, 2), { mode: 0o600 });
+    writeAtomic(file, JSON.stringify(full, null, 2), 0o600);
   }
   if (process.env.AINB_PORT) full.port = Number(process.env.AINB_PORT);
   return full;
@@ -47,7 +78,7 @@ export function resetToken(): BridgeConfig {
   const file = join(dataDir(), "config.json");
   const cfg = loadConfig();
   const next = { ...cfg, token: randomBytes(18).toString("base64url") };
-  writeFileSync(file, JSON.stringify(next, null, 2), { mode: 0o600 });
+  writeAtomic(file, JSON.stringify(next, null, 2), 0o600);
   return next;
 }
 
@@ -67,34 +98,51 @@ export interface ResearchConfig {
 
 export function loadResearchConfig(): ResearchConfig {
   const file = join(dataDir(), "research.json");
+  let raw: string;
   try {
-    const cfg = JSON.parse(readFileSync(file, "utf8"));
-    const out: ResearchConfig = {};
-    if (typeof cfg?.orxPath === "string" && cfg.orxPath) out.orxPath = cfg.orxPath;
-    if (cfg?.env && typeof cfg.env === "object" && !Array.isArray(cfg.env)) {
-      const env = Object.fromEntries(Object.entries(cfg.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
-      if (Object.keys(env).length) out.env = env;
-    }
-    if (typeof cfg?.scratchProjectId === "string" && cfg.scratchProjectId) out.scratchProjectId = cfg.scratchProjectId;
-    return out;
+    raw = readFileSync(file, "utf8");
   } catch {
+    return {}; // none yet
+  }
+  let cfg: any;
+  try {
+    cfg = JSON.parse(raw);
+  } catch (e) {
+    // Losing research.json silently would move notebooks to a new Scratch; keep the broken file.
+    keepBroken(file, e);
     return {};
   }
+  const out: ResearchConfig = {};
+  if (typeof cfg?.orxPath === "string" && cfg.orxPath) out.orxPath = cfg.orxPath;
+  if (cfg?.env && typeof cfg.env === "object" && !Array.isArray(cfg.env)) {
+    const env = Object.fromEntries(Object.entries(cfg.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
+    if (Object.keys(env).length) out.env = env;
+  }
+  if (typeof cfg?.scratchProjectId === "string" && cfg.scratchProjectId) out.scratchProjectId = cfg.scratchProjectId;
+  return out;
 }
 
 /** Write research.json, keeping fields this version does not know. */
 export function saveResearchConfig(cfg: ResearchConfig): void {
   const file = join(dataDir(), "research.json");
   let old: Record<string, unknown> = {};
+  let raw: string | undefined;
   try {
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) old = raw;
+    raw = readFileSync(file, "utf8");
   } catch {
     // none yet
   }
+  if (raw !== undefined) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) old = parsed;
+    } catch (e) {
+      keepBroken(file, e);
+    }
+  }
   const known = ["orxPath", "env", "scratchProjectId"];
   const kept = Object.fromEntries(Object.entries(old).filter(([k]) => !known.includes(k)));
-  writeFileSync(file, JSON.stringify({ ...kept, ...cfg }, null, 2));
+  writeAtomic(file, JSON.stringify({ ...kept, ...cfg }, null, 2), 0o600);
 }
 
 /** A user-defined ACP agent from agents.json. */
@@ -141,6 +189,13 @@ export function removeCustomAgent(id: string): boolean {
   return removed;
 }
 
+let agentsGen = 0;
+
+/** Monotonic bump whenever saveCustomAgent/removeCustomAgent writes agents.json. */
+export function customAgentsGeneration(): number {
+  return agentsGen;
+}
+
 function updateCustomAgents(update: (agents: CustomAgentConfig[]) => void): void {
   const file = join(dataDir(), "agents.json");
   const document = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
@@ -149,11 +204,6 @@ function updateCustomAgents(update: (agents: CustomAgentConfig[]) => void): void
     throw new Error(`Cannot update ${file}: expected an array of agent definitions (or an object with an agents array).`);
   }
   update(agents);
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(temporary, JSON.stringify(document, null, 2), { mode: 0o600 });
-    renameSync(temporary, file);
-  } finally {
-    if (existsSync(temporary)) unlinkSync(temporary);
-  }
+  writeAtomic(file, JSON.stringify(document, null, 2), 0o600);
+  agentsGen++;
 }

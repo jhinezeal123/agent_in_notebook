@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_values",
+    "text": "Tương đồng cosine có bất biến khi bạn nhân Y với hằng số dương 5.0 không? Code hiện tại có giữ tính chất đó không?"
+  },
+  {
+    "level": 0,
+    "test": "test_self_similarity",
+    "text": "Khi gọi cosine_sim(X, X), tích vô hướng của một vector với chính nó phải được chia cho mấy lần chuẩn của nó?"
+  },
+  {
+    "level": 1,
+    "text": "Bạn mới chuẩn hóa từng hàng của X mà quên tính chuẩn L2 (kẹp dưới bởi eps) và chuẩn hóa từng hàng của Y trước khi nhân ma trận."
+  },
+  {
+    "level": 2,
+    "when": "thiếu chuẩn hóa Y",
+    "text": "nx = max(L2 norm mỗi hàng X, eps) dạng (N, 1)\nny = max(L2 norm mỗi hàng Y, eps) dạng (M, 1)\ntrả về (X / nx) @ (Y / ny).T"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở phần chuẩn hóa Y",
+    "text": "```python\nny = np.maximum(np.linalg.norm(Y, axis=1, keepdims=True), eps)\nreturn (X / nx) @ (Y / ny).T\n```"
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_head_owns_its_columns",
+    "text": "Trước khi đổi vị trí trục `n_heads` ra trước trục `T`, bạn cần tách trục cuối `D` thành hai trục nào?"
+  },
+  {
+    "level": 0,
+    "test": "test_merge_order",
+    "text": "Khi gộp đầu ra `(B, H, T, dh)` về `(B, T, D)`, bạn đã đưa trục `T` và `H` về đúng thứ tự liền kề trước khi `reshape` chưa?"
+  },
+  {
+    "level": 1,
+    "text": "Tách head phải đi qua 2 bước: tách chiều cuối D thành (n_heads, dh) rồi hoán vị trục thời gian và trục head. Gộp head làm đúng phép nghịch đảo: hoán vị ngược lại rồi mới gộp hai trục cuối thành D."
+  },
+  {
+    "level": 2,
+    "when": "tách và gộp head",
+    "text": "Tách: (B, T, D) -> reshape (B, T, H, dh) -> transpose(0, 2, 1, 3) thành (B, H, T, dh)\nGộp: (B, H, T, dh) -> transpose(0, 2, 1, 3) -> reshape (B, T, D)"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở dòng tách/gộp",
+    "text": "```python\ndef _split(a):\n    return a.reshape(B, T, n_heads, dh).transpose(0, 2, 1, 3)\n# lúc gộp:\no = (w @ v).transpose(0, 2, 1, 3).reshape(B, T, D)\n```"
+  }
+]

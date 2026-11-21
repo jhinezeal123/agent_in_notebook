@@ -43,6 +43,13 @@
           "default": true,
           "scope": "application",
           "description": "Show a notification when a notebook cell that ran for a minute or more finishes or fails."
+        },
+        "ainb.language": {
+          "type": "string",
+          "enum": ["auto", "en", "vi"],
+          "default": "auto",
+          "scope": "application",
+          "description": "Display language for the Agent in Notebook chat UI (auto follows VS Code / browser locale)."
         }
       }
     },
@@ -191,6 +198,12 @@
         "title": "Clear Chat",
         "category": "Agent in Notebook",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "ainb.exportChat",
+        "title": "Export Chat as Markdown",
+        "category": "Agent in Notebook",
+        "icon": "$(export)"
       },
       {
         "command": "ainb.stopBridge",
@@ -449,6 +462,11 @@
           "command": "ainb.open",
           "when": "view == ainb.research",
           "group": "navigation@0"
+        },
+        {
+          "command": "ainb.exportChat",
+          "when": "view == ainb.chat",
+          "group": "navigation@2"
         },
         {
           "command": "ainb.clearChat",

@@ -17,6 +17,18 @@ export interface ProjectResolution {
   notice?: string;
 }
 
+export interface BriefExperiment {
+  id: string;
+  title: string;
+  slug?: string;
+  latestRun?: {
+    id: string;
+    status: string;
+    headline?: string;
+    result?: string;
+  };
+}
+
 /** What the agent is told about the project, from OpenResearch's state. */
 export interface ProjectBrief {
   id: string;
@@ -26,11 +38,14 @@ export interface ProjectBrief {
   docs: { name: string; head: string }[];
   artifacts: { path: string; size: number }[];
   artifactsTotal: number;
+  /** Top non-archived experiments and their latest run summary (C4). */
+  experiments?: BriefExperiment[];
   /** Changes when anything above changes. */
   digest: string;
 }
 
 const BRIEF_ARTIFACTS = 40;
+const BRIEF_EXPERIMENTS = 8;
 const DOC_LINES = 40;
 const DOCS = ["AGENTS.md", "CLAUDE.md", "README.md"];
 /** A brief is fetched again after this long, or once an artifact was written through the bridge. */
@@ -160,11 +175,13 @@ export class ProjectLinks {
 
   private async fetchBrief(project: OrxProject): Promise<ProjectBrief> {
     const id = encodeURIComponent(project.id);
-    const [artifacts, ...docs] = await Promise.all([
+    const [artifacts, expList, runList, ...docs] = await Promise.all([
       this.projects.api<{ entries?: OrxArtifact[] }>("GET", `/api/projects/${id}/files`).then((r) => flatten(r.entries ?? []), (e) => {
         this.log(`Could not list the artifacts of ${project.name}: ${describeFailure(e)}`);
         return [] as OrxArtifact[];
       }),
+      this.projects.api<{ experiments?: OrxExperimentSummary[] }>("GET", `/api/projects/${id}/experiments`).then((r) => r.experiments ?? [], () => [] as OrxExperimentSummary[]),
+      this.projects.api<{ runs?: OrxRunSummary[] }>("GET", `/api/projects/${id}/runs`).then((r) => r.runs ?? [], () => [] as OrxRunSummary[]),
       ...DOCS.map((name) =>
         this.projects.api<OrxFile>("GET", `/api/projects/${id}/file?path=${encodeURIComponent(name)}`).then(
           (f) => (f.notFound || f.binary || !f.content ? null : { name, head: f.content.split("\n").slice(0, DOC_LINES).join("\n").trimEnd() }),
@@ -173,6 +190,27 @@ export class ProjectLinks {
       ),
     ]);
     const files = artifacts.filter((a) => !a.isDir).sort((a, b) => b.modifiedAt - a.modifiedAt);
+    const latestByExp = new Map<string, OrxRunSummary>();
+    for (const r of runList) {
+      const prev = latestByExp.get(r.experimentId);
+      const t = r.endedAt ?? r.startedAt ?? r.createdAt ?? 0;
+      const pt = prev ? (prev.endedAt ?? prev.startedAt ?? prev.createdAt ?? 0) : -1;
+      if (!prev || t >= pt) latestByExp.set(r.experimentId, r);
+    }
+    const experiments: BriefExperiment[] = expList
+      .filter((e) => !e.archived)
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, BRIEF_EXPERIMENTS)
+      .map((e) => {
+        const latest = latestByExp.get(e.id);
+        const result = latest?.resultMarkdown ? latest.resultMarkdown.split("\n")[0]?.trim().slice(0, 120) : undefined;
+        return {
+          id: e.id,
+          title: e.title || e.slug || e.id,
+          ...(e.slug ? { slug: e.slug } : {}),
+          ...(latest ? { latestRun: { id: latest.id, status: latest.status, ...(result ? { result } : {}) } } : {}),
+        };
+      });
     const brief: Omit<ProjectBrief, "digest"> = {
       id: project.id,
       name: project.name,
@@ -181,9 +219,28 @@ export class ProjectLinks {
       docs: docs.filter((d): d is { name: string; head: string } => !!d),
       artifacts: files.slice(0, BRIEF_ARTIFACTS).map((a) => ({ path: a.path, size: a.size })),
       artifactsTotal: files.length,
+      ...(experiments.length ? { experiments } : {}),
     };
     return { ...brief, digest: createHash("sha256").update(JSON.stringify(brief)).digest("hex").slice(0, 16) };
   }
+}
+
+interface OrxExperimentSummary {
+  id: string;
+  title?: string;
+  slug?: string;
+  archived?: boolean;
+  updatedAt?: number;
+}
+
+interface OrxRunSummary {
+  id: string;
+  experimentId: string;
+  status: string;
+  resultMarkdown?: string | null;
+  createdAt?: number;
+  startedAt?: number | null;
+  endedAt?: number | null;
 }
 
 function flatten(entries: OrxArtifact[]): OrxArtifact[] {

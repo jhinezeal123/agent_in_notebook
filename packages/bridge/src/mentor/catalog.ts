@@ -52,6 +52,8 @@ const Meta = z.object({
   judgeSeconds: z.number().int().min(10).max(900).default(60),
   /** curated: written and checked by hand; ai: written by the mentor for a paper, checked by the machine. */
   author: z.enum(["curated", "ai"]).default("curated"),
+  /** Always keep the full starter code regardless of learner rating (used by debug exercises, C2). */
+  scaffoldFixed: z.boolean().default(false),
   /** The numbers an experiment reports (t.report), with the paper's for comparison. */
   metrics: z.array(z.object({
     name: z.string().min(1),
@@ -200,6 +202,8 @@ export interface Catalog {
   stars: StarDef[];
   exercises: Exercise[];
   exercise(id: string): Exercise | undefined;
+  /** Exercises belonging to a star, indexed once (A7.1). */
+  exercisesByStar?(starId: string): Exercise[];
   /** The papers on the shelf, with their exercises. */
   papers: PaperPackage[];
   /** A paper package's given code (shared by its exercises); "" when none. */
@@ -440,8 +444,15 @@ export function loadCatalog(dir = catalogDir(), opts: CatalogOptions = {}): Cata
   }
   checkExercises(exercises);
   const byId = new Map(exercises.map((e) => [e.id, e]));
+  const byStar = new Map<string, Exercise[]>();
+  for (const e of exercises) {
+    const list = byStar.get(e.star) ?? [];
+    list.push(e);
+    byStar.set(e.star, list);
+  }
   return {
     dir, constellations, stars, exercises, exercise: (id) => byId.get(id),
+    exercisesByStar: (starId) => byStar.get(starId) ?? [],
     papers: [...papers.values()],
     paperGiven: (id) => papers.get(id)?.info.given ?? "",
     packs: packs.map((p) => ({ ...p, exercises: p.exercises.filter((id) => byId.has(id)) })),

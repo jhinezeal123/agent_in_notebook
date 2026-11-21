@@ -28,7 +28,7 @@ function exercise(over: Partial<Exercise>): Exercise {
   return {
     id: "scale", title: "Scale", star: "broadcasting", skills: ["tensor"], difficulty: 1000, minutes: 10, requires: ["numpy"], order: 0,
     functions: ["scale"], prelude: "import numpy as np", probes: 1, role: "component", uses: [], judge: "source", judgeSeconds: 60,
-    author: "curated", metrics: [], hints: [], brief: "Nhân x với 2.", given: "", hash: "h", lab: [{ type: "code", source: "x = np.arange(3)\nprint(x * 2)" }],
+    author: "curated", metrics: [], hints: [], scaffoldFixed: false, brief: "Nhân x với 2.", given: "", hash: "h", lab: [{ type: "code", source: "x = np.arange(3)\nprint(x * 2)" }],
     starter: "def scale(x):\n    raise NotImplementedError", reference: "def scale(x):\n    return x * 2.0\n",
     tests: [
       "def test_values(user, ref):\n    t.seed(0)\n    x = np.random.randn(5)\n    t.close(need(user, 'scale')(x), ref['scale'](x))",

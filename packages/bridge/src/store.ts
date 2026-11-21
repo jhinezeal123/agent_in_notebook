@@ -6,10 +6,29 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AppliedChange, ChatMessage, Platform } from "@ainb/protocol";
+import type { AppliedChange, ChatMessage, ChatSearchHit, Part, Platform } from "@ainb/protocol";
 
 /** Older messages are dropped past this; the recap only uses the tail anyway. */
-const MAX_MESSAGES = 200;
+export const MAX_MESSAGES = 200;
+/** Hard cap on pinned messages per chat so pins never grow unbounded. */
+export const MAX_PINS = 30;
+
+/**
+ * Trim a transcript to at most MAX_MESSAGES unpinned tail messages while always
+ * keeping pinned messages in their original chronological order.
+ */
+export function trimMessages(messages: ChatMessage[], limit = MAX_MESSAGES): { kept: ChatMessage[]; dropped: ChatMessage[] } {
+  if (messages.length <= limit) return { kept: messages, dropped: [] };
+  const tailStart = messages.length - limit;
+  const kept: ChatMessage[] = [];
+  const dropped: ChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!;
+    if (i >= tailStart || m.pinned) kept.push(m);
+    else dropped.push(m);
+  }
+  return { kept, dropped };
+}
 
 export interface StoredChat {
   version: 1;
@@ -67,6 +86,14 @@ export class ChatStore {
   /** Bumped by every save of a key; a background write that finds a newer one discards itself. */
   private generation = new Map<string, number>();
   private writing = new Map<string, Promise<void>>();
+  /**
+   * Notebook metas by their file path, so the machine poll and the project list
+   * do not read and parse the same small file every few seconds. The bridge is
+   * the only writer of these files (saveMeta/move/remove/prune below keep the
+   * cache in step with the disk), so a cached meta is as current as the file;
+   * callers treat what they get as read-only.
+   */
+  private metaCache = new Map<string, NotebookMeta>();
 
   constructor(readonly dir: string) {}
 
@@ -87,7 +114,7 @@ export class ChatStore {
   }
 
   private serialize(chat: Omit<StoredChat, "version" | "updatedAt">): string {
-    const messages = chat.messages.slice(-MAX_MESSAGES);
+    const { kept: messages } = trimMessages(chat.messages);
     const kept = new Set(messages.map((m) => m.id));
     const journal = Object.fromEntries(Object.entries(chat.journal ?? {}).filter(([id]) => kept.has(id)));
     const data: StoredChat = { version: 1, ...chat, updatedAt: Date.now(), messages, journal };
@@ -142,7 +169,7 @@ export class ChatStore {
     return write;
   }
 
-  /** Forget the conversation; the notebook's meta (its project) stays. */
+  /** Forget the conversation; the notebook's meta (its project) stays, so its cached meta stays valid too. */
   remove(key: string): void {
     this.bump(key);
     rmSync(this.file(key), { force: true });
@@ -164,6 +191,7 @@ export class ChatStore {
     }
     this.remove(from);
     rmSync(this.metaFile(from), { force: true });
+    this.metaCache.delete(this.metaFile(from));
   }
 
   /** Whether a conversation is saved for this notebook. */
@@ -176,9 +204,13 @@ export class ChatStore {
   }
 
   loadMeta(key: string): NotebookMeta | null {
+    const file = this.metaFile(key);
+    const cached = this.metaCache.get(file);
+    if (cached) return cached;
     try {
-      const data = JSON.parse(readFileSync(this.metaFile(key), "utf8")) as NotebookMeta;
+      const data = JSON.parse(readFileSync(file, "utf8")) as NotebookMeta;
       if (data?.version !== 1 || data.key !== key) return null;
+      this.metaCache.set(file, data);
       return data;
     } catch {
       return null;
@@ -188,16 +220,20 @@ export class ChatStore {
   /** Merge `patch` into the notebook's meta (unknown fields a newer bridge wrote are kept). */
   saveMeta(key: string, patch: Partial<Omit<NotebookMeta, "version" | "key" | "updatedAt">>): NotebookMeta {
     mkdirSync(this.dir, { recursive: true });
+    const file = this.metaFile(key);
     let old: Record<string, unknown> = {};
-    try {
-      const raw = JSON.parse(readFileSync(this.metaFile(key), "utf8"));
-      if (raw?.key === key) old = raw;
-    } catch {
-      // none yet
+    const cached = this.metaCache.get(file);
+    if (cached) old = { ...cached };
+    else {
+      try {
+        const raw = JSON.parse(readFileSync(file, "utf8"));
+        if (raw?.key === key) old = raw;
+      } catch {
+        // none yet
+      }
     }
     const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
     const data = { ...old, ...defined, version: 1, key, updatedAt: Date.now() } as NotebookMeta;
-    const file = this.metaFile(key);
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
       writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
@@ -205,18 +241,28 @@ export class ChatStore {
     } finally {
       if (existsSync(temporary)) unlinkSync(temporary);
     }
+    this.metaCache.set(file, data);
     return data;
   }
 
-  /** Every notebook's meta (the notebook chats of all projects). */
+  /** Every notebook's meta (the notebook chats of all projects). Files already cached are not read again. */
   listMeta(): NotebookMeta[] {
     if (!existsSync(this.dir)) return [];
     const out: NotebookMeta[] = [];
     for (const name of readdirSync(this.dir)) {
       if (!name.endsWith(META_SUFFIX)) continue;
+      const file = join(this.dir, name);
+      const cached = this.metaCache.get(file);
+      if (cached) {
+        out.push(cached);
+        continue;
+      }
       try {
-        const data = JSON.parse(readFileSync(join(this.dir, name), "utf8")) as NotebookMeta;
-        if (data?.version === 1 && typeof data.key === "string") out.push(data);
+        const data = JSON.parse(readFileSync(file, "utf8")) as NotebookMeta;
+        if (data?.version === 1 && typeof data.key === "string") {
+          this.metaCache.set(file, data);
+          out.push(data);
+        }
       } catch {
         // unreadable: skip it
       }
@@ -224,11 +270,64 @@ export class ChatStore {
     return out;
   }
 
+  /** Search saved transcripts on this machine (case-insensitive substring match). */
+  search(query: string, limit = 30): ChatSearchHit[] {
+    const q = query.trim().toLowerCase();
+    if (!q || !existsSync(this.dir)) return [];
+    const cap = Math.max(1, Math.min(100, limit));
+    const metas = new Map(this.listMeta().map((m) => [m.key, m]));
+    const hits: ChatSearchHit[] = [];
+    for (const name of readdirSync(this.dir)) {
+      if (!name.endsWith(".json") || name.endsWith(META_SUFFIX)) continue;
+      let data: StoredChat;
+      try {
+        data = JSON.parse(readFileSync(join(this.dir, name), "utf8")) as StoredChat;
+        if (data?.version !== 1 || !Array.isArray(data.messages)) continue;
+      } catch {
+        continue;
+      }
+      const meta = metas.get(data.key);
+      for (const m of data.messages) {
+        const text = searchableText(m.parts);
+        const at = text.toLowerCase().indexOf(q);
+        if (at < 0) continue;
+        const start = Math.max(0, at - 48);
+        const end = Math.min(text.length, at + q.length + 72);
+        const snippet = `${start > 0 ? "…" : ""}${text.slice(start, end).replace(/\s+/g, " ").trim()}${end < text.length ? "…" : ""}`;
+        hits.push({
+          notebookKey: data.key,
+          title: meta?.title ?? data.title,
+          url: meta?.url,
+          platform: meta?.platform,
+          messageId: m.id,
+          role: m.role,
+          createdAt: m.createdAt,
+          snippet,
+        });
+      }
+    }
+    hits.sort((a, b) => b.createdAt - a.createdAt);
+    return hits.slice(0, cap);
+  }
+
   /** Delete transcripts nobody has touched for `maxAgeMs`, and notebook metas for `metaMaxAgeMs`. */
   prune(maxAgeMs: number, metaMaxAgeMs = maxAgeMs): void {
     pruneDir(this.dir, maxAgeMs, (name) => name.endsWith(META_SUFFIX));
     pruneDir(this.dir, metaMaxAgeMs, (name) => !name.endsWith(META_SUFFIX));
+    // A pruned meta file must not linger in the cache.
+    for (const file of [...this.metaCache.keys()]) if (!existsSync(file)) this.metaCache.delete(file);
   }
+}
+
+function searchableText(parts: Part[]): string {
+  const chunks: string[] = [];
+  for (const p of parts) {
+    if (p.type === "text" || p.type === "thought") chunks.push(p.text);
+    else if (p.type === "notice") chunks.push(p.text);
+    else if (p.type === "tool") chunks.push(p.title, p.detail ?? "");
+    else if (p.type === "card") chunks.push(p.card.title, p.card.detail ?? "");
+  }
+  return chunks.filter(Boolean).join(" ");
 }
 
 /**

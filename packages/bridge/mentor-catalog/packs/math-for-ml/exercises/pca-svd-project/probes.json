@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao trong PCA ta phải trừ trung bình theo cột ($\\mu$ shape `(1, D)`) trước khi gọi SVD?",
+    "tag": "math-pca-centering",
+    "answer": "Nếu không quy tâm, vector kỳ dị đầu tiên sẽ hướng về tâm dữ liệu (mean) thay vì hướng phương sai lớn nhất của đám mây điểm.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Quan hệ giữa các giá trị kỳ dị $\\sigma_j$ của $\\tilde{X}$ và trị riêng $\\lambda_j$ của ma trận hiệp phương sai $\\frac{1}{N}\\tilde{X}^\\top\\tilde{X}$ là gì? Vì sao `evr` dùng $\\sigma_j^2$ chứ không phải $\\sigma_j$?",
+    "tag": "math-pca-sigma-sq",
+    "answer": "Trị riêng hiệp phương sai là lambda_j = sigma_j^2 / N. Khi lấy tỉ lệ phương sai, 1/N triệt tiêu nên evr tỷ lệ với sigma_j^2.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao hai lần chạy SVD trên máy khác nhau có thể cho `components[0]` ngược dấu nhau nhưng không gian con chiếu và lỗi tái tạo vẫn giống hệt nhau?",
+    "tag": "math-pca-sign-ambiguity",
+    "answer": "Nếu u, v là cặp vector kỳ dị thì (-u, -v) cũng thỏa mãn u*sigma*v^T; đổi dấu cả components[j] và cột Z[:, j] cho cùng tích Z @ components.",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi $N < D$ (dữ liệu nhiều chiều ít mẫu), đặt `full_matrices=False` trong `np.linalg.svd` tiết kiệm bộ nhớ và thời gian như thế nào?",
+    "tag": "math-pca-thin-svd",
+    "answer": "Thin SVD chỉ tính r = min(N, D) cột/hàng thay vì dựng ma trận vuông D x D khổng lồ.",
+    "kind": "compare",
+    "stage": "defend"
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "protocol": 1,
+  "id": "code-reading",
+  "name": "Đọc hiểu & Trace code",
+  "description": "Đọc đoạn code NumPy ẩn danh, suy luận shape từng biến trung gian và bất biến toán học mà không đoán mò.",
+  "constellation": {
+    "id": "code-reading",
+    "name": "Đọc hiểu & Trace code",
+    "description": "Luyện phản xạ đọc code tensor, lần theo shape và kiểm chứng tính chất bất biến.",
+    "daily": false
+  },
+  "stars": [
+    {
+      "id": "trace-broadcast",
+      "name": "Trace mask & broadcasting",
+      "after": [
+        "broadcasting"
+      ]
+    },
+    {
+      "id": "trace-norm-softmax",
+      "name": "Trace log-sum-exp & entropy",
+      "after": [
+        "trace-broadcast",
+        "softmax"
+      ]
+    },
+    {
+      "id": "trace-attention",
+      "name": "Trace causal attention",
+      "after": [
+        "trace-norm-softmax",
+        "sdpa"
+      ]
+    }
+  ]
+}

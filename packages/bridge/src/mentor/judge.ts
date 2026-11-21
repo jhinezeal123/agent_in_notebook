@@ -4,7 +4,7 @@
 // cells run from their source in a fresh namespace, never from the kernel's
 // variables, so a stale cell or the agent's own experiments cannot pass a test.
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { ExecResult, MentorVerdict } from "@ainb/protocol";
 import type { Exercise } from "./catalog.js";
 
@@ -86,6 +86,8 @@ export interface JudgeContext {
   beforeRef?: string;
   /** "kernel": test what the kernel holds now (an experiment's trained model), not the cells run afresh. */
   mode?: "source" | "kernel";
+  /** Disable in-kernel reference namespace cache (e.g. verification). */
+  noCache?: boolean;
 }
 
 type Judged = Pick<Exercise, "prelude" | "reference" | "tests" | "requires"> & { given?: string; metrics?: Exercise["metrics"] };
@@ -93,6 +95,10 @@ type Judged = Pick<Exercise, "prelude" | "reference" | "tests" | "requires"> & {
 /** Python that judges `source` (the learner's cells joined) and prints one marked JSON line. */
 export function judgeCode(ex: Judged, source: string, nonce: string, ctx: JudgeContext = {}): string {
   const kernel = ctx.mode === "kernel";
+  const cacheRef = !kernel && !ctx.noCache;
+  const refKey = cacheRef
+    ? createHash("sha256").update(ex.prelude).update("\0").update(ctx.beforeRef ?? "").update("\0").update(ex.given ?? "").update("\0").update(ex.reference).digest("hex").slice(0, 16)
+    : "";
   // An experiment's pass marks: checked here, not left to its tests.
   const targets = (ex.metrics ?? []).filter((m) => m.target).map((m) => ({ name: m.name, op: m.target!.op, value: m.target!.value }));
   return String.raw`
@@ -128,13 +134,19 @@ def _ainb_mentor_judge():
         out["error"] = f"{type(e).__name__}: {str(e)[:300]}{where}"
         print("\\n<<MENTOR " + json.dumps(out, ensure_ascii=False) + " MENTOR>>")
         return`}
-    ref = {"__name__": "__mentor_ref__"}
-    a, b = quiet()
-    with a, b:
-        exec(compile(prelude, "<prelude>", "exec"), ref)
-        exec(compile(text("${b64(ctx.beforeRef ?? "")}"), "<reference-truoc>", "exec"), ref)
-        exec(compile(given, "<cho-san>", "exec"), ref)
-        exec(compile(text("${b64(kernel ? "" : ex.reference)}"), "<reference>", "exec"), ref)
+    _ref_cache = globals().get("_ainb_mentor_ref_cache")
+    if ${cacheRef ? "True" : "False"} and isinstance(_ref_cache, dict) and _ref_cache.get("key") == "${refKey}":
+        ref = _ref_cache["ns"]
+    else:
+        ref = {"__name__": "__mentor_ref__"}
+        a, b = quiet()
+        with a, b:
+            exec(compile(prelude, "<prelude>", "exec"), ref)
+            exec(compile(text("${b64(ctx.beforeRef ?? "")}"), "<reference-truoc>", "exec"), ref)
+            exec(compile(given, "<cho-san>", "exec"), ref)
+            exec(compile(text("${b64(kernel ? "" : ex.reference)}"), "<reference>", "exec"), ref)
+        if ${cacheRef ? "True" : "False"}:
+            globals()["_ainb_mentor_ref_cache"] = {"key": "${refKey}", "ns": ref}
     def need(ns, name):
         if not callable(ns.get(name)):
             raise AssertionError(f"Chưa thấy hàm \x60{name}\x60 trong cell bài làm.")

@@ -3,12 +3,12 @@
 // events with the same envelope.
 
 import type { ChatImageMime } from "./chat-image.js";
-import type { MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
+import type { MentorAttemptDetail, MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
-import type { CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
+import type { AppliedChange, CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
-export const WIRE_VERSION = 5;
+export const WIRE_VERSION = 6;
 
 // ---------------------------------------------------------------- native messaging
 
@@ -67,7 +67,7 @@ export type ReviewStatus = "pending" | "accepted" | "rejected" | "discarded";
 /** Something that happened, with what the user can do about it. The bridge writes every text. */
 export interface ChatCard {
   cardId: string;
-  kind: "run" | "session" | "verify" | "mentor";
+  kind: "run" | "verify" | "mentor";
   tone: "error" | "info" | "ok";
   title: string;
   /** One or two lines of plain text. */
@@ -142,6 +142,10 @@ export interface ChatMessage {
   createdAt: number;
   /** Notebook changes the agent applied in this turn; the bridge keeps their content for undo. */
   changes?: { count: number; undone?: boolean };
+  /** A user message waiting in the queue; the bridge clears this when its turn begins. */
+  queued?: boolean;
+  /** Pinned by the user so it survives the 200-message transcript trim. */
+  pinned?: boolean;
 }
 
 export type ChatStatus = "starting" | "idle" | "running" | "error" | "closed";
@@ -250,6 +254,10 @@ export interface MessagePatch {
   role: ChatMessage["role"];
   createdAt: number;
   changes?: ChatMessage["changes"];
+  /** Set or clear the queued mark; absent keeps what the message already had. */
+  queued?: boolean;
+  /** Set or clear the pinned mark; absent keeps what the message already had. */
+  pinned?: boolean;
   /** Number of parts the message has now. */
   length: number;
   ops: PartOp[];
@@ -279,6 +287,9 @@ export function applyMessagePatch(list: ChatMessage[], p: MessagePatch): ChatMes
   for (let k = 0; k < parts.length; k++) if (parts[k] === undefined) return null;
   const message: ChatMessage = { id: p.id, role: p.role, createdAt: p.createdAt, parts: parts as Part[] };
   if (p.changes) message.changes = p.changes;
+  // A patch that says nothing about the queue/pin keeps the mark the message had.
+  if (p.queued ?? old?.queued) message.queued = true;
+  if (p.pinned ?? old?.pinned) message.pinned = true;
   if (index < 0) return [...list, message];
   const next = list.slice();
   next[index] = message;
@@ -287,9 +298,53 @@ export function applyMessagePatch(list: ChatMessage[], p: MessagePatch): ChatMes
 
 // ---------------------------------------------------------------- methods
 
+export interface ChatSearchHit {
+  notebookKey: string;
+  title?: string;
+  url?: string;
+  platform?: Platform;
+  messageId: string;
+  role: ChatMessage["role"];
+  createdAt: number;
+  snippet: string;
+}
+
+export interface MentorStatus {
+  streak: number;
+  overall: number;
+  dueReviews: number;
+  activeToday: boolean;
+}
+
+export interface KaggleQuotaStatus {
+  configured: boolean;
+  checkedAt: number;
+  accounts: {
+    account: string;
+    gpu?: { used: number; reserved: number; total: number; remaining: number } | null;
+    tpu?: { used: number; reserved: number; total: number; remaining: number } | null;
+    refreshAt?: string | null;
+    error?: string;
+  }[];
+  idleSessions: {
+    id: string;
+    account: string;
+    state: string;
+    created: number;
+    deadline: number;
+    idleMs: number;
+    note?: string | null;
+  }[];
+  lowGpuAccounts: string[];
+  error?: string;
+}
+
 /** Requests the extension sends to the bridge. */
 export interface BridgeMethods {
-  hello: { params: { token: string; wire: number; extensionVersion: string }; result: { bridgeVersion: string; agents: AgentInfo[] } };
+  hello: {
+    params: { token: string; wire: number; extensionVersion: string };
+    result: { bridgeVersion: string; agents: AgentInfo[]; browserConnected?: boolean };
+  };
   "agents.list": { params: { refresh?: boolean }; result: { agents: AgentInfo[] } };
   "agents.save": { params: { id?: string; name?: string; launchCommand: string }; result: { agent: AgentInfo } };
   "agents.remove": { params: { id: string }; result: { removed: boolean } };
@@ -310,6 +365,8 @@ export interface BridgeMethods {
   "notebook.project": { params: { notebookKey: string }; result: { projectId: string | null } };
   /** The notebook chats of a project, newest first. */
   "chats.list": { params: { projectId: string }; result: { chats: NotebookChatSummary[] } };
+  /** Search saved notebook chat transcripts on this machine. */
+  "chats.search": { params: { query: string; limit?: number }; result: { hits: ChatSearchHit[] } };
   /** Save the chat's notebook (with outputs) to its project's artifacts/notebooks. */
   "chat.saveNotebook": { params: { chatId: string }; result: { path: string } };
   /** Run every code cell from a reset Python namespace, then save only on success. */
@@ -326,6 +383,12 @@ export interface BridgeMethods {
   "chat.review": { params: { chatId: string; reviewId: string; accept: boolean }; result: { resolved: boolean } };
   /** Revert the notebook changes of one agent turn, newest first, skipping cells edited since. */
   "chat.undo": { params: { chatId: string; messageId: string }; result: UndoResult };
+  /** The notebook changes one agent message applied, from the chat's journal (for a diff view). */
+  "chat.changes": { params: { chatId: string; messageId: string }; result: { changes: AppliedChange[] } };
+  /** Pin or unpin a message so it survives transcript trimming. */
+  "chat.pin": { params: { chatId: string; messageId: string; pinned: boolean }; result: { pinned: boolean } };
+  /** Remove a single queued user message before its turn begins. */
+  "chat.dequeue": { params: { chatId: string; messageId: string }; result: { removed: boolean } };
   /** The user pressed a button of a card. */
   "chat.cardAction": { params: { chatId: string; cardId: string; actionId: string }; result: { accepted: boolean } };
   "tab.closed": { params: { tabId: number }; result: { ok: true } };
@@ -344,6 +407,10 @@ export interface BridgeMethods {
    * `orxPath` is given (null: look for one again).
    */
   "research.configure": { params: { orxPath?: string | null }; result: ResearchStatus };
+  /** Kaggle quota and idle sessions from the bridge watcher (never starts orx). */
+  "research.quota": { params: { refresh?: boolean }; result: KaggleQuotaStatus };
+  /** Close a live Kaggle compute session. */
+  "research.closeSession": { params: { sessionId: string }; result: { closing: boolean } };
   /**
    * Run the kernel environment setup script in a terminal on the notebook's
    * machine (its "setup" session), outside any chat. Waits up to `waitSeconds`
@@ -355,6 +422,8 @@ export interface BridgeMethods {
   };
   /** Mentor: the home page (map, ratings, streak, today's exercise). */
   "mentor.home": { params: Record<string, never>; result: MentorHome };
+  /** Mentor: lightweight status bar summary (streak, overall rating, due reviews). */
+  "mentor.status": { params: Record<string, never>; result: MentorStatus };
   /** Mentor: the notebooks open in Chrome an exercise can be put in. */
   "mentor.places": { params: Record<string, never>; result: MentorPlace[] };
   /**
@@ -393,6 +462,12 @@ export interface BridgeMethods {
   "mentor.focus": { params: { focus: { kind: "paper" | "constellation"; id: string } | null }; result: { ok: true } };
   /** "Báo bài sai": the exercise looks wrong; the attempt no longer counts, and the mentor rewrites it. */
   "mentor.report": { params: { chatId: string; reason: string }; result: { ok: true } };
+  /** Mentor: learner attempt history with saved code/verdict and (once done/revealed) reference diff (C5). */
+  "mentor.attempts": { params: { exerciseId?: string; limit?: number }; result: { attempts: MentorAttemptDetail[] } };
+  /** Mentor: export learner profile & progress as Markdown or JSON backup (C6). */
+  "mentor.export": { params: { format?: "markdown" | "json"; includeMistakes?: boolean }; result: { content: string; filename: string } };
+  /** Mentor: import a previously exported JSON backup into events.jsonl (C6). */
+  "mentor.import": { params: { data: string }; result: { importedEvents: number } };
 }
 
 /**
@@ -469,6 +544,8 @@ export interface ExtensionMethods {
 export interface BridgeEvents {
   "chat.snapshot": ChatSnapshot;
   "chat.patch": MessagePatch;
+  /** Mid-session metadata change without resending the whole transcript. */
+  "chat.meta": { chatId: string; tabId: number; settings?: ChatSettings; options?: AgentOption[]; project?: ChatProject; code?: ChatCode };
   "chat.usage": { chatId: string; tabId: number; usage: ChatUsage };
   /** A long run of a cell ended while no turn was running: the editor may tell the user. */
   "chat.run": { chatId: string; tabId: number; cardId: string; run: CellRun; title: string };
@@ -481,9 +558,13 @@ export interface BridgeEvents {
   "browser.notebook": { tabId: number; info: NotebookInfo | null };
   /** The user brought a Chrome tab holding a notebook to the front. */
   "browser.focused": { tabId: number };
+  /** Whether the Chrome browser extension is currently connected to the bridge. */
+  "browser.status": { connected: boolean };
   "research.status": ResearchStatus;
   /** A run of an OpenResearch experiment started, changed state or finished. */
   "research.run": ResearchRun;
+  /** Proactive Kaggle quota / idle-session update from the bridge watcher. */
+  "research.quota": KaggleQuotaStatus;
   /** A Mentor exercise's step, hint level or verdict changed. */
   "chat.mentor": { chatId: string; tabId: number; mentor: MentorChat };
   "chat.workshop": { chatId: string; tabId: number; workshop: MentorWorkshop };

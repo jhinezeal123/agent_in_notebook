@@ -1,0 +1,39 @@
+{
+  "protocol": 1,
+  "id": "math-for-ml",
+  "name": "Toán cho ML",
+  "description": "PCA bằng SVD, Entropy & KL divergence, cập nhật hậu nghiệm Bayes chuẩn, và kiểm tra đạo hàm số bằng NumPy.",
+  "constellation": {
+    "id": "math-for-ml",
+    "name": "Toán cho ML",
+    "description": "Đại số tuyến tính, lý thuyết thông tin, xác suất Bayes và giải tích số cho ML.",
+    "daily": false
+  },
+  "stars": [
+    {
+      "id": "svd-pca",
+      "name": "SVD & PCA"
+    },
+    {
+      "id": "entropy-kl",
+      "name": "Entropy & KL",
+      "after": [
+        "svd-pca"
+      ]
+    },
+    {
+      "id": "bayes-posterior",
+      "name": "Bayes chuẩn",
+      "after": [
+        "entropy-kl"
+      ]
+    },
+    {
+      "id": "numerical-grad",
+      "name": "Đạo hàm số",
+      "after": [
+        "svd-pca"
+      ]
+    }
+  ]
+}

@@ -5,8 +5,8 @@
 // bridge brings what is pushed back here (vmrepo.ts).
 
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { dataDir } from "../config.js";
 import { keyHash } from "../store.js";
 import { git } from "./github.js";
@@ -18,6 +18,26 @@ export interface Worktree {
 
 /** Where a git worktree records where its branch started (VS Code's Changes view compares against it). */
 export const BASE_FILE = "ainb-base";
+
+/** Worktrees already found, by repository, project and notebook: every turn asks for the same one. */
+const found = new Map<string, Worktree>();
+
+/**
+ * Whether the worktree is still on the branch it was found on, by reading git's
+ * own files (the `.git` file points at the git dir, whose HEAD names the branch).
+ * No git process: a cache hit must cost less than the spawn it saves.
+ */
+async function stillOnBranch(path: string, branch: string): Promise<boolean> {
+  try {
+    const m = /^gitdir: (.+)$/.exec((await readFile(join(path, ".git"), "utf8")).trim());
+    if (!m) return false;
+    const gitDir = resolve(path, m[1]!.trim());
+    if (!existsSync(gitDir)) return false;
+    return (await readFile(join(gitDir, "HEAD"), "utf8")).trim() === `ref: refs/heads/${branch}`;
+  } catch {
+    return false; // anything unreadable: let git itself answer
+  }
+}
 
 function slug(text: string): string {
   return text.toLowerCase().normalize("NFKD").replace(/\.ipynb$/i, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "notebook";
@@ -37,9 +57,15 @@ export async function ensureWorktree(repoPath: string, projectId: string, notebo
   if (!repoPath || !existsSync(repoPath)) throw new Error(`The project's repository is not at ${repoPath || "a known place"} on this computer.`);
   const path = worktreePath(projectId, notebookKey);
   const suffix = keyHash(notebookKey).slice(0, 6);
+  const key = JSON.stringify([repoPath, projectId, notebookKey]);
+  const cached = found.get(key);
+  if (cached && cached.path === path && await stillOnBranch(path, cached.branch)) return cached;
   if (existsSync(join(path, ".git"))) {
     const branch = await git(path, ["branch", "--show-current"]);
-    if (branch.startsWith("notebook/") && branch.endsWith(`-${suffix}`)) return { path, branch };
+    if (branch.startsWith("notebook/") && branch.endsWith(`-${suffix}`)) {
+      found.set(key, { path, branch });
+      return { path, branch };
+    }
     throw new Error(`Check out the notebook branch in ${path} before syncing its code.`);
   }
   await git(repoPath, ["rev-parse", "--verify", "HEAD"]).catch(() => {
@@ -58,5 +84,6 @@ export async function ensureWorktree(repoPath: string, projectId: string, notebo
     const gitDir = await git(path, ["rev-parse", "--absolute-git-dir"]);
     await writeFile(join(gitDir, BASE_FILE), `${base} ${from}\n`);
   }
+  found.set(key, { path, branch });
   return { path, branch };
 }

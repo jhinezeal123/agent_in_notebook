@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao hai bước gán cụm và cập nhật tâm luôn đảm bảo hàm mục tiêu (inertia) không bao giờ tăng và thuật toán luôn dừng sau hữu hạn bước?",
+    "tag": "cml-kmeans-monotone",
+    "answer": "Bước gán chọn tâm gần nhất cho từng điểm nên giảm (hoặc giữ nguyên) inertia; bước cập nhật chọn trung bình cộng là điểm tối ưu duy nhất cho tổng bình phương khoảng cách. Số phân hoạch hữu hạn nên luôn hội tụ.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Vì sao ta không cần lấy `np.sqrt` khi so sánh khoảng cách để tìm `argmin` trong `assign_clusters`?",
+    "tag": "cml-kmeans-no-sqrt",
+    "answer": "Căn bậc hai là hàm đồng biến chặt trên [0, +inf), nên argmin của khoảng cách bình phương trùng hệt argmin khoảng cách Euclid nhưng tính nhanh hơn.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao k-means chỉ đảm bảo hội tụ tới cực tiểu địa phương chứ không phải cực tiểu toàn cục? K-means++ cải thiện điều này thế nào?",
+    "tag": "cml-kmeans-local-min",
+    "answer": "Bài toán phân cụm không lồi theo cả labels lẫn centroids, nên nghiệm phụ thuộc khởi tạo. K-means++ chọn các tâm ban đầu phân tán nhau với xác suất tỉ lệ với bình phương khoảng cách tới tâm gần nhất.",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu trong `update_centroids` bạn viết `X[labels == k].mean(axis=0)` mà không kiểm tra cụm rỗng, NumPy trả về giá trị gì cho cụm đó?",
+    "tag": "cml-kmeans-empty-nan",
+    "answer": "Mảng lát cắt rỗng có 0 hàng nên `.mean(axis=0)` chia 0 cho 0 và sinh ra vector toàn NaN, phá hỏng mọi lần gán cụm sau đó.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

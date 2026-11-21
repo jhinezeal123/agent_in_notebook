@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_causal_mask",
+    "text": "Ở hàng đầu tiên của causal mask, chỉ có 1 vị trí hợp lệ. Trọng số tại đó đang bằng bao nhiêu thay vì 1.0?"
+  },
+  {
+    "level": 0,
+    "test": "test_rows_sum_to_one",
+    "text": "Mask đang được áp dụng trước hay sau bước chuẩn hóa softmax?"
+  },
+  {
+    "level": 1,
+    "text": "Áp dụng mask trực tiếp lên ma trận điểm `scores` bằng `-np.inf` tại các vị trí False TRƯỚC khi tính softmax."
+  },
+  {
+    "level": 2,
+    "when": "vị trí áp dụng mask",
+    "text": "1. Tính scores = Q @ K^T / sqrt(d_k)\n2. Nếu có mask: thay các vị trí mask == False trong scores bằng -inf\n3. Tính softmax ổn định (trừ max) trên scores rồi nhân với V"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở bước gắn -inf",
+    "text": "```python\nif mask is not None:\n    scores = np.where(mask, scores, -np.inf)\n```"
+  }
+]

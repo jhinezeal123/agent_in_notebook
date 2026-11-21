@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as vscode from "vscode";
 import { OpRunner, firstLine, type BridgeEvents, type ChatProject, type ChatSnapshot, type NotebookInfo, type NotebookOp } from "@ainb/protocol";
 import { DEFAULT_PREFS, type PanelEvent, type PanelRequest, type PanelResponse, type Prefs } from "../../ui/src/panel-messages.js";
@@ -42,6 +45,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ainb.openCompute", () => studio.open({ view: "settings", section: "compute" })),
     vscode.commands.registerCommand("ainb.chooseOrx", () => studio.chooseOrx()),
     vscode.commands.registerCommand("ainb.clearChat", () => panel.clearChat()),
+    vscode.commands.registerCommand("ainb.exportChat", () => panel.exportChat()),
     vscode.commands.registerCommand("ainb.stopBridge", () => panel.stopBridge()),
     vscode.commands.registerCommand("ainb.attachCell", (arg?: unknown) => panel.attachCells(arg)),
     vscode.commands.registerCommand("ainb.mentor.open", () => panel.mentor.open()),
@@ -111,6 +115,9 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.bridge = new BridgeLink(context.extension.packageJSON.version, (event) => {
       this.post(event);
+      if (event.event === "bridge" && event.params.method === "research.quota") {
+        this.studio.onQuota(event.params.params as Parameters<Studio["onQuota"]>[0]);
+      }
       if (event.event !== "state") return;
       const connected = event.params.conn === "connected";
       for (const notebook of this.notebooks.values()) {
@@ -239,6 +246,13 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   clearChat(): void {
     this.post({ event: "command", params: "chat.clear" });
   }
+
+  /** Export Chat as Markdown (the chat view's title bar). */
+  exportChat(): void {
+    this.post({ event: "command", params: "chat.export" });
+  }
+
+  private readonly tempFiles: string[] = [];
 
   /** Stop the Bridge (the title bar's overflow menu). */
   async stopBridge(): Promise<void> {
@@ -601,7 +615,11 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private async handle(method: string, params: unknown): Promise<unknown> {
     switch (method) {
-      case "prefs.get": return this.context.globalState.get<Prefs>("prefs");
+      case "prefs.get": {
+        const stored = this.context.globalState.get<Prefs>("prefs");
+        const cfgLang = vscode.workspace.getConfiguration("ainb").get<"auto" | "en" | "vi">("language", "auto");
+        return stored ? { language: cfgLang, ...stored } : { ...DEFAULT_PREFS, language: cfgLang };
+      }
       case "chat.selected": return this.selected;
       case "studio.open": return this.studio.open(params as StudioView);
       case "mentor.open": return this.mentor.open();
@@ -638,6 +656,42 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         if (typeof target !== "string") return null;
         return readChatImage(target, this.documentUri());
       }
+      case "image.open": {
+        const { mime, data } = params as { mime?: string; data?: string };
+        if (typeof mime !== "string" || typeof data !== "string") return false;
+        const ext = mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : mime === "image/gif" ? "gif" : "png";
+        const file = join(tmpdir(), `ainb-plot-${randomBytes(6).toString("hex")}.${ext}`);
+        writeFileSync(file, Buffer.from(data, "base64"));
+        this.tempFiles.push(file);
+        await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(file));
+        return true;
+      }
+      case "chat.export": {
+        const { filename, content } = params as { filename?: string; content?: string };
+        if (typeof content !== "string") return false;
+        const base = (filename || "notebook-chat").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/\.md$/i, "");
+        const uri = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(`${base}.md`),
+          filters: { Markdown: ["md"] },
+          saveLabel: "Export Chat",
+        });
+        if (!uri) return false;
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
+        void vscode.window.showInformationMessage(`Chat exported to ${uri.fsPath}`);
+        return true;
+      }
+      case "review.diff": {
+        const { before, after, title, cellType } = params as { before?: string; after?: string; title?: string; cellType?: string };
+        const ext = cellType === "markdown" ? "md" : "py";
+        const stamp = randomBytes(6).toString("hex");
+        const left = join(tmpdir(), `ainb-before-${stamp}.${ext}`);
+        const right = join(tmpdir(), `ainb-after-${stamp}.${ext}`);
+        writeFileSync(left, String(before ?? ""), "utf8");
+        writeFileSync(right, String(after ?? ""), "utf8");
+        this.tempFiles.push(left, right);
+        await vscode.commands.executeCommand("vscode.diff", vscode.Uri.file(left), vscode.Uri.file(right), title || "Review diff");
+        return true;
+      }
       default:
         return this.core.handle(method, params);
     }
@@ -659,6 +713,9 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       adapter.dispose();
     }
     this.notebooks.clear();
+    for (const file of this.tempFiles.splice(0)) {
+      try { rmSync(file, { force: true }); } catch { /* best effort */ }
+    }
     for (const subscription of this.subscriptions) subscription.dispose();
   }
 }

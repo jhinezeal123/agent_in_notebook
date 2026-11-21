@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Nhìn ma trận `tri = np.tril(...)`, mỗi token ở vị trí $i$ được phép nhìn thấy những vị trí $j$ nào? Tại sao gọi là causal?",
+    "tag": "cr-causal-tril",
+    "answer": "Chỉ nhìn các vị trí j <= i (quá khứ và chính nó), không nhìn tương lai j > i — đảm bảo tính nhân quả khi sinh tự hồi quy.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Khi `Wq = 0`, vì sao `Y[b, t]` chính là trung bình cộng prefix của `V[b, 0..t]`?",
+    "tag": "cr-prefix-avg",
+    "answer": "Vì mọi điểm hợp lệ đều bằng 0, softmax gán trọng số 1/(t+1) đều nhau cho j = 0..t và 0 cho j > t, nên A @ V lấy trung bình prefix.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu đổi `np.tril(ones)` thành `np.tril(ones, k=-1)` (bỏ đường chéo chính), dòng `t = 0` gặp lỗi số gì khi chạy softmax?",
+    "tag": "cr-strict-tril-nan",
+    "answer": "Hàng 0 toàn bộ là -inf, nên S - max(S) tạo ra (-inf) - (-inf) = NaN trên toàn bộ hàng 0.",
+    "kind": "break",
+    "stage": "defend"
+  },
+  {
+    "q": "Shape của `Y` là `(B, T, d)` hay `(B, T, D)`? Vì sao?",
+    "tag": "cr-y-dim-d",
+    "answer": "Là (B, T, d) vì A có shape (B, T, T) nhân với V = X @ Wv có shape (B, T, d), chưa qua phép chiếu đầu ra Wo.",
+    "kind": "shape",
+    "stage": "defend"
+  }
+]

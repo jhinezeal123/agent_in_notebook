@@ -5,7 +5,7 @@
 
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import type { MentorHome, MentorKind, MentorPlace } from "@ainb/protocol";
+import type { MentorHome, MentorKind, MentorPlace, MentorStatus } from "@ainb/protocol";
 
 const NEW_KAGGLE_NOTEBOOK = "https://www.kaggle.com/code/new";
 
@@ -62,9 +62,38 @@ export class MentorHost implements vscode.Disposable {
     switch (method) {
       case "mentor.home":
         return this.deps.request("mentor.home", {});
+      case "mentor.attempts":
+        return this.deps.request("mentor.attempts", params ?? {});
+      case "mentor.export": {
+        const p = (params ?? {}) as { format?: "markdown" | "json"; includeMistakes?: boolean };
+        const res = await this.deps.request("mentor.export", p) as { content: string; filename: string };
+        const ext = p.format === "json" ? "json" : "md";
+        const uri = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(res.filename),
+          filters: ext === "json" ? { JSON: ["json"] } : { Markdown: ["md"] },
+          saveLabel: "Xuất hồ sơ Mentor",
+        });
+        if (!uri) return { saved: false };
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(res.content, "utf8"));
+        void vscode.window.showInformationMessage(`Đã xuất hồ sơ Mentor ra ${uri.fsPath}`);
+        return { saved: true, path: uri.fsPath };
+      }
+      case "mentor.import": {
+        const picked = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          filters: { "Mentor JSON backup": ["json"] },
+          openLabel: "Nhập hồ sơ Mentor",
+        });
+        if (!picked?.length) return { importedEvents: 0 };
+        const raw = Buffer.from(await vscode.workspace.fs.readFile(picked[0]!)).toString("utf8");
+        const res = await this.deps.request("mentor.import", { data: raw }) as { importedEvents: number };
+        void vscode.window.showInformationMessage(`Đã nhập ${res.importedEvents} sự kiện từ backup Mentor.`);
+        return res;
+      }
       case "mentor.start": {
         const p = (params ?? {}) as { exerciseId?: string; kind?: MentorKind };
-        return this.start(p.exerciseId, p.kind === "review" ? "review" : "learn");
+        const kind: MentorKind = p.kind === "review" ? "review" : p.kind === "interview" ? "interview" : "learn";
+        return this.start(p.exerciseId, kind);
       }
       case "mentor.openKaggle":
         return vscode.env.openExternal(vscode.Uri.parse(NEW_KAGGLE_NOTEBOOK));
@@ -88,13 +117,13 @@ export class MentorHost implements vscode.Disposable {
    * learner picks among those open in Chrome. Null when they cancel.
    */
   private async start(exerciseId: string | undefined, kind: MentorKind): Promise<unknown> {
-    if (!exerciseId) {
+    if (!exerciseId && kind !== "interview") {
       const home = await this.deps.request("mentor.home", {}) as MentorHome;
       exerciseId = (kind === "review" ? home.warmup : home.today)?.exerciseId;
       if (!exerciseId) throw new Error(kind === "review" ? "Hôm nay không có bài nào đến hạn ôn." : "Bạn đã làm hết các bài hiện có.");
     }
     const places = await this.deps.request("mentor.places", {}) as MentorPlace[];
-    const here = places.find((p) => p.holds && p.holds.exerciseId === exerciseId && p.holds.kind === kind && !p.holds.done);
+    const here = exerciseId ? places.find((p) => p.holds && p.holds.exerciseId === exerciseId && p.holds.kind === kind && !p.holds.done) : undefined;
     let place = here;
     if (!place) {
       if (!places.length) {
@@ -241,19 +270,16 @@ export class MentorHost implements vscode.Disposable {
   private async refreshStatus(): Promise<void> {
     if (!this.deps.connected()) return;
     try {
-      const home = await this.deps.request("mentor.home", {}) as MentorHome;
-      const streak = home.streak.current;
-      this.status.text = `$(flame) ${streak} · $(star-full) ${home.overall ?? "—"}`;
+      const st = await this.deps.request("mentor.status", {}) as MentorStatus;
+      const streak = st.streak;
+      this.status.text = `$(flame) ${streak} · $(star-full) ${st.overall ?? "—"}`;
       const tip = new vscode.MarkdownString(undefined, true);
       tip.appendMarkdown("**Mentor**\n\n");
-      tip.appendMarkdown(`Chuỗi ngày học: ${streak}${home.streak.doneToday ? " (hôm nay đã học)" : " — hôm nay chưa học"}\n\n`);
-      if (home.warmup) tip.appendMarkdown(`Khởi động: ôn lại ${home.warmup.title} (~${home.warmup.minutes} phút)\n\n`);
-      if (home.today) tip.appendMarkdown(`Bài hôm nay: ${home.today.title} (~${home.today.minutes} phút)\n\n`);
-      const due = home.mistakes.filter((m) => m.status === "due").length;
-      if (due) tip.appendMarkdown(`Sổ lỗi sai: ${due} câu hỏi lại hôm nay\n\n`);
+      tip.appendMarkdown(`Chuỗi ngày học: ${streak}${st.activeToday ? " (hôm nay đã học)" : " — hôm nay chưa học"}\n\n`);
+      if (st.dueReviews > 0) tip.appendMarkdown(`Bài đến hạn ôn: ${st.dueReviews}\n\n`);
       tip.appendMarkdown("Bấm để mở trang Mentor.");
       this.status.tooltip = tip;
-      this.status.backgroundColor = home.streak.doneToday || streak === 0 ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
+      this.status.backgroundColor = st.activeToday || streak === 0 ? undefined : new vscode.ThemeColor("statusBarItem.warningBackground");
     } catch {
       // Mentor not available (an older bridge): keep the plain entry.
     }

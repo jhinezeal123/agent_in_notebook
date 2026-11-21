@@ -1,0 +1,21 @@
+{
+  "id": "debug-gather-nll",
+  "title": "Tìm lỗi: NLL có mask bị kéo nhỏ khi nhiều padding",
+  "star": "debug-tensor",
+  "skills": [
+    "train",
+    "tensor"
+  ],
+  "difficulty": 1200,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 3,
+  "functions": [
+    "masked_nll"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "scaffoldFixed": true
+}

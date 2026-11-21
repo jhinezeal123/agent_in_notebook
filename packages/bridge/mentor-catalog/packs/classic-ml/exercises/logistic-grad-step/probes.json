@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Biến đổi đại số nào đưa $-y\\log\\sigma(z) - (1-y)\\log(1-\\sigma(z))$ về đúng dạng $\\log(1 + e^z) - y z$?",
+    "tag": "cml-logreg-bce-identity",
+    "answer": "Thay sigma(z) = 1/(1+e^-z) và 1-sigma(z) = e^-z/(1+e^-z), rồi dùng log(1 + e^-z) = log(1 + e^z) - z ta thu được ngay log(1+e^z) - yz.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Vì sao ngay cả khi đã viết `1 / (1 + np.exp(-z))`, hàm sigmoid vẫn có thể overflow khi $z = -1000$? Cách tách hai nhánh $z \\ge 0$ và $z < 0$ giải quyết thế nào?",
+    "tag": "cml-sigmoid-branch",
+    "answer": "Khi z = -1000 thì -z = +1000 nên exp(-z) overflow thành inf; nhánh z < 0 viết lại thành exp(z) / (1 + exp(z)) nên mọi số mũ đều <= 0, không bao giờ overflow.",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao gradient của BCE theo logit $z$ rút gọn cực đẹp thành $\\sigma(z) - y$ (giống hệt hồi quy tuyến tính $Xw + b - y$)?",
+    "tag": "cml-logreg-grad-form",
+    "answer": "Đạo hàm của log(1 + e^z) đúng bằng e^z / (1 + e^z) = sigma(z), trừ đạo hàm của y*z còn đúng sigma(z) - y.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Hàm mất mát của Logistic Regression (với $\\lambda \\ge 0$) có lồi (convex) không? Điều đó có ý nghĩa gì cho gradient descent?",
+    "tag": "cml-logreg-convex",
+    "answer": "Có, softplus là hàm lồi và tổng các hàm lồi là lồi; nên không có cực tiểu địa phương xấu, mọi cực tiểu đều là cực tiểu toàn cục.",
+    "kind": "compare",
+    "stage": "defend"
+  }
+]

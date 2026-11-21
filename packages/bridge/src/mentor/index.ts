@@ -6,18 +6,44 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
   MENTOR_HINT_MAX,
+  MENTOR_SKILL_LABEL,
   type CellInfo,
+  type MentorAttemptDetail,
   type MentorComponentStatus,
+  type MentorExerciseStats,
   type MentorFocus,
   type MentorHome,
   type MentorKind,
   type MentorPaper,
   type MentorPaperComponent,
   type MentorStage,
+  type MentorStatus,
 } from "@ainb/protocol";
 import { checkExercises, loadCatalog, usesOrder, type Catalog, type Exercise } from "./catalog.js";
 import type { JudgeContext } from "./judge.js";
-import { dayOf, dueMistakes, fold, home, overallOf, passedExercises, pickToday, pickWarmup, scaffoldFor, START_RATING, type AttemptState, type FocusRef, type MentorEvent, type MentorState } from "./model.js";
+import {
+  applyEvent,
+  dayOf,
+  dueMistakes,
+  dueReviews,
+  exerciseAnalytics,
+  fold,
+  foldFromSnapshot,
+  home,
+  overallOf,
+  passedExercises,
+  pickInterviewExercise,
+  pickToday,
+  pickWarmup,
+  scaffoldFor,
+  serializeState,
+  START_RATING,
+  streakOf,
+  type AttemptState,
+  type FocusRef,
+  type MentorEvent,
+  type MentorState,
+} from "./model.js";
 import { loadPapers, PaperShelf, paperExerciseId, paperStars, slugOf, type PaperPackage } from "./papers.js";
 import { exerciseCells, unmarkedCode, withWork } from "./notebook.js";
 import { MentorStore } from "./store.js";
@@ -57,10 +83,9 @@ export class Mentor {
     return (this.catalogCache ??= loadCatalog(undefined, { papersDir: this.shelf.root, log: this.opts.log }));
   }
 
-  /** The learner's papers changed (an exercise was written, a plan approved): read the catalog again. */
+  /** Full reload (POST /mentor/reload dev flow): re-reads curated exercises, packs, and papers. */
   reloadCatalog(): void {
     if (this.fixedCatalog) {
-      // A catalog given in tests: only its papers' part is read again.
       const c = this.catalogCache!;
       this.catalogCache = loadCatalogFor(c, this.shelf.root, this.opts.log);
     } else this.catalogCache = null;
@@ -69,13 +94,42 @@ export class Mentor {
     for (const l of this.listeners) l("");
   }
 
+  /** Incremental paper reload (A7.2): keeps curated exercises & packs cached, reloads only learner papers. */
+  reloadPapers(): void {
+    if (this.catalogCache) {
+      this.catalogCache = loadCatalogFor(this.catalogCache, this.shelf.root, this.opts.log);
+    }
+    this.cached = null;
+    this.opts.onChange?.("");
+    for (const l of this.listeners) l("");
+  }
+
   state(): MentorState {
-    return (this.cached ??= fold(this.store.events(), this.catalog));
+    if (this.cached) return this.cached;
+    const snap = this.store.snapshot();
+    const events = this.store.events();
+    this.cached = snap ? foldFromSnapshot(snap, events, this.catalog) : fold(events, this.catalog);
+    return this.cached;
   }
 
   home(): MentorHome {
     const focus = this.focus();
     return { ...home(this.state(), this.catalog, this.now(), focus), papers: this.papers(), focus: focus ? this.focusView(focus) : null };
+  }
+
+  /** Lightweight summary for the VS Code status bar without building the full home payload. */
+  status(): MentorStatus {
+    const state = this.state();
+    const today = dayOf(this.now());
+    const streak = streakOf(state.days, today);
+    const overall = overallOf(state.ratings) ?? START_RATING;
+    const due = dueReviews(state, today).length;
+    return {
+      streak: streak.current,
+      overall,
+      dueReviews: due,
+      activeToday: (state.days.get(today) ?? 0) > 0,
+    };
   }
 
   /** What "today's exercise" follows, if not the map. */
@@ -106,6 +160,21 @@ export class Mentor {
   /** The overall rating, or the starting one. */
   rating(): number {
     return overallOf(this.state().ratings) ?? START_RATING;
+  }
+
+  /** Weak misconception tags (most frequent first), without computing full home(). */
+  weakTags(limit = 5): { tag: string; count: number }[] {
+    const counts = new Map<string, number>();
+    for (const a of this.state().attempts.values()) {
+      if (a.voided) continue;
+      for (const m of a.misconceptions) {
+        counts.set(m.tag, (counts.get(m.tag) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([tag, count]) => ({ tag, count }));
   }
 
   paperPackage(paperId: string): PaperPackage | undefined {
@@ -170,8 +239,20 @@ export class Mentor {
 
   record(event: NewEvent): void {
     const at = this.now();
-    this.store.append({ ...event, at, day: dayOf(at) } as MentorEvent);
-    this.cached = null;
+    const full = { ...event, at, day: dayOf(at) } as MentorEvent;
+    this.store.append(full);
+    // Incremental fold (A7.1): apply new events in O(1) onto cached state;
+    // `void` retroactively changes ratings, so it invalidates for a full fold.
+    if (event.t === "void") {
+      this.cached = null;
+    } else if (this.cached) {
+      applyEvent(this.cached, full, this.catalog);
+    }
+    // Auto-compact once events.jsonl exceeds 5,000 events (archive preserved on disk).
+    if (this.store.events().length > 5_000) {
+      const current = this.state();
+      this.store.compactWithSnapshot(serializeState(current));
+    }
     this.opts.onChange?.(event.attemptId);
     for (const l of this.listeners) l(event.attemptId);
   }
@@ -233,14 +314,19 @@ export class Mentor {
     const missing = this.missingUses(ex);
     if (missing.length) throw new Error(`Bài này dựng tiếp trên code của bạn ở bài ${missing.map((m) => `"${m.title}"`).join(", ")}: làm (và qua máy chấm) bài đó trước.`);
     const attemptId = `a${this.now().toString(36)}${randomBytes(3).toString("hex")}`;
-    this.record({ t: "start", attemptId, exerciseId: ex.id, ...(kind === "review" ? { kind } : {}), scaffold: scaffoldFor(state, ex, kind) });
+    this.record({ t: "start", attemptId, exerciseId: ex.id, ...(kind !== "learn" ? { kind } : {}), scaffold: scaffoldFor(state, ex, kind) });
     return { attemptId, exerciseId: ex.id, resumed: false };
   }
 
-  /** The exercise named, or today's (today's review) when none is. */
+  /** The exercise named, or today's (today's review / mock interview) when none is. */
   exerciseFor(exerciseId: string | undefined, kind: MentorKind): string {
     if (exerciseId) return exerciseId;
     const state = this.state();
+    if (kind === "interview") {
+      const pick = pickInterviewExercise(state, this.catalog);
+      if (!pick) throw new Error("Chưa có bài phù hợp để mở buổi phỏng vấn thử.");
+      return pick.id;
+    }
     const today = kind === "review" ? pickWarmup(state, this.catalog, this.now()) : pickToday(state, this.catalog, this.now());
     if (!today) throw new Error(kind === "review" ? "Hôm nay không có bài nào đến hạn ôn." : "Bạn đã làm hết các bài hiện có. Bài mới sẽ được bổ sung.");
     return today.exerciseId;
@@ -305,6 +391,130 @@ export class Mentor {
     });
   }
 
+  /** Attempt history with saved snapshot code/verdict and (only when done/revealed) reference code (C5). */
+  attemptHistory(opts: { exerciseId?: string; limit?: number } = {}): MentorAttemptDetail[] {
+    const state = this.state();
+    const limit = Math.max(1, Math.min(200, opts.limit ?? 50));
+    const list: MentorAttemptDetail[] = [];
+    for (let i = state.order.length - 1; i >= 0 && list.length < limit; i--) {
+      const a = state.attempts.get(state.order[i]!)!;
+      if (a.voided) continue;
+      if (opts.exerciseId && a.exerciseId !== opts.exerciseId) continue;
+      const ex = this.catalog.exercise(a.exerciseId);
+      const snap = this.store.attemptSnapshot(a.attemptId);
+      const work = this.store.work(a.attemptId);
+      const learnerCode = snap?.learnerCode ?? (work?.solution.join("\n\n") || undefined) ?? (a.passed ? (this.store.solution(a.exerciseId) ?? undefined) : undefined);
+      const canSeeRef = a.stage === "done" || a.revealed;
+      list.push({
+        attemptId: a.attemptId,
+        exerciseId: a.exerciseId,
+        title: ex?.title ?? a.exerciseId,
+        star: ex?.star ?? "",
+        kind: a.kind,
+        stage: a.stage,
+        startedAt: a.startedAt,
+        ...(a.doneAt ? { doneAt: a.doneAt } : {}),
+        ...(a.result ? { score: a.result.score } : {}),
+        hintLevel: a.hintLevel,
+        revealed: a.revealed,
+        judges: a.judges,
+        failedBeforePass: a.failedBeforePass,
+        passed: a.passed,
+        activeMinutes: Math.round((a.activeMs / 60_000) * 10) / 10,
+        ...(snap?.verdict ? { verdict: snap.verdict } : {}),
+        ...(learnerCode ? { learnerCode } : {}),
+        ...(canSeeRef && ex ? { referenceCode: ex.reference } : {}),
+      });
+    }
+    return list;
+  }
+
+  /** Per-exercise analytics and difficulty calibration suggestions (C9). */
+  analytics(): MentorExerciseStats[] {
+    return exerciseAnalytics(this.state(), this.catalog);
+  }
+
+  /** Export learner progress profile as Markdown or JSON backup (C6). */
+  exportProfile(opts: { format?: "markdown" | "json"; includeMistakes?: boolean } = {}): { content: string; filename: string } {
+    const format = opts.format ?? "markdown";
+    const includeMistakes = opts.includeMistakes !== false;
+    const h = this.home();
+    const analytics = this.analytics();
+    const stamp = new Date(this.now()).toISOString().slice(0, 10);
+    if (format === "json") {
+      const payload = {
+        version: 1,
+        exportedAt: this.now(),
+        overall: h.overall,
+        streak: h.streak,
+        skills: h.skills,
+        history: h.history,
+        stars: h.stars.filter((s) => s.state !== "locked" && s.state !== "open"),
+        papers: h.papers.filter((p) => p.results.some((r) => r.yours !== undefined)),
+        analytics,
+        ...(includeMistakes ? { mistakes: h.mistakes } : {}),
+        events: this.store.events(),
+      };
+      return { content: JSON.stringify(payload, null, 2), filename: `mentor-profile-${stamp}.json` };
+    }
+    const mastered = h.stars.filter((s) => s.state === "mastered");
+    const lines: string[] = [
+      `# Hồ sơ học tập Mentor (${stamp})`,
+      "",
+      `- **Overall rating:** ${h.overall ?? "Chưa có"} (tính từ nhật ký chấm bài tự động)`,
+      `- **Chuỗi ngày học:** ${h.streak.current} ngày (kỷ lục ${h.streak.best} ngày)`,
+      `- **Số sao đã vững:** ${mastered.length}/${h.stars.length}`,
+      "",
+      "## Rating theo kỹ năng",
+      "",
+      "| Kỹ năng | Rating | Số bài |",
+      "|---|---:|---:|",
+      ...h.skills.map((s) => `| ${MENTOR_SKILL_LABEL[s.skill]} | ${s.rating ?? "—"} | ${s.games} |`),
+      "",
+    ];
+    if (mastered.length) {
+      lines.push("## Sao đã vững", "", ...mastered.map((s) => `- **${s.name}** (${s.exercises.filter((e) => e.done).length}/${s.exercises.length} bài)`), "");
+    }
+    const papersWithResults = h.papers.filter((p) => p.results.some((r) => r.yours !== undefined));
+    if (papersWithResults.length) {
+      lines.push("## Paper đã reproduce", "");
+      for (const p of papersWithResults) {
+        lines.push(`### ${p.title}`, "", "| Chỉ số | Paper | Đo được |", "|---|---|---|");
+        for (const r of p.results) lines.push(`| ${r.name} | ${r.paper ?? "—"} | ${r.yours !== undefined ? `${r.yours}${r.unit ? ` ${r.unit}` : ""}` : "—"} |`);
+        lines.push("");
+      }
+    }
+    if (analytics.length) {
+      lines.push(
+        "## Thống kê làm bài (thời gian xấp xỉ)",
+        "",
+        "| Bài | Số lượt | Tỉ lệ đạt | Hint TB | Thời gian TB (phút) |",
+        "|---|---:|---:|---:|---:|",
+        ...analytics.slice(0, 30).map((a) => `| ${a.title} | ${a.attempts} | ${Math.round(a.passRate * 100)}% | ${a.avgHints} | ${a.avgActiveMinutes} / ${a.minutes} |`),
+        "",
+      );
+    }
+    if (includeMistakes && h.mistakes.length) {
+      const solid = h.mistakes.filter((m) => m.status === "solid");
+      lines.push("## Sổ lỗi sai", "", ...h.mistakes.map((m) => `- **${m.tag}** (${m.status}): ${m.note}`), "");
+      if (solid.length) lines.push(`> Đã vững ${solid.length}/${h.mistakes.length} hiểu nhầm.`, "");
+    }
+    return { content: lines.join("\n"), filename: `mentor-profile-${stamp}.md` };
+  }
+
+  /** Import a JSON profile backup (events array), deduplicating existing events (C6). */
+  importProfile(raw: string): { importedEvents: number } {
+    const parsed = JSON.parse(raw) as { events?: MentorEvent[] };
+    if (!parsed || !Array.isArray(parsed.events)) throw new Error("File backup không có danh sách events hợp lệ.");
+    const importedEvents = this.store.importEvents(parsed.events);
+    if (importedEvents > 0) {
+      this.cached = null;
+      this.opts.onChange?.("");
+      for (const l of this.listeners) l("");
+    }
+    return { importedEvents };
+  }
+
   /** Learner-wide context for the agent: ratings and recent misconceptions. */
   learnerSummary(exceptAttempt?: string): string {
     const state = this.state();
@@ -332,12 +542,18 @@ function loadCatalogFor(base: Catalog, papersDir: string, log?: (m: string) => v
   const fresh = loadPapers(papersDir, "yours", log).filter((p) => !own.some((o) => o.info.id === p.info.id));
   const exercises = checkExercises([...fixed, ...fresh.flatMap((p) => p.exercises)]);
   const byId = new Map(exercises.map((e) => [e.id, e]));
+  const byStar = new Map<string, Exercise[]>();
+  for (const e of exercises) {
+    const list = byStar.get(e.star) ?? [];
+    list.push(e);
+    byStar.set(e.star, list);
+  }
   const papers = [...own, ...fresh];
   return {
     ...base,
     constellations: [...base.constellations.filter((c) => c.kind !== "paper" || own.some((o) => `paper:${o.info.id}` === c.id)), ...fresh.map((p) => ({ id: `paper:${p.info.id}`, name: p.info.title, kind: "paper" as const }))],
     stars: [...base.stars.filter((s) => !s.constellation.startsWith("paper:") || own.some((o) => `paper:${o.info.id}` === s.constellation)), ...fresh.flatMap((p) => paperStars(p))],
-    exercises, exercise: (id) => byId.get(id), papers, paperGiven: (id) => papers.find((p) => p.info.id === id)?.info.given ?? "",
+    exercises, exercise: (id) => byId.get(id), exercisesByStar: (starId) => byStar.get(starId) ?? [], papers, paperGiven: (id) => papers.find((p) => p.info.id === id)?.info.given ?? "",
   };
 }
 

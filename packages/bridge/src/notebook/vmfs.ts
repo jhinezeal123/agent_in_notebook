@@ -5,8 +5,12 @@
 import { posix } from "node:path";
 import { CALL_WAIT_MS, helperCall, type KernelExec } from "./kernel.js";
 
-/** Bytes moved per kernel call: replies pass through the page, which caps one stream near 1 MB. */
-const CHUNK = 512 * 1024;
+/** Bytes read per kernel call: replies pass through the page, which caps one stream near 1 MB. */
+export const READ_CHUNK = 512 * 1024;
+/** Bytes written per call over a kernel (Colab / fallback). */
+export const WRITE_CHUNK_KERNEL = 512 * 1024;
+/** Bytes written per call over a server terminal (conservative 1 MB, avoiding page stream cap). */
+export const WRITE_CHUNK_TERMINAL = 1024 * 1024;
 /** Largest file read whole (to edit it, or to show a notebook file as cells). */
 export const WHOLE_MAX = 8 * 1024 * 1024;
 /** Searches stop after this long on the machine and say so. */
@@ -35,6 +39,18 @@ def _ainb_fs(args):
         return False
     if op == "hello":
         import sys
+        # Best-effort sweep of orphaned .ainb-tmp files older than 10 minutes in cwd.
+        try:
+            cutoff = time.time() - 600
+            for name in os.listdir("."):
+                if name.endswith(".ainb-tmp"):
+                    try:
+                        if os.path.getmtime(name) < cutoff:
+                            os.remove(name)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
         return done({"cwd": os.getcwd(), "home": os.path.expanduser("~"), "posix": os.name == "posix",
                      "path": os.environ.get("PATH", ""), "python": sys.executable or ""})
     if op == "stat":
@@ -316,7 +332,7 @@ export async function readFile(exec: KernelExec, path: string, max = WHOLE_MAX):
   const parts: Buffer[] = [];
   let first: Stat | undefined;
   for (let offset = 0; ; ) {
-    const r = await call<{ data: string; stat: Stat }>(exec, "read", { path, offset, max: CHUNK });
+    const r = await call<{ data: string; stat: Stat }>(exec, "read", { path, offset, max: READ_CHUNK });
     first ??= r.stat;
     if (first.size > max) throw new FileTooBig(path, first.size, max);
     const chunk = Buffer.from(r.data, "base64");
@@ -341,12 +357,19 @@ export class FileTooBig extends Error {
  * made since it was read: its stat, `null` for "must not exist", or "any".
  * Returns the new stat, or `conflict` with what is there now.
  */
-export async function writeFile(exec: KernelExec, path: string, data: Buffer, expect: Stat | null | "any" = "any"): Promise<{ stat: Stat } | { conflict: true; stat: Stat | null }> {
-  for (let offset = 0; ; offset += CHUNK) {
-    const last = offset + CHUNK >= data.length;
+export async function writeFile(
+  exec: KernelExec,
+  path: string,
+  data: Buffer,
+  expect: Stat | null | "any" = "any",
+  opts?: { writeChunk?: number },
+): Promise<{ stat: Stat } | { conflict: true; stat: Stat | null }> {
+  const chunk = opts?.writeChunk ?? WRITE_CHUNK_KERNEL;
+  for (let offset = 0; ; offset += chunk) {
+    const last = offset + chunk >= data.length;
     const r = await call<{ stat?: Stat; conflict?: boolean }>(exec, "write", {
       path,
-      data: data.subarray(offset, offset + CHUNK).toString("base64"),
+      data: data.subarray(offset, offset + chunk).toString("base64"),
       first: offset === 0,
       last,
       expect: expect === "any" || expect === null ? expect : { size: expect.size, mtime: expect.mtime },

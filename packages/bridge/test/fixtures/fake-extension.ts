@@ -279,6 +279,12 @@ export class FakeExtension {
     });
     this.rpc.on("chat.usage", (p: { usage: ChatUsage }) => (this.usage = p.usage));
     this.rpc.on("chat.snapshot", (p: ChatSnapshot) => this.snapshots.push(p));
+    // Mid-session metadata changes arrive as chat.meta (just the fields that changed);
+    // merge them onto the chat's last full snapshot so the snapshot view stays current.
+    this.rpc.on("chat.meta", (p: { chatId: string; tabId: number } & Record<string, unknown>) => {
+      const base = this.snapshots.findLast((s) => s.chatId === p.chatId);
+      if (base) this.snapshots.push({ ...base, ...p } as ChatSnapshot);
+    });
     this.rpc.on("chat.status", (p: { status: string }) => this.statuses.push(p.status));
     this.attachNotebook(this.tabId, this.notebook);
     return this.rpc.request("hello", { token, wire: WIRE_VERSION, extensionVersion: "test" });
@@ -367,10 +373,22 @@ export class FakeVm {
   private clock = 1;
 
   handle(code: string): ExecResult {
-    const body = JSON.parse(code.match(/^exec\((".*"), \{"__name__": "__ainb__"\}\)$/s)![1]!) as string;
-    const m = body.match(/\n(_ainb_\w+)\(_json\.loads\((".*")\)\)\n$/s)!;
-    const args = JSON.parse(JSON.parse(m[2]!)) as Record<string, any>;
-    const res = m[1] === "_ainb_fs" ? this.fs(args) : this.shell(args.op, args.name, args);
+    const modern = code.match(/^exec\((".*"), \{"__name__": "__ainb__", "_ainb_raw": (".*")\}\)$/s);
+    let body: string;
+    let fn: string;
+    let args: Record<string, any>;
+    if (modern) {
+      body = JSON.parse(modern[1]!) as string;
+      const m = body.match(/\n(_ainb_\w+)\(_json\.loads\(_ainb_raw\)\)\n$/s)!;
+      fn = m[1]!;
+      args = JSON.parse(JSON.parse(modern[2]!)) as Record<string, any>;
+    } else {
+      body = JSON.parse(code.match(/^exec\((".*"), \{"__name__": "__ainb__"\}\)$/s)![1]!) as string;
+      const m = body.match(/\n(_ainb_\w+)\(_json\.loads\((".*")\)\)\n$/s)!;
+      fn = m[1]!;
+      args = JSON.parse(JSON.parse(m[2]!)) as Record<string, any>;
+    }
+    const res = fn === "_ainb_fs" ? this.fs(args) : this.shell(args.op, args.name, args);
     return { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb ${JSON.stringify(res)}\n` }] };
   }
 

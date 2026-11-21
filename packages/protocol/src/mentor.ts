@@ -7,10 +7,11 @@ export type MentorStage = "lab" | "build" | "defend" | "done";
 export const MENTOR_STAGES: readonly MentorStage[] = ["lab", "build", "defend", "done"];
 
 /**
- * What an attempt is: learning the exercise (lab, build, defend), or a spaced
- * review that re-implements it from a blank cell.
+ * What an attempt is: learning the exercise (lab, build, defend), a spaced
+ * review that re-implements it from a blank cell, or a mock interview (probes
+ * + blank code, no hints).
  */
-export type MentorKind = "learn" | "review";
+export type MentorKind = "learn" | "review" | "interview";
 
 /** How much of the code the notebook gives: the starter with its docstring, the signatures only, or a blank cell. */
 export type MentorScaffold = "full" | "signature" | "blank";
@@ -316,9 +317,49 @@ export interface MentorHome {
   constellations: MentorConstellation[];
   diagnostic: { done: number; total: number; weakest: MentorSkill[] };
   recent: { attemptId: string; exerciseId: string; title: string; kind: MentorKind; at: number; stage: MentorStage; score?: number; revealed: boolean }[];
-  /** Rating after each finished attempt, oldest first. */
-  history: { at: number; overall: number }[];
+  /** Rating after each finished attempt, oldest first (with optional per-skill ratings). */
+  history: { at: number; overall: number; skills?: Partial<Record<MentorSkill, number>> }[];
   /** The paper shelf. */
   papers: MentorPaper[];
   focus: MentorFocus | null;
+}
+
+/** One attempt in the learner's attempt history (C5). */
+export interface MentorAttemptDetail {
+  attemptId: string;
+  exerciseId: string;
+  title: string;
+  star: string;
+  kind: MentorKind;
+  stage: MentorStage;
+  startedAt: number;
+  doneAt?: number;
+  score?: number;
+  hintLevel: number;
+  revealed: boolean;
+  judges: number;
+  failedBeforePass: number;
+  passed: boolean;
+  /** Approximate active time in minutes (sum of event gaps capped at 10m). */
+  activeMinutes: number;
+  verdict?: MentorVerdict;
+  learnerCode?: string;
+  /** Included ONLY once the attempt is done or solution was revealed (never leaks answers early). */
+  referenceCode?: string;
+}
+
+/** Per-exercise analytics & difficulty calibration suggestion (C9). */
+export interface MentorExerciseStats {
+  exerciseId: string;
+  title: string;
+  difficulty: number;
+  minutes: number;
+  attempts: number;
+  passes: number;
+  passRate: number;
+  avgHints: number;
+  avgFailedBeforePass: number;
+  avgActiveMinutes: number;
+  suggestedDifficulty?: number;
+  reason?: string;
 }

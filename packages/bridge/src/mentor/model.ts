@@ -8,6 +8,7 @@ import {
   MENTOR_SKILL_LABEL,
   MENTOR_SKILLS,
   type MentorConstellation,
+  type MentorExerciseStats,
   type MentorHome,
   type MentorKind,
   type MentorMistake,
@@ -79,6 +80,9 @@ export interface AttemptState {
   recalls: { tag: string; grade: 0 | 1 | 2 }[];
   doneAt?: number;
   result?: MentorResult;
+  /** Approximate active duration in ms (sum of inter-event gaps capped at 10m, C9). */
+  activeMs: number;
+  lastEventAt: number;
 }
 
 export interface Rating {
@@ -91,7 +95,7 @@ export interface MentorState {
   /** Attempts in the order they started. */
   order: string[];
   ratings: Map<MentorSkill, Rating>;
-  history: { at: number; overall: number }[];
+  history: { at: number; overall: number; skills?: Partial<Record<MentorSkill, number>> }[];
   /** Steps finished per day. */
   days: Map<string, number>;
   /** Which attempt each notebook holds (by notebook key). */
@@ -194,116 +198,189 @@ export function overallOf(ratings: Map<MentorSkill, Rating>): number | null {
   return rated.length ? Math.round(rated.reduce((s, x) => s + x.r, 0) / rated.length) : null;
 }
 
+const ACTIVE_GAP_CAP_MS = 10 * 60_000;
+
+export function emptyState(): MentorState {
+  return { attempts: new Map(), order: [], ratings: new Map(), history: [], days: new Map(), places: new Map(), workshops: new Map(), reviews: new Map(), mistakes: new Map() };
+}
+
+/** Apply a single event to `state` in place (A7.1 incremental fold). */
+export function applyEvent(state: MentorState, e: MentorEvent, catalog: Pick<Catalog, "exercise">, voided: ReadonlyMap<string, string> = new Map()): void {
+  const active = (day: string) => state.days.set(day, (state.days.get(day) ?? 0) + 1);
+  if (e.t === "paper") {
+    active(e.day);
+    return;
+  }
+  if (e.t === "workshop") {
+    const held = state.places.get(e.notebook);
+    if (held) {
+      state.places.delete(e.notebook);
+      const a = state.attempts.get(held);
+      if (a) a.notebook = undefined;
+    }
+    for (const [k, v] of state.workshops) if (v === e.paperId) state.workshops.delete(k);
+    state.workshops.set(e.notebook, e.paperId);
+    return;
+  }
+  if (e.t === "start") {
+    if (state.attempts.has(e.attemptId)) return;
+    const kind = e.kind ?? "learn";
+    const initialStage: MentorStage = kind === "review" || kind === "interview" ? "build" : "lab";
+    const defaultScaffold: MentorScaffold = kind === "review" || kind === "interview" ? "blank" : "full";
+    state.attempts.set(e.attemptId, {
+      attemptId: e.attemptId, exerciseId: e.exerciseId, ...(e.file ? { file: e.file } : {}), kind, scaffold: e.scaffold ?? defaultScaffold,
+      startedAt: e.at, stage: initialStage, hintLevel: 0, revealed: false,
+      judges: 0, failedBeforePass: 0, passed: false, probes: [], misconceptions: [], recalls: [],
+      activeMs: 0, lastEventAt: e.at,
+      // Reported as wrong: it never counts, and is not taken up again.
+      ...(voided.has(e.attemptId) ? { voided: voided.get(e.attemptId)! } : {}),
+    });
+    state.order.push(e.attemptId);
+    return;
+  }
+  const a = state.attempts.get(e.attemptId);
+  if (a && e.t === "load") {
+    state.workshops.delete(e.notebook);
+    if (a.notebook && state.places.get(a.notebook) === a.attemptId) state.places.delete(a.notebook);
+    const before = state.places.get(e.notebook);
+    if (before) state.attempts.get(before)!.notebook = undefined;
+    state.places.set(e.notebook, a.attemptId);
+    a.notebook = e.notebook;
+    return;
+  }
+  if (!a || a.doneAt) return;
+  if (e.at > a.lastEventAt) {
+    a.activeMs += Math.min(ACTIVE_GAP_CAP_MS, e.at - a.lastEventAt);
+    a.lastEventAt = e.at;
+  }
+  switch (e.t) {
+    case "stage":
+      if (stageIndex(e.stage) > stageIndex(a.stage)) {
+        a.stage = e.stage;
+        active(e.day);
+      }
+      break;
+    case "judge":
+      a.judges++;
+      a.lastJudge = { ok: e.ok, passed: e.passed, total: e.total, error: e.error, at: e.at };
+      if (e.ok && e.metrics?.length) a.metrics = e.metrics;
+      if (e.ok) a.passed = true;
+      else if (!a.passed) a.failedBeforePass++;
+      break;
+    case "hint":
+      a.hintLevel = Math.max(a.hintLevel, e.level);
+      if (e.level >= HINT_COST.length - 1) a.revealed = true;
+      break;
+    case "probe":
+      a.probes.push({ grade: e.grade, question: e.question, tag: e.tag });
+      break;
+    case "misconception":
+      a.misconceptions.push({ tag: e.tag, note: e.note, at: e.at });
+      noteMistake(state, a, e.tag, e.note, e.at, e.day);
+      break;
+    case "recall":
+      a.recalls.push({ tag: e.tag, grade: e.grade });
+      recallMistake(state, a, e.tag, e.grade, e.day);
+      break;
+    case "done": {
+      a.doneAt = e.at;
+      a.stage = "done";
+      active(e.day);
+      const ex = catalog.exercise(a.exerciseId);
+      const why = a.voided ?? voided.get(a.attemptId);
+      if (why !== undefined) {
+        a.voided = why;
+        a.result = { score: 0, deltas: [], revealed: a.revealed };
+        break;
+      }
+      if (!ex) break;
+      const deltas: MentorResult["deltas"] = [];
+      for (const skill of ex.skills) {
+        const now = state.ratings.get(skill) ?? { r: START_RATING, n: 0 };
+        const score = attemptScore(a, skill);
+        const kindK = a.kind === "review" || a.kind === "interview" ? REVIEW_K : 1;
+        let delta = kFactor(now.n) * kindK * (ex.author === "ai" ? AI_K : 1) * (score - expected(now.r, ex.difficulty));
+        // Seeing the solution can only cost rating.
+        if (a.revealed) delta = Math.min(0, delta);
+        const after = Math.round(now.r + delta);
+        deltas.push({ skill, before: Math.round(now.r), after });
+        state.ratings.set(skill, { r: now.r + delta, n: now.n + 1 });
+      }
+      const mean = ex.skills.reduce((s, k) => s + attemptScore(a, k), 0) / ex.skills.length;
+      a.result = { score: Math.round(mean * 100) / 100, deltas, revealed: a.revealed };
+      // Experiments and mock interviews do not schedule spaced reviews.
+      const next = ex.role === "experiment" || a.kind === "interview" ? undefined : scheduleReview(state, a, e.day);
+      if (next !== undefined) a.result.nextReview = next;
+      const overall = overallOf(state.ratings);
+      if (overall !== null) {
+        const skills: Partial<Record<MentorSkill, number>> = {};
+        for (const [k, v] of state.ratings) skills[k] = Math.round(v.r);
+        state.history.push({ at: e.at, overall, skills });
+      }
+      break;
+    }
+  }
+}
+
 /** Fold the log into the current state. Events of unknown exercises still count for the streak. */
 export function fold(events: readonly MentorEvent[], catalog: Pick<Catalog, "exercise">): MentorState {
-  const state: MentorState = { attempts: new Map(), order: [], ratings: new Map(), history: [], days: new Map(), places: new Map(), workshops: new Map(), reviews: new Map(), mistakes: new Map() };
-  const active = (day: string) => state.days.set(day, (state.days.get(day) ?? 0) + 1);
+  const state = emptyState();
   // A report can come after the attempt is done: it still undoes its rating.
   const voided = new Map<string, string>();
   for (const e of events) if (e.t === "void") voided.set(e.attemptId, e.reason);
-  for (const e of events) {
-    if (e.t === "paper") {
-      active(e.day);
-      continue;
-    }
-    if (e.t === "workshop") {
-      const held = state.places.get(e.notebook);
-      if (held) {
-        state.places.delete(e.notebook);
-        const a = state.attempts.get(held);
-        if (a) a.notebook = undefined;
-      }
-      for (const [k, v] of state.workshops) if (v === e.paperId) state.workshops.delete(k);
-      state.workshops.set(e.notebook, e.paperId);
-      continue;
-    }
-    if (e.t === "start") {
-      if (state.attempts.has(e.attemptId)) continue;
-      const kind = e.kind ?? "learn";
-      state.attempts.set(e.attemptId, {
-        attemptId: e.attemptId, exerciseId: e.exerciseId, ...(e.file ? { file: e.file } : {}), kind, scaffold: e.scaffold ?? (kind === "review" ? "blank" : "full"),
-        startedAt: e.at, stage: kind === "review" ? "build" : "lab", hintLevel: 0, revealed: false,
-        judges: 0, failedBeforePass: 0, passed: false, probes: [], misconceptions: [], recalls: [],
-        // Reported as wrong: it never counts, and is not taken up again.
-        ...(voided.has(e.attemptId) ? { voided: voided.get(e.attemptId)! } : {}),
-      });
-      state.order.push(e.attemptId);
-      continue;
-    }
-    const a = state.attempts.get(e.attemptId);
-    if (a && e.t === "load") {
-      state.workshops.delete(e.notebook);
-      if (a.notebook && state.places.get(a.notebook) === a.attemptId) state.places.delete(a.notebook);
-      const before = state.places.get(e.notebook);
-      if (before) state.attempts.get(before)!.notebook = undefined;
-      state.places.set(e.notebook, a.attemptId);
-      a.notebook = e.notebook;
-      continue;
-    }
-    if (!a || a.doneAt) continue;
-    switch (e.t) {
-      case "stage":
-        if (stageIndex(e.stage) > stageIndex(a.stage)) {
-          a.stage = e.stage;
-          active(e.day);
-        }
-        break;
-      case "judge":
-        a.judges++;
-        a.lastJudge = { ok: e.ok, passed: e.passed, total: e.total, error: e.error, at: e.at };
-        if (e.ok && e.metrics?.length) a.metrics = e.metrics;
-        if (e.ok) a.passed = true;
-        else if (!a.passed) a.failedBeforePass++;
-        break;
-      case "hint":
-        a.hintLevel = Math.max(a.hintLevel, e.level);
-        if (e.level >= HINT_COST.length - 1) a.revealed = true;
-        break;
-      case "probe":
-        a.probes.push({ grade: e.grade, question: e.question, tag: e.tag });
-        break;
-      case "misconception":
-        a.misconceptions.push({ tag: e.tag, note: e.note, at: e.at });
-        noteMistake(state, a, e.tag, e.note, e.at, e.day);
-        break;
-      case "recall":
-        a.recalls.push({ tag: e.tag, grade: e.grade });
-        recallMistake(state, a, e.tag, e.grade, e.day);
-        break;
-      case "done": {
-        a.doneAt = e.at;
-        a.stage = "done";
-        active(e.day);
-        const ex = catalog.exercise(a.exerciseId);
-        const why = voided.get(a.attemptId);
-        if (why !== undefined) {
-          a.voided = why;
-          a.result = { score: 0, deltas: [], revealed: a.revealed };
-          break;
-        }
-        if (!ex) break;
-        const deltas: MentorResult["deltas"] = [];
-        for (const skill of ex.skills) {
-          const now = state.ratings.get(skill) ?? { r: START_RATING, n: 0 };
-          const score = attemptScore(a, skill);
-          let delta = kFactor(now.n) * (a.kind === "review" ? REVIEW_K : 1) * (ex.author === "ai" ? AI_K : 1) * (score - expected(now.r, ex.difficulty));
-          // Seeing the solution can only cost rating.
-          if (a.revealed) delta = Math.min(0, delta);
-          const after = Math.round(now.r + delta);
-          deltas.push({ skill, before: Math.round(now.r), after });
-          state.ratings.set(skill, { r: now.r + delta, n: now.n + 1 });
-        }
-        const mean = ex.skills.reduce((s, k) => s + attemptScore(a, k), 0) / ex.skills.length;
-        a.result = { score: Math.round(mean * 100) / 100, deltas, revealed: a.revealed };
-        // An experiment is trained once; there is nothing to re-implement from memory.
-        const next = ex.role === "experiment" ? undefined : scheduleReview(state, a, e.day);
-        if (next !== undefined) a.result.nextReview = next;
-        const overall = overallOf(state.ratings);
-        if (overall !== null) state.history.push({ at: e.at, overall });
-        break;
-      }
-    }
-  }
+  for (const e of events) applyEvent(state, e, catalog, voided);
+  return state;
+}
+
+/** Snapshot serialization for log compaction (A7.1). */
+export interface StateSnapshot {
+  version: 1;
+  attempts: [string, AttemptState][];
+  order: string[];
+  ratings: [MentorSkill, Rating][];
+  history: MentorState["history"];
+  days: [string, number][];
+  places: [string, string][];
+  workshops: [string, string][];
+  reviews: [string, ReviewState][];
+  mistakes: [string, Omit<MistakeState, "attempts"> & { attempts: string[] }][];
+}
+
+export function serializeState(state: MentorState): StateSnapshot {
+  return {
+    version: 1,
+    attempts: [...state.attempts.entries()],
+    order: [...state.order],
+    ratings: [...state.ratings.entries()],
+    history: [...state.history],
+    days: [...state.days.entries()],
+    places: [...state.places.entries()],
+    workshops: [...state.workshops.entries()],
+    reviews: [...state.reviews.entries()],
+    mistakes: [...state.mistakes.entries()].map(([k, m]) => [k, { ...m, attempts: [...m.attempts] }]),
+  };
+}
+
+export function deserializeState(snap: StateSnapshot): MentorState {
+  return {
+    attempts: new Map(snap.attempts.map(([k, a]) => [k, { ...a, probes: [...a.probes], misconceptions: [...a.misconceptions], recalls: [...a.recalls] }])),
+    order: [...snap.order],
+    ratings: new Map(snap.ratings.map(([k, r]) => [k, { ...r }])),
+    history: [...snap.history],
+    days: new Map(snap.days),
+    places: new Map(snap.places),
+    workshops: new Map(snap.workshops),
+    reviews: new Map(snap.reviews.map(([k, r]) => [k, { ...r }])),
+    mistakes: new Map(snap.mistakes.map(([k, m]) => [k, { ...m, attempts: new Set(m.attempts) }])),
+  };
+}
+
+/** Fold tail events on top of a compacted state snapshot (A7.1). */
+export function foldFromSnapshot(snap: StateSnapshot, tail: readonly MentorEvent[], catalog: Pick<Catalog, "exercise">): MentorState {
+  const state = deserializeState(snap);
+  const voided = new Map<string, string>();
+  for (const e of tail) if (e.t === "void") voided.set(e.attemptId, e.reason);
+  for (const e of tail) applyEvent(state, e, catalog, voided);
   return state;
 }
 
@@ -491,12 +568,78 @@ export function starStates(state: MentorState, catalog: Catalog): Map<string, Me
  * learner's rating on the exercise's skills grows.
  */
 export function scaffoldFor(state: MentorState, ex: Exercise, kind: MentorKind): MentorScaffold {
-  if (kind === "review") return "blank";
-  if (ex.diagnostic) return "full";
+  if (kind === "review" || kind === "interview") return "blank";
+  if (ex.diagnostic || ex.scaffoldFixed) return "full";
   const rated = ex.skills.map((s) => state.ratings.get(s)).filter((r): r is Rating => !!r && r.n > 0);
   if (!rated.length) return "full";
   const low = Math.min(...rated.map((r) => r.r));
   return low < 1250 ? "full" : low < 1500 ? "signature" : "blank";
+}
+
+/** Pick an exercise for a mock interview: prefer mastered non-experiment exercises with probes (C7). */
+export function pickInterviewExercise(state: MentorState, catalog: Catalog): Exercise | null {
+  const mastered = masteredExercises(state);
+  const weakTags = new Set([...state.mistakes.values()].filter((m) => m.due !== null).map((m) => m.tag));
+  const candidates = catalog.exercises.filter((e) => e.role !== "experiment" && e.probeBank.length > 0);
+  const masteredCandidates = candidates.filter((e) => mastered.has(e.id));
+  const pool = masteredCandidates.length ? masteredCandidates : candidates;
+  if (!pool.length) return null;
+  // Prioritize exercises whose probes cover currently weak misconception tags.
+  pool.sort((a, b) => {
+    const aWeak = a.probeBank.filter((p) => weakTags.has(p.tag)).length;
+    const bWeak = b.probeBank.filter((p) => weakTags.has(p.tag)).length;
+    if (bWeak !== aWeak) return bWeak - aWeak;
+    return b.difficulty - a.difficulty;
+  });
+  return pool[0]!;
+}
+
+/** Compute per-exercise learning analytics & human-reviewed difficulty calibration suggestions (C9). */
+export function exerciseAnalytics(state: MentorState, catalog: Catalog): MentorExerciseStats[] {
+  const byEx = new Map<string, AttemptState[]>();
+  for (const a of state.attempts.values()) {
+    if (a.voided) continue;
+    const list = byEx.get(a.exerciseId) ?? [];
+    list.push(a);
+    byEx.set(a.exerciseId, list);
+  }
+  const overall = overallOf(state.ratings) ?? START_RATING;
+  const out: MentorExerciseStats[] = [];
+  for (const [exerciseId, attempts] of byEx) {
+    const ex = catalog.exercise(exerciseId);
+    if (!ex) continue;
+    const passes = attempts.filter((a) => a.passed && !a.revealed).length;
+    const passRate = attempts.length ? passes / attempts.length : 0;
+    const avgHints = attempts.reduce((s, a) => s + a.hintLevel, 0) / attempts.length;
+    const avgFailedBeforePass = attempts.reduce((s, a) => s + a.failedBeforePass, 0) / attempts.length;
+    const avgActiveMinutes = attempts.reduce((s, a) => s + a.activeMs / 60_000, 0) / attempts.length;
+    let suggestedDifficulty: number | undefined;
+    let reason: string | undefined;
+    if (attempts.length >= 3) {
+      const exp = expected(overall, ex.difficulty);
+      if (passRate - exp > 0.25 && avgHints < 0.5) {
+        suggestedDifficulty = Math.max(800, Math.round((ex.difficulty - 100) / 50) * 50);
+        reason = `Pass rate ${(passRate * 100).toFixed(0)}% >> Elo expected ${(exp * 100).toFixed(0)}% with low hints (${avgHints.toFixed(1)})`;
+      } else if (exp - passRate > 0.25 || (avgHints >= 2.2 && avgFailedBeforePass >= 3)) {
+        suggestedDifficulty = Math.min(2400, Math.round((ex.difficulty + 100) / 50) * 50);
+        reason = `High difficulty signal: pass rate ${(passRate * 100).toFixed(0)}%, avg hints ${avgHints.toFixed(1)}, avg fails ${avgFailedBeforePass.toFixed(1)}`;
+      }
+    }
+    out.push({
+      exerciseId,
+      title: ex.title,
+      difficulty: ex.difficulty,
+      minutes: ex.minutes,
+      attempts: attempts.length,
+      passes,
+      passRate: Math.round(passRate * 100) / 100,
+      avgHints: Math.round(avgHints * 100) / 100,
+      avgFailedBeforePass: Math.round(avgFailedBeforePass * 100) / 100,
+      avgActiveMinutes: Math.round(avgActiveMinutes * 10) / 10,
+      ...(suggestedDifficulty !== undefined && suggestedDifficulty !== ex.difficulty ? { suggestedDifficulty, reason } : {}),
+    });
+  }
+  return out.sort((a, b) => b.attempts - a.attempts || a.exerciseId.localeCompare(b.exerciseId));
 }
 
 /** Diagnostic exercises in the order they are taken. */

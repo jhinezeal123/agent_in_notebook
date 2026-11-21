@@ -1,0 +1,21 @@
+{
+  "id": "kmeans-lloyd-step",
+  "title": "Một bước k-means (thuật toán Lloyd)",
+  "star": "kmeans",
+  "skills": [
+    "tensor",
+    "formula"
+  ],
+  "difficulty": 1250,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "assign_clusters",
+    "update_centroids"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

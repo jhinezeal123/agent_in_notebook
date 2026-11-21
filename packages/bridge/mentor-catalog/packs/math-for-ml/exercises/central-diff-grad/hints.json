@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_cubic_central_accuracy",
+    "text": "Khoảng cách giữa hai điểm $x + \\varepsilon e_i$ và $x - \\varepsilon e_i$ là $\\varepsilon$ hay $2\\varepsilon$?"
+  },
+  {
+    "level": 0,
+    "test": "test_integer_input_array",
+    "text": "Nếu `x` có kiểu số nguyên `int`, phép gán `work[idx] = orig + eps` có giữ lại phần thập phân `eps` không?"
+  },
+  {
+    "level": 1,
+    "text": "Tạo bản sao float của x, duyệt từng chỉ số tọa độ đa chiều: cộng eps tính f+, trừ eps tính f-, khôi phục giá trị gốc, rồi chia (f+ - f-) cho 2*eps."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở duyệt mảng đa chiều",
+    "text": "work = bản sao float của x; grad = mảng 0 cùng shape\nVới từng tọa độ đa chiều idx:\n  lưu orig = work[idx]\n  đặt work[idx] = orig + eps -> fp; orig - eps -> fm; khôi phục orig\n  grad[idx] = (fp - fm) / (2 * eps)"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở vòng lặp đa chiều",
+    "text": "```python\nwork = np.asarray(x, dtype=float).copy()\ngrad = np.zeros_like(work)\nfor idx in np.ndindex(work.shape):\n    orig = work[idx]\n    work[idx] = orig + eps; fp = float(f(work))\n    work[idx] = orig - eps; fm = float(f(work))\n    work[idx] = orig\n    grad[idx] = (fp - fm) / (2.0 * eps)\n```"
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_empty_cluster_kept",
+    "text": "Khi không có điểm nào mang nhãn `k`, mảng `X[labels == k]` có bao nhiêu hàng và `.mean(axis=0)` trả về gì?"
+  },
+  {
+    "level": 0,
+    "test": "test_assign_shapes_and_values",
+    "text": "Khoảng cách dùng trong k-means là khoảng cách Euclid bình phương ($L_2^2$) hay trị tuyệt đối ($L_1$)?"
+  },
+  {
+    "level": 1,
+    "text": "Dùng broadcasting tính ma trận khoảng cách bình phương (N, K) rồi lấy argmin theo trục K. Khi cập nhật tâm, sao chép old_centroids trước rồi chỉ ghi đè các cụm có ít nhất 1 điểm."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở broadcasting và cụm rỗng",
+    "text": "assign: diff = X[:, None, :] - centroids[None, :, :] -> tổng bình phương theo trục cuối -> argmin theo trục 1\nupdate: tạo bản sao của old_centroids; với mỗi k từ 0..K-1, nếu có phần tử mang nhãn k thì gán trung bình theo trục 0"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở update_centroids",
+    "text": "```python\nout = np.asarray(old_centroids, dtype=float).copy()\nfor k in range(out.shape[0]):\n    members = X[labels == k]\n    if len(members) > 0:\n        out[k] = members.mean(axis=0)\n```"
+  }
+]

@@ -8,7 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@orx/workspace";
 import { TARGET_LABELS } from "@orx/computeTargets";
 import type { Harness, PaperHit, Project } from "@orx/api";
-import type { AgentInfo } from "@ainb/protocol";
+import type { AgentInfo, KaggleQuotaStatus } from "@ainb/protocol";
 import type { AgentLogin, KaggleAccount, KaggleNotebookLaunch, ProjectChoice } from "./messages.js";
 import { ResearchGate, useResearchStatus } from "./root.js";
 import { useNotebooks } from "./sidebar.js";
@@ -64,6 +64,13 @@ function ResearchStart() {
   const [first, setFirst] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quota, setQuota] = useState<KaggleQuotaStatus | null>(null);
+  useEffect(() => {
+    void hostRequest<KaggleQuotaStatus>("research.quota", {}).then(setQuota, () => {});
+  }, []);
+  const kaggleGpu = quota?.configured
+    ? quota.accounts.find((a) => a.gpu)?.gpu ?? null
+    : null;
 
   const projects = useQuery(queries.listProjectsQuery());
   const realProjects = useMemo(() => (projects.data ?? []).filter((p) => !p.scratch), [projects.data]);
@@ -179,7 +186,10 @@ function ResearchStart() {
             {!ready.length && harnesses.isSuccess && <a href="#" className="small" onClick={(e) => { e.preventDefault(); void hostRequest("open", { view: "settings", section: "agents" }); }}>Set up an agent</a>}
           </label>
           <div className="field"><span className="lab">Runs go to</span>
-            <span className="inp ro">{compute.data?.defaultBackend ? TARGET_LABELS[compute.data.defaultBackend]?.() ?? compute.data.defaultBackend : "No default yet"}</span>
+            <span className="inp ro">
+              {compute.data?.defaultBackend ? TARGET_LABELS[compute.data.defaultBackend]?.() ?? compute.data.defaultBackend : "No default yet"}
+              {kaggleGpu && ` · Kaggle GPU ${kaggleGpu.remaining.toFixed(1)}h/${kaggleGpu.total}h left`}
+            </span>
             <a href="#" className="small" onClick={(e) => { e.preventDefault(); void hostRequest("open", { view: "settings", section: "compute" }); }}>Change in Settings</a>
           </div>
         </div>

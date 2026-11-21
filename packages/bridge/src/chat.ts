@@ -33,6 +33,7 @@ import {
   type OutputImage,
   type Part,
   type PartOp,
+  type ResearchRun,
   type ReviewInfo,
   type UndoResult,
 } from "@ainb/protocol";
@@ -52,7 +53,7 @@ import { cacheOf as projectCache, type ProjectBrief, type ProjectLinks, type Pro
 import type { NotebookMeta, ProjectCache } from "./store.js";
 import { ensureWorktree } from "./project/worktree.js";
 import { describeFailure, type ResearchProjects } from "./research/projects.js";
-import { keyHash } from "./store.js";
+import { keyHash, MAX_MESSAGES, MAX_PINS, trimMessages } from "./store.js";
 import type { ChatPort, ChatRole } from "./chat-role.js";
 
 /** How the chat reaches its notebook and the chat UI. */
@@ -112,6 +113,15 @@ const FLUSH_MS = 80;
 const OP_TIMEOUT_MS = 30_000;
 /** Saving rewrites the whole transcript, so it waits for a pause of this long. */
 const PERSIST_MS = 2_000;
+/** ...but a turn that never pauses still saves at least this often, so a crash mid-turn does not lose it all. */
+const PERSIST_MAX_MS = 10_000;
+/** Messages waiting for the agent at once; past this the user is told to wait or Stop, not queued silently. */
+const QUEUE_MAX = 20;
+/** A turn with no session/update for this long gets one notice (the agent may be thinking, or stuck). */
+const WATCHDOG_MS = 5 * 60_000;
+/** No turn or cell run for this long: the machine poll slows to every MACHINE_IDLE_EVERY-th tick. */
+const MACHINE_IDLE_MS = 2 * 60_000;
+const MACHINE_IDLE_EVERY = 5;
 /** Decided reviews kept so a late await_review still gets the answer. */
 const REVIEWS_KEPT = 200;
 const RUN_CARDS_OPEN = 5;
@@ -162,14 +172,18 @@ export class Chat {
   private pendingRecap = "";
   private current: ChatMessage | null = null;
   private turn: { controller: AbortController; prompting: boolean; project: ProjectCache | null; code: CodePlace | null } | null = null;
-  private queue: TurnInput[] = [];
+  private queue: { input: TurnInput; messageId: string }[] = [];
   private turnTargets: string[] = [];
   private reviews = new Map<string, ReviewState>();
   private prompts = new Map<string, (optionId: string) => void>();
   private cards = new Map<string, { card: ChatCard; message: ChatMessage; onAction(actionId: string): void }>();
   private dirty = new Set<ChatMessage>();
+  /** Part indices of each message changed since the last flush; a touch with no index marks them all. */
+  private dirtyParts = new Map<string, Set<number>>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the current quiet-debounce cycle must save at the latest (first dirty + PERSIST_MAX_MS). */
+  private persistDueAt = 0;
   /** Set when the user starts over: the transcript must not be saved again. */
   private forgotten = false;
   /** Notebook changes applied for the agent, by the agent message whose turn made them. */
@@ -194,6 +208,13 @@ export class Chat {
   private machineSavedAt = 0;
   /** Re-reads the machine's numbers while the chat is open, so the header follows a running cell. */
   private machinePoll: ReturnType<typeof setInterval> | null = null;
+  /** Ticks counted while idle, to refresh only every MACHINE_IDLE_EVERY-th one. */
+  private machineIdleTicks = 0;
+  /** Last turn start or cell run: the machine poll slows down once this is older than MACHINE_IDLE_MS. */
+  private lastActiveAt = 0;
+  /** One notice per turn when the agent sends nothing for WATCHDOG_MS; never cancels it. */
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogFired = false;
   private lastSyncAt = 0;
   /** Last attempt that confirmed the code is saved, not merely scheduled or attempted. */
   private lastSavedAt = 0;
@@ -229,6 +250,8 @@ export class Chat {
   private lastCodeShown = "";
   /** Parts of each message as last sent to the extension, to send only what changed. */
   private sent = new Map<string, SentPart[]>();
+  /** The queued mark last sent for each message, so a patch carries it only when it changes. */
+  private sentQueued = new Map<string, boolean>();
   /** Who the agent is in this chat, when not the notebook's coding agent. */
   readonly role: ChatRole | undefined;
   private detachRole: (() => void) | undefined;
@@ -256,6 +279,7 @@ export class Chat {
     if (carried.length) {
       this.messages = carried;
       for (const message of carried) {
+        if (message.pinned) this.sentPinned.set(message.id, true);
         for (const part of message.parts) {
           if (part.type === "image") this.imageBytes += part.data.length;
           // Action handlers belong to the old Chat; a carried card cannot still be pressed.
@@ -394,6 +418,9 @@ export class Chat {
     this.agent?.dispose();
     this.agent = null;
     this.detachRole?.();
+    if (this.shells.names().length) {
+      void this.shells.closeIdle((code, wait) => this.call({ op: "machine_exec", code, waitMs: wait }, Math.min(wait, 2_500))).catch(() => {});
+    }
     this.setStatus("closed");
     this.persistNow();
   }
@@ -402,22 +429,108 @@ export class Chat {
 
   send(text: string, extra: Omit<TurnInput, "text"> = {}): void {
     if (this.closed) return;
+    const willQueue = this.status === "running" || !!this.current || !!this.busyJob;
+    if (willQueue && this.queue.length >= QUEUE_MAX) {
+      // The queue is bounded: a new message past the cap is refused with a notice,
+      // never piled up silently. What is already queued is left alone (Stop clears it).
+      this.notice(`The message queue is full (${QUEUE_MAX}). Wait for the agent to catch up, or Stop it, then send again.`);
+      return;
+    }
     const parts: Part[] = [{ type: "text", text }];
     if (extra.cells?.length) parts.push({ type: "cells", cells: extra.cells });
     const msg = this.newMessage("user", parts);
-    this.touch(msg);
     // Attached cells are what the `cell` scope may edit, unless the user pinned others.
     const input: TurnInput = { text, ...(extra.cells?.length ? { targets: extra.cells.map((c) => c.cellId) } : {}), ...extra };
-    if (this.status === "running" || this.current || this.busyJob) {
-      this.queue.push(input);
+    if (willQueue) {
+      // The user sees this message waiting; the mark goes when its turn begins (dequeue).
+      msg.queued = true;
+      this.touch(msg);
+      this.queue.push({ input, messageId: msg.id });
       return;
     }
+    this.touch(msg);
     void this.runTurn(input);
+  }
+
+  /** Remove one queued user message before its turn starts (B1.3 phase 2). */
+  dequeueMessage(messageId: string): boolean {
+    const idx = this.queue.findIndex((q) => q.messageId === messageId);
+    if (idx < 0) return false;
+    this.queue.splice(idx, 1);
+    const msgIdx = this.messages.findIndex((m) => m.id === messageId);
+    if (msgIdx >= 0) {
+      const [removed] = this.messages.splice(msgIdx, 1);
+      if (removed) {
+        this.dirty.delete(removed);
+        this.dirtyParts.delete(removed.id);
+        this.sent.delete(removed.id);
+        this.sentChanges.delete(removed.id);
+        this.sentQueued.delete(removed.id);
+        this.sentPinned.delete(removed.id);
+      }
+    }
+    this.host.emit("chat.snapshot", this.snapshot());
+    this.schedulePersist();
+    return true;
+  }
+
+  /** Pin or unpin a message so it survives the 200-message transcript trim (B4.3). */
+  pin(messageId: string, pinned: boolean): boolean {
+    const msg = this.messages.find((m) => m.id === messageId);
+    if (!msg) throw new Error("Message not found in this chat.");
+    if (pinned && !msg.pinned) {
+      const count = this.messages.filter((m) => m.pinned).length;
+      if (count >= MAX_PINS) throw new Error(`At most ${MAX_PINS} messages can be pinned per chat. Unpin one first.`);
+    }
+    if (!!msg.pinned === pinned) return !!msg.pinned;
+    if (pinned) msg.pinned = true;
+    else delete msg.pinned;
+    this.touchMeta(msg);
+    return !!msg.pinned;
+  }
+
+  /** Notify an open non-Mentor notebook chat when a run of its OpenResearch project finishes (C4). */
+  onProjectRunFinished(run: ResearchRun, title?: string): void {
+    if (this.closed || this.role) return;
+    const label = title ? `"${title}"` : `experiment ${run.experimentId}`;
+    const tone: ChatCard["tone"] = run.status === "done" ? "ok" : run.status === "failed" || run.status === "lost" ? "error" : "info";
+    const statusWord = run.status === "done" ? "finished" : run.status;
+    this.addCard(
+      {
+        kind: "run",
+        tone,
+        title: `Project run ${statusWord} (${label})`,
+        detail: `Run ${run.id}${run.exitCode != null ? ` · exit ${run.exitCode}` : ""}${run.backend ? ` · ${run.backend}` : ""}`,
+        actions: [
+          { id: "inspect", label: "Inspect in chat" },
+          { id: "dismiss", label: "Dismiss" },
+        ],
+      },
+      (actionId) => {
+        if (actionId === "inspect") {
+          this.send(`Inspect the results of project run \`${run.id}\` (${label}, status: ${run.status}) using \`run_read\`.`);
+        }
+      },
+    );
+  }
+
+  /** Take the next queued message: its turn begins, so the queued mark goes (a patch carries queued:false). */
+  private dequeue(): TurnInput | undefined {
+    const next = this.queue.shift();
+    if (!next) return undefined;
+    const msg = this.messages.find((m) => m.id === next.messageId);
+    if (msg?.queued) {
+      msg.queued = false;
+      this.touchMeta(msg);
+    }
+    return next.input;
   }
 
   private async runTurn(input: TurnInput): Promise<void> {
     const reply = this.newMessage("agent", []);
     this.current = reply;
+    this.lastActiveAt = Date.now();
+    this.watchdogFired = false;
     const turn: NonNullable<Chat["turn"]> = { controller: new AbortController(), prompting: false, project: null, code: null };
     this.turn = turn;
     this.setStatus("running");
@@ -427,6 +540,7 @@ export class Chat {
       const prompt = await this.buildPrompt(input);
       turn.controller.signal.throwIfAborted();
       turn.prompting = true;
+      this.armWatchdog();
       const res = await this.agent!.prompt(prompt);
       if (this.closed) return;
       this.sessionFresh = false;
@@ -450,6 +564,7 @@ export class Chat {
         this.addPart(reply, { type: "notice", level: "error", text: capText(this.error ?? msg, 2000) });
       }
     } finally {
+      this.clearWatchdog();
       if (turn.prompting && turn.code) void this.syncCode(turn.code, firstLine(input.text, 72));
       this.closeOpenTools(reply);
       this.current = null;
@@ -460,7 +575,8 @@ export class Chat {
       // Later changes to this turn's message (a review decided) are rare: send them whole.
       this.sent.clear();
       this.sentChanges.clear();
-      const next = this.queue.shift();
+      this.trimTranscript();
+      const next = this.dequeue();
       if (next !== undefined && !this.closed) void this.runTurn(next);
     }
   }
@@ -469,13 +585,61 @@ export class Chat {
     if (this.current || this.busyJob) throw new Error("Wait for the agent's turn or the current notebook job to finish first.");
     const controller = new AbortController();
     this.busyJob = { controller };
+    this.lastActiveAt = Date.now();
     try {
       return await fn(controller);
     } finally {
       this.busyJob = null;
-      const next = this.queue.shift();
+      const next = this.dequeue();
       if (next !== undefined && !this.closed) void this.runTurn(next);
     }
+  }
+
+  /**
+   * Keep the transcript window the store keeps on disk (the last MAX_MESSAGES).
+   * A message older than the window loses its undo journal here just as it would
+   * after a restart, so what the chat offers matches what was saved. The UI keeps
+   * its own local copy, so dropping old messages here does not jerk the view.
+   * Only between turns: mid-turn the reply and its journal must stay whole.
+   */
+  private trimTranscript(): void {
+    const { kept: next, dropped } = trimMessages(this.messages, MAX_MESSAGES);
+    if (!dropped.length) return;
+    this.messages = next;
+    const kept = new Set(this.messages.map((m) => m.id));
+    for (const id of [...this.journal.keys()]) if (!kept.has(id)) this.journal.delete(id);
+    for (const m of dropped) {
+      this.dirty.delete(m);
+      this.dirtyParts.delete(m.id);
+      this.sent.delete(m.id);
+      this.sentChanges.delete(m.id);
+      this.sentQueued.delete(m.id);
+      this.sentPinned.delete(m.id);
+    }
+    // A card on a dropped message can no longer be pressed here (its handler is gone with it).
+    for (const [id, entry] of [...this.cards]) if (!kept.has(entry.message.id)) this.cards.delete(id);
+  }
+
+  /** One notice when a turn hears nothing from the agent for WATCHDOG_MS. Notice only: never cancels. */
+  private armWatchdog(): void {
+    this.clearWatchdog();
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = null;
+      if (this.watchdogFired || this.closed || !this.current) return;
+      this.watchdogFired = true;
+      // A long-thinking agent is legitimate; the user decides whether to Stop, not the bridge.
+      this.addPart(this.current, {
+        type: "notice",
+        level: "info",
+        text: `The agent has sent nothing for ${WATCHDOG_MS / 60_000} minutes. It may be thinking, or stuck. You can Stop it and send your message again.`,
+      });
+    }, WATCHDOG_MS);
+    this.watchdogTimer.unref?.();
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = null;
   }
 
   private async buildPrompt(input: TurnInput): Promise<string> {
@@ -497,25 +661,43 @@ export class Chat {
           }
         },
         activity: () => this.activityBlock(),
-        attached: async () => (input.cells?.length ? this.attachedBlock(input.cells) : null),
+        attached: async () => (input.cells?.length ? this.attachedBlock(input.cells, this.notebook) : null),
       });
     }
+    const signal = this.turn?.controller.signal;
+    const rules = this.sessionFresh || this.rulesDue;
+    const full = rules || !!this.pendingRecap;
+    // The independent fetches run together; the blocks below keep their order and
+    // meaning. The machine read is raced against 1.5s so a slow kernel never holds
+    // the turn, and it no longer blocks the project, notebook or attached reads.
     let machineTimer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
+    const machineP = Promise.race([
       this.refreshMachine(),
       new Promise<void>((resolve) => { machineTimer = setTimeout(resolve, 1500); }),
     ]).finally(() => { if (machineTimer) clearTimeout(machineTimer); });
-    const rules = this.sessionFresh || this.rulesDue;
-    const project = await this.projectBlock(rules || !!this.pendingRecap);
-    let cells: CellInfo[] | null = null;
-    let file: string | null = null;
-    try {
-      this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
-      cells = (await this.call({ op: "get_cells", summary: true })).cells;
-    } catch {
-      this.notebook = null;
-    }
-    if (this.notebook) file = await notebookPath(this.toolContext(), this.notebook).catch(() => null);
+    const projectP = this.projectBlock(full);
+    // info then the outline; this.notebook is final once this resolves (null if either failed).
+    const cellsP = (async (): Promise<CellInfo[] | null> => {
+      try {
+        this.notebook = (await this.call({ op: "info" })) as NotebookInfo;
+        return (await this.call({ op: "get_cells", summary: true })).cells;
+      } catch {
+        this.notebook = null;
+        return null;
+      }
+    })();
+    // The file path and the attached cells need only the notebook; the code needs
+    // the notebook and the project (turn.project). None waits on the machine read.
+    const fileP = cellsP.then(() => (this.notebook ? notebookPath(this.toolContext(), this.notebook).catch(() => null) : null));
+    const attachedP = cellsP.then(() => (input.cells?.length ? this.attachedBlock(input.cells, this.notebook) : null));
+    const codeP = Promise.all([projectP, cellsP]).then(() => {
+      signal?.throwIfAborted();
+      return this.codeBlock(full);
+    });
+    const [project, cells, code, attached, file] = await Promise.all([projectP, cellsP, codeP, attachedP, fileP]);
+    signal?.throwIfAborted();
+    await machineP;
+    signal?.throwIfAborted();
     const state = cells ? runState(cells).join("\n") : "";
     const runLines = state && (rules || state !== this.lastRunState) ? state.split("\n") : null;
     this.lastRunState = state;
@@ -539,14 +721,13 @@ export class Chat {
     const unchanged = !!cells && !rules && !this.pendingRecap && outline === this.lastOutline;
     this.lastOutline = outline;
     if (project) blocks.push(project);
-    const code = await this.codeBlock(rules || !!this.pendingRecap);
     if (code) blocks.push(code);
     const lit = this.host.project ? litReview(input.text) : null;
     if (lit) blocks.push(lit);
     const activity = this.activityBlock();
     if (activity) blocks.push(activity);
     if (input.context) blocks.push(input.context);
-    if (input.cells?.length) blocks.push(await this.attachedBlock(input.cells));
+    if (attached) blocks.push(attached);
     blocks.push(turnContext(this.notebook, cells, this.settings, this.turnTargets, unchanged, file, runLines, this.machine ? machineLine(this.machine, Date.now()) : null));
     blocks.push(input.text);
     return blocks.join("\n\n");
@@ -591,10 +772,11 @@ export class Chat {
     return this.withBusyJob((controller) => fn(controller.signal));
   }
 
-  /** The cells the user attached, read now with their outputs. */
-  private async attachedBlock(attached: AttachedCell[]): Promise<string> {
+  /** The cells the user attached, read now with their outputs. `info` is passed in (not read from
+   * this.notebook) so the attached read does not race the notebook read when they run in parallel. */
+  private async attachedBlock(attached: AttachedCell[], info: NotebookInfo | null): Promise<string> {
     let found: CellInfo[] | null = null;
-    if (this.notebook) {
+    if (info) {
       try {
         found = (await this.call({ op: "get_cells", cellIds: attached.map((c) => c.cellId), includeOutputs: true })).cells;
       } catch {
@@ -714,7 +896,8 @@ export class Chat {
   private setCodeState(next: ChatCode): void {
     if (!this.code || JSON.stringify(next) === JSON.stringify(this.codeState)) return;
     this.codeState = next;
-    if (!this.closed) this.host.emit("chat.snapshot", this.snapshot());
+    // A metadata change mid-session: send just the field, not the whole transcript again.
+    if (!this.closed) this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, code: next });
   }
 
   /** The user's "put the code on the machine" (the notebook header): now, not waiting for the next message. */
@@ -812,7 +995,9 @@ ${st.place.branch}`);
     }
     this.project = res.project;
     if (res.notice) this.system(res.notice);
-    if (JSON.stringify(before) !== JSON.stringify(res.project) || codeBefore !== this.codeState) this.host.emit("chat.snapshot", this.snapshot());
+    if (JSON.stringify(before) !== JSON.stringify(res.project) || codeBefore !== this.codeState) {
+      this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, project: this.project, ...(codeBefore !== this.codeState ? { code: this.codeState } : {}) });
+    }
   }
 
   /**
@@ -863,7 +1048,7 @@ ${st.place.branch}`);
   private showWorktree(projectId: string, path: string): void {
     if (!this.project || this.project.id !== projectId || this.project.worktree === path) return;
     this.project = { ...this.project, worktree: path };
-    this.host.emit("chat.snapshot", this.snapshot());
+    this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, project: this.project });
   }
 
   runProjectTool(name: string, args: unknown): Promise<ToolResult> {
@@ -915,13 +1100,13 @@ ${st.place.branch}`);
     const ids = snapshot.map((c) => c.id);
     if (this.current || this.busyJob) {
       entry.card.detail = "Wait for the agent's turn or the current notebook job to finish, then try Verify again.";
-      this.touch(entry.message);
+      this.touchCard(entry);
       return;
     }
     entry.card.progress = { done: 0, total: ids.length };
     entry.card.actions = [{ id: "cancel", label: "Stop" }];
     entry.card.detail = "Running from a clean state (%reset -f, not a kernel restart).";
-    this.touch(entry.message);
+    this.touchCard(entry);
     try {
       await this.withBusyJob(async (controller) => {
         const reset = await this.call({ op: "execute", code: "%reset -f", waitMs: 15_000 }, 30_000);
@@ -931,7 +1116,7 @@ ${st.place.branch}`);
         }
         const result = await this.runCellsInOrder(ids, (done) => {
           entry.card.progress = { done, total: ids.length };
-          this.touch(entry.message);
+          this.touchCard(entry);
         }, controller.signal);
         if (result.cancelled) {
           this.closeCard(cardId, "done", "Stopped by the user. Nothing was saved.");
@@ -959,7 +1144,7 @@ ${st.place.branch}`);
         }
         entry.card.actions = [];
         entry.card.detail = "Saving the verified notebook…";
-        this.touch(entry.message);
+        this.touchCard(entry);
         const saved = await saveNotebook(this.projectToolContext(null), { user: { notebookKey: this.notebookKey! } });
         this.closeCard(cardId, "done", `Verified: ${ids.length} cells ran from a clean state. Saved to ${saved.path}.`, "ok");
       });
@@ -985,23 +1170,25 @@ ${st.place.branch}`);
 
   updateSettings(settings: ChatSettings): void {
     this.settings = this.role ? this.role.settings : settings;
-    this.host.emit("chat.snapshot", this.snapshot());
+    this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, settings: this.settings });
   }
 
   async setOption(optionId: string, value: string | boolean): Promise<void> {
     if (this.current) throw new Error("Wait for the turn to finish before changing the agent's settings.");
     await this.ensureStarted();
     await this.agent!.setOption(optionId, value);
-    this.host.emit("chat.snapshot", this.snapshot());
+    this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, options: this.options() });
   }
 
   // ------------------------------------------------------------ agent events
 
   private onUpdate(n: SessionNotification): void {
+    // Any session/update means the agent is alive: restart the silence window (notice only, never cancel).
+    if (this.watchdogTimer && !this.watchdogFired) this.armWatchdog();
     const u = n.update;
     if (u.sessionUpdate === "config_option_update") {
       this.agent?.applyConfigUpdate((u as any).configOptions ?? []);
-      this.host.emit("chat.snapshot", this.snapshot());
+      this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, options: this.options() });
       return;
     }
     if (u.sessionUpdate === "usage_update") {
@@ -1029,7 +1216,7 @@ ${st.place.branch}`);
     }
     if (u.sessionUpdate === "current_mode_update") {
       this.agent?.applyModeUpdate((u as any).currentModeId);
-      this.host.emit("chat.snapshot", this.snapshot());
+      this.host.emit("chat.meta", { chatId: this.id, tabId: this.tabId, options: this.options() });
       return;
     }
     if (!["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"].includes(u.sessionUpdate)) return;
@@ -1047,7 +1234,7 @@ ${st.place.branch}`);
         const last = msg.parts.at(-1);
         if (last && last.type === type) last.text += u.content.text;
         else msg.parts.push({ type, text: u.content.text });
-        this.touch(msg);
+        this.touch(msg, msg.parts.length - 1);
         return;
       }
       case "tool_call": {
@@ -1067,7 +1254,7 @@ ${st.place.branch}`);
           msg.parts.push(part);
           this.claimOrphans(part as Extract<Part, { type: "tool" }>);
         }
-        this.touch(msg);
+        this.touch(msg, msg.parts.indexOf(existing ?? part));
         return;
       }
       case "tool_call_update": {
@@ -1082,7 +1269,7 @@ ${st.place.branch}`);
         if (u.kind) part.kind = u.kind;
         const detail = toolDetail(u.rawInput ?? undefined, u.content ?? undefined, u.rawOutput);
         if (detail) part.detail = detail;
-        this.touch(msg);
+        this.touch(msg, msg.parts.indexOf(part));
         return;
       }
       case "plan": {
@@ -1090,7 +1277,7 @@ ${st.place.branch}`);
         const existing = msg.parts.find((p) => p.type === "plan");
         if (existing && existing.type === "plan") existing.entries = entries;
         else msg.parts.push({ type: "plan", entries });
-        this.touch(msg);
+        this.touch(msg, existing ? msg.parts.indexOf(existing) : msg.parts.length - 1);
         return;
       }
       default:
@@ -1142,7 +1329,7 @@ ${st.place.branch}`);
     const msg = this.current ?? this.lastAgentMessage();
     const part: Part = { type: "prompt", promptId, title, detail, options };
     msg.parts.push(part);
-    this.touch(msg);
+    this.touch(msg, msg.parts.length - 1);
     return new Promise<string>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const onAbort = () => done("cancelled");
@@ -1152,7 +1339,7 @@ ${st.place.branch}`);
         if (timer !== undefined) clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         part.answer = answer;
-        this.touch(msg);
+        this.touch(msg, msg.parts.indexOf(part));
         resolve(answer);
       };
       this.prompts.set(promptId, done);
@@ -1192,8 +1379,14 @@ ${st.place.branch}`);
     entry.card.outcome = outcome;
     entry.card.actions = [];
     if (tone) entry.card.tone = tone;
-    this.touch(entry.message);
+    this.touchCard(entry);
     this.cards.delete(cardId);
+  }
+
+  /** Mark just the card's part of its message dirty (the card object is the part's card). */
+  private touchCard(entry: { card: ChatCard; message: ChatMessage }): void {
+    const i = entry.message.parts.findIndex((p) => p.type === "card" && p.card === entry.card);
+    this.touch(entry.message, i >= 0 ? i : undefined);
   }
 
   cardAction(cardId: string, actionId: string): boolean {
@@ -1222,6 +1415,8 @@ ${st.place.branch}`);
     // Setup terminals are kept per tab, which only the host knows.
     this.host.machineReset?.();
     if (this.code) {
+      // The old machine's clone must not be restored by a busy kernel on the new one.
+      this.code.invalidate();
       this.lastCodeShown = "";
       this.setCodeState({ state: "missing", why: "The notebook's machine was replaced: the code is put there again on the next message, or now from the header." });
     }
@@ -1248,15 +1443,23 @@ ${st.place.branch}`);
       let result = results[0];
       if (result?.status === "timeout") {
         let cell: CellInfo | undefined;
+        // No overall deadline on purpose: a notebook may train for hours; the user ends it with Stop.
         while (!signal.aborted) {
           await new Promise((resolve) => setTimeout(resolve, 2_000));
-          cell = (await this.call({ op: "get_cells", cellIds: [id], includeOutputs: true })).cells[0];
+          // Poll only the run state: outputs (images can be megabytes) are read once, when it finishes.
+          cell = (await this.call({ op: "get_cells", cellIds: [id], summary: true })).cells[0];
           if (!cell?.running) break;
         }
         if (signal.aborted) return { ran, cancelled: true };
         if (!cell) result = { ...result, status: "error" };
-        else if (cell.outputs?.some((output) => output.kind === "error")) result = { ...result, status: "error" };
-        else result = { ...result, status: "ok" };
+        else {
+          const done = (await this.call({ op: "get_cells", cellIds: [id], includeOutputs: true })).cells[0];
+          if (!done) result = { ...result, status: "error" };
+          else if (done.outputs?.some((output) => output.kind === "error")) result = { ...result, status: "error" };
+          // A kernel restart mid-run leaves the cell never run: no execution count, no outputs. Not a pass.
+          else if (!done.running && done.executionCount == null && !done.outputs?.length) result = { ...result, status: "error" };
+          else result = { ...result, status: "ok" };
+        }
       }
       if (!result || result.status !== "ok") {
         const cell = (await this.call({ op: "get_cells", cellIds: [id] }).catch(() => ({ cells: [] }))).cells[0];
@@ -1302,7 +1505,17 @@ ${st.place.branch}`);
         };
         this.host.emit("chat.machine", { chatId: this.id, tabId: this.tabId, machine: this.machine });
         if (!this.machinePoll) {
-          this.machinePoll = setInterval(() => void this.refreshMachine(), MACHINE_POLL_MS);
+          this.machinePoll = setInterval(() => {
+            if (this.closed) return;
+            // A detached notebook has no machine to read; the next tick after it attaches reads again.
+            if (!this.notebook) return;
+            const active = !!this.current || !!this.busyJob || Date.now() - this.lastActiveAt <= MACHINE_IDLE_MS;
+            if (active) this.machineIdleTicks = 0;
+            // Idle: read only every MACHINE_IDLE_EVERY-th tick (~150s) instead of every 30s.
+            else if (++this.machineIdleTicks % MACHINE_IDLE_EVERY !== 0) return;
+            // Active again reads at once; refreshMachine still throttles to MACHINE_MIN_MS.
+            void this.refreshMachine();
+          }, MACHINE_POLL_MS);
           this.machinePoll.unref?.();
         }
       } catch {
@@ -1413,7 +1626,7 @@ ${st.place.branch}`);
     }
     target.notebook = true;
     target.notebookCalls = [...(target.notebookCalls ?? []), name];
-    this.touch(msg);
+    this.touch(msg, msg.parts.indexOf(target));
   }
 
   /** Each tool call's input as JSON, for matching notebook calls to it. */
@@ -1441,7 +1654,7 @@ ${st.place.branch}`);
         this.reviewState(event.review.reviewId);
         const msg = this.current ?? this.lastAgentMessage();
         msg.parts.push({ type: "review", review: event.review, status: "pending" });
-        this.touch(msg);
+        this.touch(msg, msg.parts.length - 1);
         return;
       }
       case "review_closed":
@@ -1454,7 +1667,7 @@ ${st.place.branch}`);
         changes.push(event.change);
         this.journal.set(msg.id, changes);
         msg.changes = { count: changes.length };
-        this.touch(msg);
+        this.touchMeta(msg);
         return;
       }
       case "selection_changed":
@@ -1480,6 +1693,7 @@ ${st.place.branch}`);
 
   private onCellRun(run: CellRun): void {
     if (this.closed) return;
+    this.lastActiveAt = Date.now();
     if (run.by === "user") {
       this.activity.push(run);
       if (this.activity.length > 20) this.activity.shift();
@@ -1601,12 +1815,12 @@ ${st.place.branch}`);
     state.waiters.forEach((w) => w(outcome));
     state.waiters.clear();
     for (const m of this.messages) {
-      for (const p of m.parts) {
+      m.parts.forEach((p, i) => {
         if (p.type === "review" && p.review.reviewId === reviewId && p.status === "pending") {
           p.status = outcome;
-          this.touch(m);
+          this.touch(m, i);
         }
-      }
+      });
     }
     this.pruneReviews();
   }
@@ -1655,11 +1869,14 @@ ${st.place.branch}`);
     const ids = new Map<string, string>();
     let undone = 0;
     const skipped: string[] = [];
+    // Read the notebook once, then keep this local copy in step after each op that
+    // succeeds; only a failed op sends us back to the notebook. The first read is
+    // what catches cells the user edited since the turn (kept and listed below).
+    let cells: CellInfo[] = (await this.call({ op: "get_cells" }).catch(() => ({ cells: [] as CellInfo[] }))).cells;
     for (const c of [...changes].reverse()) {
       const id = ids.get(c.cellId) ?? c.cellId;
       const what = c.kind === "insert" ? `new cell ${id.slice(0, 10)}` : c.kind === "delete" ? `deleted cell ${id.slice(0, 10)}` : `${c.kind === "move" ? "move of" : "change to"} cell ${id.slice(0, 10)}`;
       try {
-        const { cells } = await this.call({ op: "get_cells" });
         const cell = cells.find((x) => x.id === id);
         if (c.kind !== "delete" && !cell) {
           skipped.push(`${what}: the cell no longer exists`);
@@ -1669,16 +1886,32 @@ ${st.place.branch}`);
           skipped.push(`${what}: edited since, so it was kept`);
           continue;
         }
-        if (c.kind === "update") await this.call({ op: "update_cell", cellId: id, source: c.before, review: false, byUser: true });
-        else if (c.kind === "insert") await this.call({ op: "delete_cell", cellId: id, review: false, byUser: true });
-        else if (c.kind === "move") await this.call({ op: "move_cell", cellId: id, index: c.index, byUser: true });
-        else {
-          const res = await this.call({ op: "insert_cell", index: Math.min(c.index, cells.length), cellType: c.cellType, source: c.before, review: false, byUser: true });
-          if (res.cellId) ids.set(c.cellId, res.cellId);
+        if (c.kind === "update") {
+          await this.call({ op: "update_cell", cellId: id, source: c.before, review: false, byUser: true });
+          cell!.source = c.before;
+        } else if (c.kind === "insert") {
+          await this.call({ op: "delete_cell", cellId: id, review: false, byUser: true });
+          cells = cells.filter((x) => x.id !== id);
+        } else if (c.kind === "move") {
+          await this.call({ op: "move_cell", cellId: id, index: c.index, byUser: true });
+          const from = cells.findIndex((x) => x.id === id);
+          if (from >= 0) {
+            const [moved] = cells.splice(from, 1);
+            cells.splice(Math.min(c.index, cells.length), 0, moved!);
+          }
+        } else {
+          const index = Math.min(c.index, cells.length);
+          const res = await this.call({ op: "insert_cell", index, cellType: c.cellType, source: c.before, review: false, byUser: true });
+          if (res.cellId) {
+            ids.set(c.cellId, res.cellId);
+            cells.splice(index, 0, { id: res.cellId, index, type: c.cellType, source: c.before, executionCount: null });
+          }
         }
         undone++;
       } catch (e) {
         skipped.push(`${what}: ${(e as Error).message}`);
+        // After a failure the local copy may be out of step: read the notebook again.
+        cells = (await this.call({ op: "get_cells" }).catch(() => ({ cells }))).cells;
       }
     }
     msg.changes = { count: changes.length, undone: true };
@@ -1761,20 +1994,41 @@ ${st.place.branch}`);
 
   private addPart(msg: ChatMessage, part: Part): void {
     msg.parts.push(part);
-    this.touch(msg);
+    this.touch(msg, msg.parts.length - 1);
   }
 
   /** Tools still marked running when a turn ends never finished. */
   private closeOpenTools(msg: ChatMessage): void {
-    for (const p of msg.parts) {
+    msg.parts.forEach((p, i) => {
       if (p.type === "tool" && (p.status === "pending" || p.status === "in_progress")) {
         p.status = "failed";
-        this.touch(msg);
+        this.touch(msg, i);
       }
-    }
+    });
   }
 
-  private touch(msg: ChatMessage): void {
+  private partSet(msg: ChatMessage): Set<number> {
+    let set = this.dirtyParts.get(msg.id);
+    if (!set) this.dirtyParts.set(msg.id, (set = new Set()));
+    return set;
+  }
+
+  /**
+   * Mark a message for the next flush. With a part index, only that part is
+   * re-serialized; without one, every part is marked (conservative: an unknown
+   * mutation may have touched any of them). Text/thought always travel as appends
+   * and images by reference, so the marking only saves work on tool/review/card parts.
+   */
+  private touch(msg: ChatMessage, index?: number): void {
+    this.dirty.add(msg);
+    const set = this.partSet(msg);
+    if (index === undefined) for (let i = 0; i < msg.parts.length; i++) set.add(i);
+    else set.add(index);
+    if (!this.flushTimer) this.flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
+  }
+
+  /** Only message-level fields moved (changes, the queued mark): no part needs re-serializing. */
+  private touchMeta(msg: ChatMessage): void {
     this.dirty.add(msg);
     if (!this.flushTimer) this.flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
   }
@@ -1785,6 +2039,7 @@ ${st.place.branch}`);
     if (!this.dirty.size) return;
     for (const m of this.dirty) {
       const patch = this.patchFor(m);
+      this.dirtyParts.delete(m.id);
       if (patch) this.host.emit("chat.patch", patch);
     }
     this.dirty.clear();
@@ -1794,6 +2049,7 @@ ${st.place.branch}`);
   /** What changed in `m` since it was last sent: appended text, or whole parts. */
   private patchFor(m: ChatMessage): MessagePatch | null {
     const before = this.sent.get(m.id);
+    const dirty = this.dirtyParts.get(m.id);
     const now: SentPart[] = [];
     const ops: PartOp[] = [];
     m.parts.forEach((part, i) => {
@@ -1811,23 +2067,59 @@ ${st.place.branch}`);
         if (old?.image !== part) ops.push({ i, part });
         return;
       }
+      // A clean part already sent keeps its cached JSON: a long turn no longer
+      // re-serializes every tool/review/card part on each 80ms flush, only the dirty ones.
+      if (old?.type === part.type && old.json !== undefined && !dirty?.has(i)) {
+        now.push(old);
+        return;
+      }
       const json = JSON.stringify(part);
       now.push({ type: part.type, json });
       if (old?.json !== json) ops.push({ i, part });
     });
     const changes = JSON.stringify(m.changes ?? null);
     const known = this.sentChanges.get(m.id);
-    if (before && !ops.length && before.length === m.parts.length && known === changes) return null;
+    const queued = !!m.queued;
+    const knownQueued = this.sentQueued.get(m.id) ?? false;
+    const pinned = !!m.pinned;
+    const knownPinned = this.sentPinned.get(m.id) ?? false;
+    if (before && !ops.length && before.length === m.parts.length && known === changes && knownQueued === queued && knownPinned === pinned) return null;
     this.sent.set(m.id, now);
     this.sentChanges.set(m.id, changes);
-    return { chatId: this.id, tabId: this.tabId, id: m.id, role: m.role, createdAt: m.createdAt, changes: m.changes, length: m.parts.length, ops };
+    this.sentQueued.set(m.id, queued);
+    this.sentPinned.set(m.id, pinned);
+    return {
+      chatId: this.id,
+      tabId: this.tabId,
+      id: m.id,
+      role: m.role,
+      createdAt: m.createdAt,
+      changes: m.changes,
+      ...(queued !== knownQueued ? { queued } : {}),
+      ...(pinned !== knownPinned ? { pinned } : {}),
+      length: m.parts.length,
+      ops,
+    };
   }
 
   private sentChanges = new Map<string, string>();
+  private sentPinned = new Map<string, boolean>();
 
+  /**
+   * True quiet debounce: every change pushes the save PERSIST_MS out, but never
+   * past the ceiling set when this cycle's first change arrived, so a turn that
+   * streams without a pause still saves at least every PERSIST_MAX_MS and a crash
+   * mid-turn does not lose it all. Closing the chat still saves synchronously.
+   * (store.serialize is still synchronous; moving it to worker_threads is a later
+   * stretch, not this batch.)
+   */
   private schedulePersist(): void {
-    if (!this.host.persist || this.persistTimer || this.forgotten) return;
-    this.persistTimer = setTimeout(() => this.persistNow(false), PERSIST_MS);
+    if (!this.host.persist || this.forgotten) return;
+    const now = Date.now();
+    if (!this.persistTimer) this.persistDueAt = now + PERSIST_MAX_MS;
+    const delay = Math.min(PERSIST_MS, Math.max(0, this.persistDueAt - now));
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => this.persistNow(false), delay);
     this.persistTimer.unref?.();
   }
 
@@ -1878,22 +2170,33 @@ export function isNotebookTool(title: string | undefined, meta: unknown): boolea
   return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }
 
+function stringifyDetail(value: unknown): string {
+  if (typeof value === "string") {
+    return capText(value.replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]"), TOOL_DETAIL_MAX);
+  }
+  const text = JSON.stringify(
+    value,
+    (_k, v) => (typeof v === "string" && v.length >= 400 ? v.replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]") : v),
+    2,
+  );
+  return text ? capText(text, TOOL_DETAIL_MAX) : "";
+}
+
 function toolDetail(rawInput?: unknown, content?: ToolCallContent[] | null, rawOutput?: unknown): string | undefined {
   const parts: string[] = [];
   if (rawInput !== undefined && rawInput !== null && !(typeof rawInput === "object" && Object.keys(rawInput as object).length === 0)) {
-    parts.push(typeof rawInput === "string" ? rawInput : JSON.stringify(rawInput, null, 2));
+    parts.push(stringifyDetail(rawInput));
   }
   for (const c of content ?? []) {
-    if (c.type === "content" && c.content.type === "text") parts.push(c.content.text);
+    if (c.type === "content" && c.content.type === "text") parts.push(stringifyDetail(c.content.text));
     else if (c.type === "diff") parts.push(`diff ${c.path}`);
     else if (c.type === "terminal") parts.push(`terminal ${c.terminalId}`);
   }
   if (!content?.length && rawOutput !== undefined && rawOutput !== null) {
-    parts.push(typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput, null, 2));
+    parts.push(stringifyDetail(rawOutput));
   }
   if (!parts.length) return undefined;
-  // Image results echo back as long base64 strings; they mean nothing as text.
-  return capText(parts.join("\n\n").replace(/[A-Za-z0-9+/]{400,}={0,2}/g, "[image data]"), TOOL_DETAIL_MAX);
+  return capText(parts.join("\n\n"), TOOL_DETAIL_MAX);
 }
 
 /** A tool's result with the GitHub token hidden (it is on the notebook's machine for git). */

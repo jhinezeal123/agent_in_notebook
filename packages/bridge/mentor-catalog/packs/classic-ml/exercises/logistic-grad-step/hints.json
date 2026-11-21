@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_extreme_logits_stability",
+    "text": "Khi `z = 1000`, `np.exp(z)` tràn thành `inf`; còn khi `z = -1000`, `np.exp(-z)` tràn thành `inf`. Hàm nào của NumPy tính $\\log(1 + e^z)$ an toàn cho cả hai phía?"
+  },
+  {
+    "level": 0,
+    "test": "test_l2_not_on_bias",
+    "text": "Số hạng phạt $\\frac{\\lambda}{2}\\|w\\|_2^2$ có chứa $b$ không? Đạo hàm của nó theo $w$ và theo $b$ là gì?"
+  },
+  {
+    "level": 1,
+    "text": "Dùng np.logaddexp(0.0, z) - y * z cho mất mát BCE; tách hai nhánh z >= 0 và z < 0 cho sigmoid để tránh overflow; chia (p - y) cho N rồi cộng lam * w vào dw (không cộng vào db)."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở ổn định số và gradient",
+    "text": "z = X @ w + b\nbce = logaddexp(0, z) - y * z\nloss = mean(bce) + 0.5 * lam * ||w||^2\np = sigmoid ổn định (2 nhánh theo dấu z)\nerr = (p - y) / N -> dw = X^T @ err + lam * w; db = sum(err)"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở sigmoid hai nhánh",
+    "text": "```python\npos = z >= 0\np = np.empty_like(z, dtype=float)\np[pos] = 1.0 / (1.0 + np.exp(-z[pos]))\nez = np.exp(z[~pos])\np[~pos] = ez / (1.0 + ez)\n```"
+  }
+]

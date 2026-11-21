@@ -1,0 +1,21 @@
+{
+  "id": "trace-mystery-attention",
+  "title": "Đọc hiểu code: tự chú ý nhân quả (causal self-attention)",
+  "star": "trace-attention",
+  "skills": [
+    "tensor",
+    "theory"
+  ],
+  "difficulty": 1550,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "trace_shapes",
+    "predict_causal_weights"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

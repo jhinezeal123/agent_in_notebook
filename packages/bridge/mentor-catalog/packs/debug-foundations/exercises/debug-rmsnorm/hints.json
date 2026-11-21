@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_constant_token",
+    "text": "Với một token hằng số khác 0, điều gì trong code đang biến x thành toàn số 0 trước khi chia?"
+  },
+  {
+    "level": 0,
+    "test": "test_values",
+    "text": "RMSNorm có thực hiện bước trừ trung bình như LayerNorm không?"
+  },
+  {
+    "level": 1,
+    "text": "Bỏ bước trừ trung bình theo trục cuối; tính trung bình bình phương trực tiếp trên x gốc."
+  },
+  {
+    "level": 2,
+    "when": "thừa bước trừ mean",
+    "text": "ms = mean(x^2 theo trục cuối, giữ chiều)\ny = gamma * x / căn(ms + eps)"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở công thức",
+    "text": "```python\nms = (x * x).mean(axis=-1, keepdims=True)\nreturn np.asarray(gamma, dtype=float) * x / np.sqrt(ms + eps)\n```"
+  }
+]

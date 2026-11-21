@@ -36,7 +36,7 @@ import { asCellInfo, editCells, EditError, fromCellInfo, NotebookFormatError, pa
 import { KernelBusy, Unreachable, VmError, helperCall, type KernelExec } from "./kernel.js";
 import { applyCells, describeApplied, editorName, kernelExec, machineExec, notebookPath, places, reachable, reviewLine, syncIn, syncOut, type NotebookMirror } from "./nbfile.js";
 import { SCROLLBACK, SESSION_NAME, type Report, type ShellSession, type ShellSessions, type ShellStart } from "./shell.js";
-import { FileTooBig, glob, grep, readFile, readLines, resolvePath, writeFile, type Stat } from "./vmfs.js";
+import { FileTooBig, glob, grep, readFile, readLines, resolvePath, writeFile, WRITE_CHUNK_KERNEL, WRITE_CHUNK_TERMINAL, type Stat } from "./vmfs.js";
 
 export type ReviewOutcome = "accepted" | "rejected" | "pending" | "discarded";
 
@@ -84,7 +84,7 @@ class Attachments {
   readonly images: OutputImage[] = [];
   private bytes = 0;
 
-  constructor(private readonly enabled: boolean) {}
+  constructor(readonly enabled: boolean) {}
 
   readonly attach = (image: OutputImage): string | null => {
     if (!this.enabled) return null;
@@ -156,8 +156,33 @@ const IMAGE_FILES: Record<string, OutputImage["mime"]> = { png: "image/png", jpg
 
 const SHORTENED_HINT = "(output shortened: read_output with this cell id pages through or searches all of it)";
 
+/**
+ * The image budget for a read or run whose result the agent sees: the same
+ * limits Attachments keeps, applied in the page so images past them never
+ * cross the wire. An agent that cannot read images gets none at all.
+ */
+function imageArgs(ctx: ToolContext): { maxImages: number; maxImageBytes?: number } {
+  return ctx.images ? { maxImages: IMAGES_MAX, maxImageBytes: IMAGES_BYTES_MAX } : { maxImages: 0 };
+}
+
+/**
+ * Raster images the page's budget kept out of a result: the agent is told an
+ * image is there and how to see it, like Attachments' overflow label. Only for
+ * agents that read images — the others cannot see it even on its own.
+ */
+function hintHiddenImages(outputs: CellOutput[]): CellOutput[] {
+  return outputs.map((o) => {
+    const hidden: string[] = (o.mimes ?? []).filter((m) => m === "image/png" || m === "image/jpeg");
+    if (o.image || !hidden.length) return o;
+    const mimes = (o.mimes ?? []).filter((m) => !hidden.includes(m));
+    const hints = hidden.map((m) => `[${m} output not attached: read this cell on its own to see it]`);
+    return { ...o, text: [o.text, ...hints].filter(Boolean).join("\n"), mimes: mimes.length ? mimes : undefined };
+  });
+}
+
 function renderOutputs(c: { outputs?: CellOutput[] }, max: number, att?: Attachments): string {
-  const out = c.outputs?.length ? outputsToText(c.outputs, max, att?.attach) : "";
+  const outputs = att?.enabled && c.outputs ? hintHiddenImages(c.outputs) : c.outputs;
+  const out = outputs?.length ? outputsToText(outputs, max, att?.attach) : "";
   return wasShortened(out) ? `${out}\n${SHORTENED_HINT}` : out;
 }
 
@@ -373,7 +398,7 @@ export const TOOLS = [
       const info = await ctx.call({ op: "info" });
       const path = await resolve(ctx, info, a.file_path);
       if (path === (await notebookPath(ctx, info))) {
-        const { cells } = await ctx.call({ op: "get_cells", includeOutputs: true });
+        const { cells } = await ctx.call({ op: "get_cells", includeOutputs: true, ...imageArgs(ctx) });
         const head = `${path}: the notebook open in ${editorName(info)}, ${cells.length} cell${cells.length === 1 ? "" : "s"}, shown as cells.`;
         return readCells(ctx, head, cells, a.offset, a.limit);
       }
@@ -419,7 +444,7 @@ export const TOOLS = [
       }
       const exec = machine(ctx, info);
       await confirmFileChange(ctx, `Write ${path} on the notebook's machine`, capLines(a.content, 3000, 0.7));
-      const r = await writeFile(exec, path, Buffer.from(a.content, "utf8"));
+      const r = await writeFile(exec, path, Buffer.from(a.content, "utf8"), "any", { writeChunk: info.serverTerminals ? WRITE_CHUNK_TERMINAL : WRITE_CHUNK_KERNEL });
       return { text: "conflict" in r ? `${path} could not be written.` : `Wrote ${path} (${r.stat.size} bytes).`, isError: "conflict" in r || undefined };
     },
   }),
@@ -673,14 +698,15 @@ export const TOOLS = [
     async run(ctx, a) {
       check(ctx, "read", null);
       const deadline = Date.now() + Math.min((a.timeout_seconds ?? Infinity) * 1000, ctx.waitMs);
-      // Poll the running state only; outputs (images included) are fetched once at the end.
+      // Poll the running state only (a summary: no source, no outputs); outputs
+      // (images included) are fetched once at the end.
       for (;;) {
-        const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids });
+        const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, summary: true });
         if (!cells.some((c) => c.running) || Date.now() >= deadline) break;
         await new Promise((r) => setTimeout(r, 1000));
       }
-      const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true });
-      showOutputImages(ctx, cells.flatMap((cell) => cell.outputs ?? []));
+      const { cells } = await ctx.call({ op: "get_cells", cellIds: a.cell_ids, includeOutputs: true, ...imageArgs(ctx) });
+      await showOutputImages(ctx, cells.map((c) => ({ cellId: c.id, outputs: c.outputs })));
       const att = new Attachments(ctx.images);
       return att.result(joinWithinBudget(cells, (c) => renderCell(c, true, att), "\n\n", att, READ_BUDGET, (rest) => `… ${rest.length} more cells not shown; wait for them separately.`));
     },
@@ -701,7 +727,8 @@ export const TOOLS = [
       let outputs = ctx.runs.get(a.cell_id);
       if (!outputs) {
         if (/^run-\d+$/.test(a.cell_id)) throw new Denied(`The output of ${a.cell_id} is no longer kept (only the latest runs are). Run it again.`);
-        const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true })).cells[0];
+        // Text only: no image rides along with a page of output.
+        const cell = (await ctx.call({ op: "get_cells", cellIds: [a.cell_id], includeOutputs: true, maxImages: 0 })).cells[0];
         if (!cell) throw new Denied(`No cell with id "${a.cell_id}". Read the notebook file to see the current ids.`);
         outputs = cell.outputs ?? [];
       }
@@ -726,6 +753,8 @@ export const TOOLS = [
       const waitMs = waitWindow(ctx, a.wait_seconds);
       const started = Date.now();
       const res = await ctx.exclusive("run", () => ctx.call({ op: "execute", code: a.code, waitMs }, waitMs + 30_000));
+      // Seed the delta state, so the first wait_for_code asks only for what is new.
+      if (res.status === "running" && res.execId) keepDelta(res.execId, res.outputs, res.gen ?? 0);
       return codeResult(ctx, res, Date.now() - started);
     },
   }),
@@ -737,7 +766,24 @@ export const TOOLS = [
       check(ctx, "read", null);
       const waitMs = waitWindow(ctx, a.wait_seconds);
       const started = Date.now();
-      const res = await ctx.exclusive("run", () => ctx.call({ op: "execute_wait", execId: a.run_id, waitMs }, waitMs + 30_000));
+      const state = execDeltas.get(a.run_id);
+      const since = state ? { gen: state.gen, n: state.n, chars: state.chars } : undefined;
+      let res: ExecResult;
+      try {
+        res = await ctx.exclusive("run", () => ctx.call({ op: "execute_wait", execId: a.run_id, waitMs, since }, waitMs + 30_000));
+      } catch (e) {
+        // The page no longer knows this execution (it reloaded, say): forget its state.
+        execDeltas.delete(a.run_id);
+        throw e;
+      }
+      if (res.status === "running") {
+        // A delta extends what is held; a full answer (generation moved on, or
+        // nothing held yet) replaces it. The result the agent sees is always full.
+        const { outputs, gen } = waitOutputs(state, res);
+        keepDelta(a.run_id, outputs, gen);
+        return codeResult(ctx, { ...res, outputs }, Date.now() - started);
+      }
+      execDeltas.delete(a.run_id);
       return codeResult(ctx, res, Date.now() - started);
     },
   }),
@@ -823,7 +869,8 @@ async function finishWrite(exec: KernelExec, path: string, text: string, expect:
  */
 async function changeNotebook(ctx: ToolContext, path: string, edit: (cells: NbCell[]) => NbCell[]): Promise<ToolResult> {
   const applied = await ctx.exclusive("edit", async () => {
-    const before = fromCellInfo((await ctx.call({ op: "get_cells" })).cells);
+    const { cells: editor } = await ctx.call({ op: "get_cells" });
+    const before = fromCellInfo(editor);
     let after: NbCell[];
     try {
       after = edit(before);
@@ -837,7 +884,8 @@ async function changeNotebook(ctx: ToolContext, path: string, edit: (cells: NbCe
       const payloads = c.id ? old.get(c.id) : undefined;
       return payloads?.length ? { ...c, source: restoreDataUris(c.source, payloads) } : c;
     });
-    return applyCells(ctx, before, after, { concurrent: false });
+    // The read above is the one applyCells works from; it does not read again.
+    return applyCells(ctx, before, after, { concurrent: false, editor });
   });
   const report = await describeApplied(ctx, applied, true);
   const notes = await syncOutNotes(ctx);
@@ -1024,15 +1072,74 @@ function shellResult(ctx: ToolContext, sh: ShellSession, r: Report): ToolResult 
   return { text: parts.join("\n"), isError: failed || undefined };
 }
 
-function showOutputImages(ctx: ToolContext, outputs: CellOutput[]): void {
+/**
+ * What the bridge holds of a running execution, per exec id, so wait_for_code
+ * can send `since` and receive only what is new. Bounded; a final result, or
+ * an execution the page no longer knows, clears the entry. A generation the
+ * page no longer matches (a clear, a stream cut mid-way) arrives as a full
+ * answer and replaces the held copy.
+ */
+interface ExecDelta {
+  gen: number;
+  n: number;
+  chars: number;
+  outputs: CellOutput[];
+}
+const execDeltas = new Map<string, ExecDelta>();
+const EXEC_DELTAS_MAX = 16;
+
+function deltaOf(outputs: CellOutput[], gen: number): ExecDelta {
+  const last = outputs.at(-1);
+  return { gen, n: outputs.length, chars: last?.kind === "stream" ? (last.text ?? "").length : 0, outputs };
+}
+
+function keepDelta(execId: string, outputs: CellOutput[], gen: number): void {
+  execDeltas.delete(execId);
+  execDeltas.set(execId, deltaOf(outputs, gen));
+  while (execDeltas.size > EXEC_DELTAS_MAX) execDeltas.delete(execDeltas.keys().next().value!);
+}
+
+/** The full outputs of a wait: a delta extends the held copy, a full answer replaces it. */
+function waitOutputs(state: ExecDelta | undefined, res: ExecResult): { outputs: CellOutput[]; gen: number } {
+  const gen = res.gen ?? state?.gen ?? 0;
+  if (!state || !res.delta) return { outputs: res.outputs, gen };
+  const { n, tail, rest } = res.delta;
+  const last = state.outputs[n - 1];
+  // The tail extends the stream held at n-1; without a stream there, rest
+  // replaces the output at n-1 whole. New arrays keep earlier results intact.
+  const outputs =
+    last?.kind === "stream"
+      ? [...state.outputs.slice(0, n - 1), { ...last, text: (last.text ?? "") + tail }, ...rest]
+      : [...state.outputs.slice(0, Math.max(0, n - 1)), ...rest];
+  return { outputs, gen };
+}
+
+/**
+ * Preview raster outputs in the chat. Images the page's budget kept out are
+ * fetched one by one (get_output_image) only while the chat's own preview cap
+ * has room — the preview is for the user, who sees images even when the agent
+ * cannot; it stops at the first image that does not fit.
+ */
+async function showOutputImages(ctx: ToolContext, sources: { cellId?: string; outputs?: CellOutput[] }[]): Promise<void> {
   if (!ctx.showOutputImage) return;
   const preview = new Attachments(true);
-  for (const { image } of outputs) if (image) preview.attach(image);
+  outer: for (const { cellId, outputs } of sources) {
+    for (const [i, o] of (outputs ?? []).entries()) {
+      if (o.image) {
+        preview.attach(o.image);
+        continue;
+      }
+      const mime = o.mimes?.find((m) => m === "image/png" || m === "image/jpeg");
+      if (!mime || !cellId || preview.images.length >= IMAGES_MAX) continue;
+      const r = await ctx.call({ op: "get_output_image", cellId, outputIndex: i });
+      if (r?.image && !preview.attach(r.image)) break outer;
+    }
+  }
   for (const image of preview.images) ctx.showOutputImage(image);
 }
 
-function codeResult(ctx: ToolContext, res: ExecResult, ms: number): ToolResult {
-  showOutputImages(ctx, res.outputs);
+async function codeResult(ctx: ToolContext, res: ExecResult, ms: number): Promise<ToolResult> {
+  await showOutputImages(ctx, [{ outputs: res.outputs }]);
   const att = new Attachments(ctx.images);
   let head: string;
   if (res.status === "running") {
@@ -1049,10 +1156,10 @@ function codeResult(ctx: ToolContext, res: ExecResult, ms: number): ToolResult {
 async function runAndReport(ctx: ToolContext, ids: string[], timeoutSeconds?: number): Promise<ToolResult> {
   const timeoutMs = Math.min((timeoutSeconds ?? Infinity) * 1000, ctx.waitMs);
   // One run at a time: the kernel runs cells one after another anyway, and Jupyter runs "the active cell".
-  const { results } = await ctx.exclusive("run", () => ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true }, timeoutMs + 15_000));
+  const { results } = await ctx.exclusive("run", () => ctx.call({ op: "run_cells", cellIds: ids, timeoutMs, stopOnError: true, ...imageArgs(ctx) }, timeoutMs + 15_000));
   const att = new Attachments(ctx.images);
   const text = renderRuns(results, att);
-  showOutputImages(ctx, results.flatMap((result) => result.outputs));
+  await showOutputImages(ctx, results.map((r) => ({ cellId: r.cellId, outputs: r.outputs })));
   const stillRunning = results.some((r) => r.status === "timeout");
   return att.result(
     stillRunning ? `${text}\n\nSome cells are still running. Call wait_for_cells to keep waiting.` : text,
@@ -1078,11 +1185,18 @@ export interface McpToolListing {
   inputSchema: Record<string, unknown>;
 }
 
+const toolListingCache = new WeakMap<ToolDef<z.ZodType, any>, McpToolListing>();
+
 export function listTools(tools: readonly ToolDef<z.ZodType, any>[] = TOOLS): McpToolListing[] {
   return tools.map((t) => {
-    const schema = z.toJSONSchema(t.schema as z.ZodType, { target: "draft-7" }) as Record<string, unknown>;
-    delete schema.$schema;
-    return { name: t.name, description: t.description, inputSchema: schema };
+    let cached = toolListingCache.get(t);
+    if (!cached) {
+      const schema = z.toJSONSchema(t.schema as z.ZodType, { target: "draft-7" }) as Record<string, unknown>;
+      delete schema.$schema;
+      cached = { name: t.name, description: t.description, inputSchema: schema };
+      toolListingCache.set(t, cached);
+    }
+    return cached;
   });
 }
 

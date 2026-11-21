@@ -121,6 +121,7 @@ Quy tắc:
   "uses": ["id-bai-truoc"],          // code đạt của người học ở bài đó chạy trước bài này
   "variantOf": "id-bai-goc",         // biến thể: đổi một chi tiết của bài gốc
   "predict": "Câu người học dự đoán trước khi code",   // bắt buộc với biến thể
+  "scaffoldFixed": true,             // true: luôn giữ nguyên starter.py kể cả khi rating cao (dùng cho bài Tìm lỗi)
   "judgeSeconds": 60                 // thời gian tối đa một lần chấm (10–900)
 }
 ```
@@ -138,8 +139,9 @@ Mọi dạng dùng chung một định dạng; khác nhau ở cách soạn.
 | **Cài công thức** | Viết hàm từ công thức | Dạng mặc định. Đề có công thức và shape; test so với `ref` trên dữ liệu ngẫu nhiên. |
 | **Phản xạ tensor** | Viết phép biến đổi shape/index không dùng vòng lặp | Hàm nhỏ, 5–10 dòng. Test có ca shape lạ (batch 1, chiều thừa) và test cấm vòng lặp nếu đó là mục đích. |
 | **Đoán shape** | Trả về shape của từng dòng trước khi chạy | `functions` là hàm trả tuple/list shape (`def shapes(): return [(2, 3), ...]`); đề in đoạn code cần đoán; test so từng phần tử, thông báo nói dòng nào sai. |
+| **Đọc hiểu / Trace code** | Đọc đoạn code ẩn danh có seed cố định, đoán giá trị/shape/bất biến tại các mốc | `given.py` chứa đoạn code cần đọc (hoặc đặt trong `brief.md`); người học viết `trace()` trả dict/tuple giá trị hoặc shape dự đoán không chạy lại đoạn gốc (hoặc viết lại hàm tương đương). `role: "component"`, `judge: "source"`. |
 | **Backward bằng tay** | Viết gradient | Test dùng `t.grad_close` hoặc sai phân hữu hạn. |
-| **Tìm lỗi** | Sửa code có lỗi cài sẵn | `starter.py` là code chạy được nhưng sai (1–2 lỗi thật); đề tả triệu chứng, không chỉ chỗ; `reference.py` là bản đã sửa. Xem `exercises/mlp-train-debug/`. |
+| **Tìm lỗi** | Sửa code có lỗi cài sẵn | `starter.py` là code chạy được nhưng sai (1–2 lỗi thật) và đặt `"scaffoldFixed": true` trong `meta.json` để người học rating cao không bị xóa khung code lỗi; đề tả triệu chứng, không chỉ chỗ; `reference.py` là bản đã sửa. Xem `exercises/mlp-train-debug/`. |
 | **Biến thể** | Đổi một chi tiết của bài đã làm, dự đoán trước | `variantOf` + `predict`; không cần `lab.py`; cùng sao với bài gốc. Xem `exercises/rmsnorm/`. |
 | **Dựng dần** | Bài sau dùng code bài trước | `uses`; lời giải chuẩn của bài trước chạy trước lời giải chuẩn bài này. |
 

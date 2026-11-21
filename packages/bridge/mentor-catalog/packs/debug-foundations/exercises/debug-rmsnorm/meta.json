@@ -1,0 +1,21 @@
+{
+  "id": "debug-rmsnorm",
+  "title": "Tìm lỗi: RMSNorm triệt tiêu thành phần hằng số",
+  "star": "debug-softmax-norm",
+  "skills": [
+    "train",
+    "formula"
+  ],
+  "difficulty": 1500,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 3,
+  "functions": [
+    "rms_norm"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "scaffoldFixed": true
+}

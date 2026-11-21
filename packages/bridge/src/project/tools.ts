@@ -329,13 +329,18 @@ export const PROJECT_TOOLS: ToolDef<z.ZodType, ProjectToolContext>[] = [
       if (IMAGE_MIME[ext] && ctx.images && size <= 3_000_000) {
         return { text: `artifacts/${rel}: image, ${sizeText(size)}, attached.`, images: [{ mime: IMAGE_MIME[ext]!, data: (await readFile(file)).toString("base64") }] };
       }
-      if (size > 512_000) {
-        const head = (await readFile(file)).subarray(0, 512_000);
-        if (head.includes(0)) return { text: `artifacts/${rel} is a binary file (${sizeText(size)}). to_vm copies it to the notebook's machine.` };
-        return { text: `artifacts/${rel} is ${sizeText(size)}; the first 500 KB:\n${numbered(head.toString("utf8"), a.offset, a.limit)}` };
+      // Read only the preview's worth: an artifact can be a checkpoint of hundreds of MB.
+      const handle = await open(file, "r");
+      let data: Buffer;
+      try {
+        const buffer = Buffer.alloc(512_000);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        data = buffer.subarray(0, bytesRead);
+      } finally {
+        await handle.close();
       }
-      const data = await readFile(file);
       if (data.includes(0)) return { text: `artifacts/${rel} is a binary file (${sizeText(size)}). to_vm copies it to the notebook's machine.` };
+      if (size > 512_000) return { text: `artifacts/${rel} is ${sizeText(size)}; the first 500 KB:\n${numbered(data.toString("utf8"), a.offset, a.limit)}` };
       return { text: numbered(data.toString("utf8"), a.offset, a.limit) || `artifacts/${rel} is empty.` };
     },
   }),
@@ -437,13 +442,92 @@ export const PROJECT_TOOLS: ToolDef<z.ZodType, ProjectToolContext>[] = [
       offset: z.number().int().min(0).optional(),
     }),
     async run(ctx: ProjectToolContext, a) {
-      const out = await orxCli(ctx, ["paper", ...(a.full ? ["--full"] : []), "--", a.id], 120_000);
+      const out = await paperText(ctx, a.id, !!a.full);
       const start = Math.min(a.offset ?? 0, out.length);
       if (start >= out.length && out.length) return { text: `The paper's text has ${out.length} characters; offset ${a.offset} is past the end.` };
       const end = Math.min(out.length, start + PAPER_PAGE);
       const page = out.slice(start, end);
       const more = end < out.length ? `\n\n(characters ${start}-${end} of ${out.length}; continue with offset=${end})` : "";
       return { text: (page.trim() ? page : "orx paper printed nothing for this id.") + more };
+    },
+  }),
+  tool({
+    name: "experiment_list",
+    description: "List the OpenResearch experiments and their latest runs for this notebook's project (read-only).",
+    schema: z.object({
+      include_archived: z.boolean().optional().describe("Include archived experiments (default false)."),
+      limit: z.number().int().min(1).max(100).optional().describe("Maximum experiments to list (default 25)."),
+    }),
+    async run(ctx: ProjectToolContext, a) {
+      const project = await ctx.project();
+      const id = encodeURIComponent(project.id);
+      type ExpRun = { id: string; experimentId: string; status: string; backend?: unknown; resultMarkdown?: string | null; createdAt?: number; startedAt?: number | null; endedAt?: number | null };
+      const [expRes, runRes] = await Promise.all([
+        ctx.research.api<{ experiments?: { id: string; title?: string; slug?: string; description?: string; archived?: boolean; updatedAt?: number }[] }>("GET", `/api/projects/${id}/experiments`, { wait: true }),
+        ctx.research.api<{ runs?: ExpRun[] }>("GET", `/api/projects/${id}/runs`, { wait: true }).catch(() => ({ runs: [] as ExpRun[] })),
+      ]);
+      const runsByExp = new Map<string, ExpRun[]>();
+      for (const r of runRes.runs ?? []) {
+        const list = runsByExp.get(r.experimentId) ?? [];
+        list.push(r);
+        runsByExp.set(r.experimentId, list);
+      }
+      const exps = (expRes.experiments ?? [])
+        .filter((e) => a.include_archived || !e.archived)
+        .sort((x, y) => (y.updatedAt ?? 0) - (x.updatedAt ?? 0))
+        .slice(0, a.limit ?? 25);
+      if (!exps.length) return { text: `No experiments found in project "${project.name}".` };
+      const lines = exps.map((e) => {
+        const runs = (runsByExp.get(e.id) ?? []).sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0));
+        const latest = runs[0];
+        const summary = latest
+          ? `latest run ${latest.id}: ${latest.status}${latest.resultMarkdown ? ` — ${latest.resultMarkdown.split("\n")[0]?.trim().slice(0, 120)}` : ""}`
+          : "no runs";
+        const desc = e.description ? `\n  ${capText(e.description.replace(/\s+/g, " ").trim(), 160)}` : "";
+        return `- ${e.title || e.slug || e.id} [${e.id}] (${runs.length} run${runs.length === 1 ? "" : "s"}, ${summary})${desc}`;
+      });
+      return { text: `Experiments in ${project.name} (${exps.length}):\n${lines.join("\n")}` };
+    },
+  }),
+  tool({
+    name: "run_read",
+    description: "Read a run's status, result summary, Trackio metrics and tail of its log from this project (read-only).",
+    schema: z.object({
+      run_id: z.string().min(1).describe("The OpenResearch run id (from experiment_list or project context)."),
+      log_bytes: z.number().int().min(0).max(40_000).optional().describe("Tail of the run log to include in bytes (default 8000, 0 to omit)."),
+    }),
+    async run(ctx: ProjectToolContext, a) {
+      const project = await ctx.project();
+      const id = encodeURIComponent(project.id);
+      const runId = encodeURIComponent(a.run_id);
+      const { runs = [] } = await ctx.research.api<{ runs?: { id: string; experimentId: string; status: string; backend?: unknown; commitSha?: string | null; resultMarkdown?: string | null; exitCode?: number | null; startedAt?: number | null; endedAt?: number | null; createdAt?: number }[] }>("GET", `/api/projects/${id}/runs`, { wait: true });
+      const run = runs.find((r) => r.id === a.run_id);
+      if (!run) return { text: `Run "${a.run_id}" was not found in project "${project.name}".`, isError: true };
+      const logBytes = a.log_bytes ?? 8000;
+      const [metrics, log] = await Promise.all([
+        ctx.research.api<{ metrics?: { name: string; points?: { step: number; value: number }[] }[] }>("GET", `/api/trackio/projects/${id}/runs/${runId}/metrics`, { wait: true }).then((r) => r.metrics ?? [], () => []),
+        logBytes > 0
+          ? ctx.research.api<{ content?: string; text?: string; totalSize?: number }>("GET", `/api/runs/${runId}/log?start=0&end=${logBytes}`, { wait: true }).then((r) => r.content ?? r.text ?? "", () => "")
+          : Promise.resolve(""),
+      ]);
+      const head = [
+        `Run ${run.id} (experiment ${run.experimentId}) — status: ${run.status}${run.exitCode != null ? `, exit code ${run.exitCode}` : ""}`,
+        run.commitSha ? `Commit: ${run.commitSha}` : "",
+        run.startedAt && run.endedAt ? `Duration: ${Math.max(0, Math.round((run.endedAt - run.startedAt) / 1000))}s` : "",
+      ].filter(Boolean);
+      const sections: string[] = [head.join("\n")];
+      if (run.resultMarkdown?.trim()) sections.push(`## Result\n${capText(run.resultMarkdown.trim(), 4000)}`);
+      if (metrics.length) {
+        const rows = metrics.slice(0, 20).map((m) => {
+          const pts = m.points ?? [];
+          const first = pts[0];
+          const last = pts.at(-1);
+          return last ? `- ${m.name}: ${last.value} (step ${last.step}${first && pts.length > 1 ? `, started at ${first.value}, ${pts.length} points` : ""})` : `- ${m.name}: (no points)`;
+        });
+        sections.push(`## Metrics\n${rows.join("\n")}`);
+      }
+      if (log.trim()) sections.push(`## Log\n${capLines(log.trim(), 6000, 0.2)}`);
+      return { text: sections.join("\n\n") };
     },
   }),
 ];
@@ -482,6 +566,32 @@ async function orxCli(ctx: ProjectToolContext, args: string[], timeoutMs: number
   } catch (e) {
     throw new Denied((e as Error).message);
   }
+}
+
+/** Papers already fetched: paging through one paper must not run the CLI (a download) again per page. */
+const PAPER_TTL_MS = 10 * 60_000;
+const PAPER_CACHE_MAX = 8;
+const PAPER_ENTRY_MAX = 2 * 1024 * 1024;
+const papers = new Map<string, { text: string; at: number }>();
+
+/** The whole text `orx paper` prints for an id, from cache when a recent read has it. */
+async function paperText(ctx: ProjectToolContext, id: string, full: boolean): Promise<string> {
+  const key = `${full ? "full" : "abstract"}:${id}`;
+  const hit = papers.get(key);
+  if (hit) {
+    papers.delete(key);
+    if (Date.now() - hit.at < PAPER_TTL_MS) {
+      papers.set(key, hit); // touched last: the LRU keeps what is being read
+      return hit.text;
+    }
+  }
+  const out = await orxCli(ctx, ["paper", ...(full ? ["--full"] : []), "--", id], 120_000);
+  // Only successful reads are cached; a failure goes to the agent as is, and is asked again next time.
+  if (Buffer.byteLength(out) <= PAPER_ENTRY_MAX) {
+    papers.set(key, { text: out, at: Date.now() });
+    while (papers.size > PAPER_CACHE_MAX) papers.delete(papers.keys().next().value!);
+  }
+  return out;
 }
 
 export type { ToolResult };

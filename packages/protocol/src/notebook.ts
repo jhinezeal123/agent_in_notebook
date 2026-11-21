@@ -11,6 +11,13 @@ export interface CellRunState {
   executionCount: number | null;
   /** The editor's own timing of the cell's last finished run, when it keeps one (VS Code). */
   lastDurationMs?: number;
+  /**
+   * Evidence of a new run that does not depend on the execution count: the
+   * adapter sets it (a generation string) each time it witnesses a new run of
+   * the cell, so a fast run reusing the old count after a kernel restart is
+   * still seen. Absent when the adapter cannot witness runs (Colab, VS Code).
+   */
+  runToken?: string;
 }
 
 /** One finished run of a code cell, as the page saw it: the user's runs and the agent's. */
@@ -63,9 +70,11 @@ export interface CellInfo {
   outputs?: CellOutput[];
   /** Present only when `outputsHash` was requested: changes whenever the cell's outputs change. */
   outputsHash?: string;
+  /** Present only when `sourceHash` was requested: a fingerprint of the full source, which is then cut to "" (with `lineCount`). */
+  sourceHash?: string;
   /** True while a review of this cell is pending. */
   pendingReview?: boolean;
-  /** Set by a `summary` read: `source` then holds only the first line. */
+  /** Set by a `summary` or `sourceHash` read: `source` then holds only the first line (summary) or nothing (sourceHash). */
   lineCount?: number;
   /** The source changed since the page last saw this cell finish a run. Unknown (absent) for runs before the page loaded. */
   stale?: boolean;
@@ -101,6 +110,19 @@ export interface ExecResult {
   message?: string;
   /** Set while running. */
   execId?: string;
+  /**
+   * Generation of the output list: grows when the outputs stop being
+   * append-only (a clear, or a stream cut mid-way). A waiting client sends it
+   * back as `since.gen` to receive only what is new; a mismatch means full.
+   */
+  gen?: number;
+  /**
+   * Set while running when `execute_wait` was given a matching `since`: the
+   * client appends `tail` to the stream it holds `chars` characters of (output
+   * `n-1`), then pushes `rest`. `outputs` is then empty (the full list stays
+   * on the page); the final result is always full, never a delta.
+   */
+  delta?: { n: number; chars: number; tail: string; rest: CellOutput[] };
 }
 
 export interface RunResult {
@@ -119,6 +141,10 @@ export interface ReviewInfo {
   cellType: CellType;
   before: string;
   after: string;
+  /** The cell's position when the review opened (for putting a deleted cell back on undo). */
+  index?: number;
+  /** A short title for the review: the first line of `after` (or `before` for a delete), at most 60 characters. */
+  label?: string;
 }
 
 /**
@@ -152,13 +178,29 @@ export type NotebookOp =
    * `summary`: each source is cut to its first line (with `lineCount`), for outlines of big notebooks.
    * `outputsHash`: each code cell carries a short fingerprint of its outputs instead of them,
    * so a reader that polls fetches only the outputs that changed.
+   * `sourceHash`: each cell carries a fingerprint of its full source instead of it (`source` is "",
+   * with `lineCount`); wins over `summary` when both are set. Combines with `outputsHash`.
+   * `maxImages` / `maxImageBytes`: one image budget for the whole call (base64 length); images past
+   * it lose their `image` and keep their mime in `mimes`. `get_output_image` fetches one for real.
    */
-  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean; summary?: boolean; outputsHash?: boolean }
-  | { op: "update_cell"; cellId: string; source: string; review: boolean; byUser?: boolean }
+  | { op: "get_cells"; cellIds?: string[]; start?: number; end?: number; includeOutputs?: boolean; summary?: boolean; outputsHash?: boolean; sourceHash?: boolean; maxImages?: number; maxImageBytes?: number }
+  /**
+   * `expectedSource`: compare-and-set — when the cell's current source differs, nothing is applied,
+   * journaled or reviewed and the result is `{ applied: false, conflict: true }`.
+   */
+  | { op: "update_cell"; cellId: string; source: string; review: boolean; byUser?: boolean; expectedSource?: string }
   | { op: "insert_cell"; index: number; cellType: CellType; source: string; review: boolean; byUser?: boolean }
   | { op: "delete_cell"; cellId: string; review: boolean; byUser?: boolean }
   | { op: "move_cell"; cellId: string; index: number; byUser?: boolean }
-  | { op: "run_cells"; cellIds: string[]; timeoutMs: number; stopOnError: boolean }
+  /**
+   * Run several cell changes in one round-trip, in order, each exactly as if it
+   * were sent alone (review, journal and events keep their order). Steps must
+   * be update_cell, insert_cell, delete_cell or move_cell; anything else is an
+   * OpError and nothing runs. Results come back one per step, in order.
+   */
+  | { op: "apply_cells"; steps: NotebookOp[] }
+  /** `maxImages` / `maxImageBytes`: one image budget across all results (see get_cells). */
+  | { op: "run_cells"; cellIds: string[]; timeoutMs: number; stopOnError: boolean; maxImages?: number; maxImageBytes?: number }
   /**
    * Run code on the kernel without a cell: nothing is added to the notebook or
    * its history. Refused while the kernel is busy (the code would wait behind
@@ -166,7 +208,14 @@ export type NotebookOp =
    * result then carries an `execId` for `execute_wait`.
    */
   | { op: "execute"; code: string; waitMs: number }
-  | { op: "execute_wait"; execId: string; waitMs: number }
+  /**
+   * `since`: the caller already holds `n` outputs of this execution, of generation `gen`, and its
+   * last one (if a stream) has `chars` characters. While running and the generation still matches,
+   * the result is a `delta` (see ExecResult); otherwise, and always once finished, it is full.
+   */
+  | { op: "execute_wait"; execId: string; waitMs: number; since?: { gen: number; n: number; chars: number } }
+  /** The real image of one cell output (no budget), for a reader that only got its mime. */
+  | { op: "get_output_image"; cellId: string; outputIndex: number }
   /**
    * Run Python on the notebook's machine to work it (files, the terminal
    * sessions), not the notebook: through a terminal of the notebook server
@@ -181,13 +230,15 @@ export type NotebookOp =
 export interface NotebookOpResults {
   info: NotebookInfo;
   get_cells: { cells: CellInfo[] };
-  update_cell: { applied: boolean; reviewId?: string };
+  update_cell: { applied: boolean; reviewId?: string; conflict?: boolean };
   insert_cell: { applied: boolean; cellId: string | null; reviewId?: string };
   delete_cell: { applied: boolean; reviewId?: string };
   move_cell: { index: number };
+  apply_cells: { results: unknown[] };
   run_cells: { results: RunResult[] };
   execute: ExecResult;
   execute_wait: ExecResult;
+  get_output_image: { image?: OutputImage };
   machine_exec: ExecResult;
   interrupt: { interrupted: boolean };
   focus_cell: { focused: boolean };

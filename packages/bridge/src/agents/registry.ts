@@ -6,7 +6,7 @@ import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 import { formatLaunchCommand, type AgentInfo } from "@ainb/protocol";
-import { loadCustomAgents } from "../config.js";
+import { customAgentsGeneration, dataDir, loadCustomAgents } from "../config.js";
 
 const require = createRequire(import.meta.url);
 
@@ -164,12 +164,34 @@ export function findAgent(id: string): AgentSpec | undefined {
   return allAgents().find((a) => a.id === id);
 }
 
-export function describeAgents(): AgentInfo[] {
+let describedCache: { key: string; agents: AgentInfo[] } | null = null;
+
+function agentsCacheKey(): string {
+  const file = join(dataDir(), "agents.json");
+  let sig = "none";
+  try {
+    const s = statSync(file);
+    sig = `${s.mtimeMs}:${s.size}`;
+  } catch {
+    // missing
+  }
+  return `${file}|${sig}|${customAgentsGeneration()}|${process.env.PATH ?? ""}|${process.env.PATHEXT ?? ""}`;
+}
+
+export function invalidateAgentsCache(): void {
+  describedCache = null;
+}
+
+export function describeAgents(refresh = false): AgentInfo[] {
+  const key = agentsCacheKey();
+  if (!refresh && describedCache?.key === key) return describedCache.agents;
   const launches = new Map(loadCustomAgents().map((c) => [c.id, formatLaunchCommand(c.command, c.args ?? [])]));
-  return allAgents().map((a) => {
+  const agents = allAgents().map((a) => {
     const r = a.resolve();
     const base = { id: a.id, name: a.name, builtin: a.builtin, launchCommand: launches.get(a.id) };
     if ("missing" in r) return { ...base, available: false, reason: r.missing, command: "" };
     return { ...base, available: true, command: formatLaunchCommand(r.launch.command, r.launch.args) };
   });
+  describedCache = { key, agents };
+  return agents;
 }

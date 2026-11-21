@@ -583,6 +583,23 @@ describe("Machine replacement", () => {
     expect((chat as unknown as { shells: unknown }).shells).not.toBe(shells);
     expect(host.machineReset).toHaveBeenCalledTimes(1);
   });
+
+  it("forgets the code place when the machine is replaced, so a busy kernel cannot restore it", async () => {
+    const { chat, notebookOp } = setup();
+    const original = notebookOp.getMockImplementation()!;
+    const current = { boot: "boot-a" };
+    notebookOp.mockImplementation(async (tab, raw) => (raw as { op: string }).op === "machine_exec"
+      ? { status: "ok", outputs: [{ kind: "stream", name: "stdout", text: `\u001eainb ${JSON.stringify(current)}\n` }] }
+      : original(tab, raw, 30_000));
+    const invalidate = vi.fn();
+    (chat as unknown as { code: { current: null; invalidate: typeof invalidate } }).code = { current: null, invalidate };
+    await chat.refreshMachine();
+    expect(invalidate).not.toHaveBeenCalled();
+    current.boot = "boot-b";
+    (chat as unknown as { machineAt: number }).machineAt = 0;
+    await chat.refreshMachine();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("Bridge notes", () => {
@@ -790,6 +807,79 @@ describe("Verify and save", () => {
     expect(card.outcome).toBe("Stopped by the user. Nothing was saved.");
   });
 
+  it("polls a timed-out cell with summaries and reads its outputs once at the end", async () => {
+    const { chat, notebookOp, original } = verifySetup();
+    let polls = 0;
+    notebookOp.mockImplementation(async (tab, raw) => {
+      const op = raw as { op: string; cellIds?: string[]; summary?: boolean; includeOutputs?: boolean };
+      if (op.op === "get_cells") {
+        if (op.summary) {
+          polls++;
+          return { cells: [{ ...cells[0]!, running: polls < 2, lineCount: 1 }] };
+        }
+        if (op.includeOutputs) return { cells: [{ ...cells[0]!, executionCount: 1, outputs: [{ kind: "stream", name: "stdout", text: "ran a = 1\n" }] }] };
+        return { cells: op.cellIds ? cells.filter((cell) => op.cellIds!.includes(cell.id)) : cells };
+      }
+      if (op.op === "execute") return { status: "ok", outputs: [] };
+      if (op.op === "run_cells") return { results: [{ cellId: op.cellIds![0]!, status: op.cellIds![0] === "a" ? "timeout" : "ok", outputs: [] }] };
+      return original(tab, raw, 30_000);
+    });
+    await chat.verifyAndSave();
+    const card = cards(chat).find((candidate) => candidate.kind === "verify")!;
+    chat.cardAction(card.cardId, "verify");
+    await vi.waitFor(() => expect(card.state).toBe("done"), { timeout: 20_000 });
+    const gets = notebookOp.mock.calls.filter(([, op]) => (op as { op: string }).op === "get_cells").map(([, op]) => op as { op: string; cellIds?: string[]; summary?: boolean; includeOutputs?: boolean });
+    // While the cell runs: summaries of that cell only, no outputs riding along every 2s.
+    const summaries = gets.filter((op) => op.summary);
+    expect(summaries).toHaveLength(2);
+    expect(summaries.every((op) => op.cellIds?.[0] === "a" && !op.includeOutputs)).toBe(true);
+    // The outputs are fetched once, when it finished.
+    expect(gets.filter((op) => op.includeOutputs)).toEqual([{ op: "get_cells", cellIds: ["a"], includeOutputs: true }]);
+    expect(card.outcome).toBe("Verified: 2 cells ran from a clean state. Saved to artifacts/notebooks/test.ipynb.");
+  });
+
+  it("treats a cell the kernel restart left unrun as a failure, not a pass", async () => {
+    const { chat, notebookOp, original } = verifySetup();
+    notebookOp.mockImplementation(async (tab, raw) => {
+      const op = raw as { op: string; cellIds?: string[]; summary?: boolean; includeOutputs?: boolean };
+      if (op.op === "get_cells") {
+        if (op.summary) return { cells: [{ ...cells[0]!, running: false, lineCount: 1 }] };
+        if (op.includeOutputs) return { cells: [{ ...cells[0]!, executionCount: null, outputs: [] }] };
+        return { cells: op.cellIds ? cells.filter((cell) => op.cellIds!.includes(cell.id)) : cells };
+      }
+      if (op.op === "execute") return { status: "ok", outputs: [] };
+      if (op.op === "run_cells") return { results: [{ cellId: op.cellIds![0]!, status: "timeout", outputs: [] }] };
+      return original(tab, raw, 30_000);
+    });
+    await chat.verifyAndSave();
+    const card = cards(chat).find((candidate) => candidate.kind === "verify")!;
+    chat.cardAction(card.cardId, "verify");
+    await vi.waitFor(() => expect(card.state).toBe("done"), { timeout: 20_000 });
+    expect(projectTools.saveNotebook).not.toHaveBeenCalled();
+    expect(card.outcome).toBe("Stopped at cell [0]: it failed. Nothing was saved.");
+  });
+
+  it("still fails a timed-out cell whose outputs hold an error", async () => {
+    const { chat, notebookOp, original } = verifySetup();
+    notebookOp.mockImplementation(async (tab, raw) => {
+      const op = raw as { op: string; cellIds?: string[]; summary?: boolean; includeOutputs?: boolean };
+      if (op.op === "get_cells") {
+        if (op.summary) return { cells: [{ ...cells[0]!, running: false, lineCount: 1 }] };
+        if (op.includeOutputs) return { cells: [{ ...cells[0]!, executionCount: 1, outputs: [{ kind: "error", ename: "ValueError", evalue: "boom" }] }] };
+        return { cells: op.cellIds ? cells.filter((cell) => op.cellIds!.includes(cell.id)) : cells };
+      }
+      if (op.op === "execute") return { status: "ok", outputs: [] };
+      if (op.op === "run_cells") return { results: [{ cellId: op.cellIds![0]!, status: "timeout", outputs: [] }] };
+      return original(tab, raw, 30_000);
+    });
+    await chat.verifyAndSave();
+    const card = cards(chat).find((candidate) => candidate.kind === "verify")!;
+    chat.cardAction(card.cardId, "verify");
+    await vi.waitFor(() => expect(card.state).toBe("done"), { timeout: 20_000 });
+    expect(projectTools.saveNotebook).not.toHaveBeenCalled();
+    expect(card.outcome).toBe("Stopped at cell [0]: it failed. Nothing was saved.");
+  });
+
   it("rejects a non-Python kernel before creating a card", async () => {
     const { chat, info } = verifySetup();
     info.language = "r";
@@ -901,14 +991,14 @@ describe("Context compaction", () => {
 
 describe("Project code in the notebook header", () => {
   const place: CodePlace = { projectId: "p", dir: "/root/.ainb-projects/k-repo", branch: "notebook/test", remote: "https://github.com/u/repo", session: "project-k", worktree: "/tmp/worktree" };
-  type FakeSync = { current: CodePlace | null; ensure: Mock };
+  type FakeSync = { current: CodePlace | null; ensure: Mock; invalidate: Mock };
   function withCode(chat: Chat, ensure: () => Promise<unknown>): FakeSync {
     withProject(chat);
     const sync: FakeSync = { current: null, ensure: vi.fn(async () => {
       const st = await ensure() as { state: string; place?: CodePlace };
       if (st.state === "ready") sync.current = st.place!;
       return st;
-    }) };
+    }), invalidate: vi.fn(() => { sync.current = null; }) };
     (chat as unknown as { code: FakeSync }).code = sync;
     (chat as unknown as { codeState: unknown }).codeState = { state: "missing" };
     return sync;
@@ -923,9 +1013,10 @@ describe("Project code in the notebook header", () => {
     await vi.waitFor(() => expect(chat.snapshot().code?.state).toBe("pushing"));
     done.resolve({ state: "ready", place });
     expect(await pushed).toEqual({ state: "ready", dir: place.dir, branch: place.branch });
-    const states = emit.mock.calls.filter(([event]) => event === "chat.snapshot").map(([, snap]) => (snap as { code?: { state: string } }).code?.state);
-    // Other snapshots (the project resolving) may come in between; the code state goes missing -> pushing -> ready.
-    expect(states.filter((state, i) => state !== states[i - 1])).toEqual(["missing", "pushing", "ready"]);
+    // Mid-session the code state travels as chat.meta (just the field), not a full snapshot.
+    const states = emit.mock.calls.filter(([event]) => event === "chat.meta").map(([, meta]) => (meta as { code?: { state: string } }).code?.state).filter(Boolean);
+    expect(states).toEqual(["pushing", "ready"]);
+    expect(emit.mock.calls.filter(([event]) => event === "chat.snapshot")).toEqual([]);
     expect(chat.messages.flatMap((m) => m.parts).some((p) => p.type === "notice" && p.text.includes(place.dir))).toBe(true);
   });
 
@@ -942,9 +1033,12 @@ describe("Project code in the notebook header", () => {
     emit.mockClear();
     await chat.pushCode();
     expect(sync.ensure).toHaveBeenCalledTimes(2);
-    expect(emit.mock.calls.filter(([event]) => event === "chat.snapshot")).toEqual([]);
+    expect(emit.mock.calls.filter(([event]) => event === "chat.snapshot" || event === "chat.meta")).toEqual([]);
     (chat as unknown as { onMachineReplaced(): void }).onMachineReplaced();
+    expect(sync.invalidate).toHaveBeenCalledTimes(1);
+    expect(sync.current).toBeNull();
     expect(chat.snapshot().code?.state).toBe("missing");
+    expect(emit).toHaveBeenCalledWith("chat.meta", expect.objectContaining({ code: expect.objectContaining({ state: "missing" }) }));
   });
 });
 
@@ -958,6 +1052,7 @@ describe("Project code after a move to another project", () => {
     emit.mockClear();
     chat.setProject({ project: { id: "gepa", name: "gepa", state: "ready" } } as never, true);
     expect(chat.snapshot().code).toEqual({ state: "missing", why: "The code of gepa is not on the notebook's machine yet." });
-    expect(emit).toHaveBeenCalledWith("chat.snapshot", expect.objectContaining({ code: expect.objectContaining({ state: "missing" }) }));
+    expect(emit).toHaveBeenCalledWith("chat.meta", expect.objectContaining({ code: expect.objectContaining({ state: "missing" }) }));
+    expect(emit.mock.calls.filter(([event]) => event === "chat.snapshot")).toEqual([]);
   });
 });

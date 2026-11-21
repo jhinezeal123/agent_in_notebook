@@ -9,7 +9,7 @@
 import type { NotebookInfo, NotebookOp } from "@ainb/protocol";
 import { capText } from "@ainb/protocol";
 import { posix } from "node:path";
-import type { KernelExec } from "../notebook/kernel.js";
+import { Unreachable, type KernelExec } from "../notebook/kernel.js";
 import { reachable } from "../notebook/nbfile.js";
 import { runInSession } from "../notebook/setup.js";
 import { hello, readFile, stat, writeFile } from "../notebook/vmfs.js";
@@ -101,6 +101,12 @@ export class CodeSync {
     return this.place;
   }
 
+  /** The notebook's machine was replaced: nothing verified on the old one may be restored (a busy kernel must not bring it back). */
+  invalidate(): void {
+    this.place = null;
+    this.credentials = null;
+  }
+
   private exec(): KernelExec {
     return (code, wait) => this.call({ op: "machine_exec", code, waitMs: wait }, wait + 15_000) as ReturnType<KernelExec>;
   }
@@ -109,9 +115,50 @@ export class CodeSync {
    * Have the project's code on the notebook's machine: the chat's branch and
    * worktree here, a clone of the branch there. Cheap once done (it checks the
    * clone is still there: a Colab machine is replaced after a while).
+   *
+   * The read-only check of a clone already there runs OUTSIDE the serial chain:
+   * a push (syncBack) can hold the chain for minutes, and the next turn must not
+   * wait behind it just to learn the clone is still on the branch. Only the
+   * writing path (clone, publish, credentials) queues behind a push.
    */
   ensure(project: CodeProject, worktree: () => Promise<Worktree>): Promise<CodeState> {
-    return this.serial(() => this.ensureNow(project, worktree));
+    return this.fastPath(project, worktree).then((st) => st ?? this.serial(() => this.ensureNow(project, worktree)));
+  }
+
+  /**
+   * One small read (.git/HEAD) tells whether the clone verified on an earlier
+   * turn is still on the chat's branch. Reading HEAD while a push commits is
+   * safe: git writes HEAD to a lock file and renames it into place, so a reader
+   * sees either the old or the new whole value, never a half-written one. The
+   * worktree is only read here too (ensureWorktree hits its cache and reads git's
+   * files), so this does not race the push's git in the worktree. Null means the
+   * full, serialized check must decide.
+   */
+  private async fastPath(project: CodeProject, worktree: () => Promise<Worktree>): Promise<CodeState | null> {
+    const previous = this.place;
+    if (!previous) return null;
+    const remote = remoteOf(project);
+    if (!remote || previous.projectId !== project.id || previous.remote !== remote) return null;
+    let wt: Worktree;
+    try {
+      wt = await worktree();
+    } catch {
+      return null;
+    }
+    if (previous.worktree !== wt.path || previous.branch !== wt.branch) return null;
+    try {
+      const head = (await readFile(this.exec(), `${previous.dir}/.git/HEAD`, 4096)).data.toString("utf8").trim();
+      if (head !== `ref: refs/heads/${previous.branch}`) return null;
+    } catch (e) {
+      // The machine answers "busy" (a cell running on Colab) or cannot be reached:
+      // the clone was verified earlier and nothing says it changed. Keep it
+      // unverified (busy-restore); the next turn that reaches the machine checks
+      // again. A replaced machine was invalidated, so its place is already gone.
+      if (!(e instanceof Unreachable)) return null; // HEAD gone or another failure: the full check decides.
+    }
+    // invalidate() (the machine was replaced) may have cleared the place while we read.
+    if (this.place !== previous) return null;
+    return { state: "ready", place: previous };
   }
 
   private async ensureNow(project: CodeProject, worktree: () => Promise<Worktree>): Promise<CodeState> {
@@ -134,10 +181,21 @@ export class CodeSync {
       // Nothing changed since the last turn and the clone is still on the chat's branch (one small read on
       // the machine): no terminal script. syncBack checks the rest (the remote, a new token) before it pushes.
       if (previous && previous.projectId === project.id && previous.remote === remote && previous.worktree === wt.path && previous.branch === wt.branch) {
-        const head = await readFile(this.exec(), `${previous.dir}/.git/HEAD`, 4096).then((r) => r.data.toString("utf8").trim(), () => null);
-        if (head === `ref: refs/heads/${previous.branch}`) {
-          this.place = previous;
-          return { state: "ready", place: previous };
+        try {
+          const head = (await readFile(this.exec(), `${previous.dir}/.git/HEAD`, 4096)).data.toString("utf8").trim();
+          if (head === `ref: refs/heads/${previous.branch}`) {
+            this.place = previous;
+            return { state: "ready", place: previous };
+          }
+        } catch (e) {
+          // The machine itself answers "busy" (a cell running on Colab) or cannot be reached right now:
+          // the clone was verified on an earlier turn and nothing says it changed. Keep it unverified;
+          // the next turn that reaches the machine checks it again. A replaced machine is invalidated.
+          if (e instanceof Unreachable) {
+            this.place = previous;
+            return { state: "ready", place: previous };
+          }
+          // Any other failure (HEAD gone, say) falls through to the full check below.
         }
       }
       token = signsIn(remote) ? await githubToken() : undefined;

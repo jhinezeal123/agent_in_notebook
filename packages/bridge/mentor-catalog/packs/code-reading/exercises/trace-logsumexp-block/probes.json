@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Hai đại lượng `P` và `H` trong `mystery_block_b` có tên gọi quen thuộc gì trong ML/lý thuyết thông tin?",
+    "tag": "cr-lse-entropy-meaning",
+    "answer": "P là phân bố softmax ở nhiệt độ tau, còn H là Shannon entropy (tính bằng nats vì dùng log tự nhiên) của phân bố P.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Khi cộng hằng số `shift` vào `Z`, vì sao `lse` dịch đúng `shift / tau` nhưng phân bố `P` và entropy `H` lại hoàn toàn không đổi?",
+    "tag": "cr-lse-shift-cancel",
+    "answer": "Cả S và lse đều tăng đúng shift / tau, nên hiệu log_p = S - lse triệt tiêu hoàn toàn shift / tau.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi nhiệt độ $\\tau \\to 0^+$ (với một phần tử lớn nhất duy nhất trên hàng), `H` tiến về giá trị nào? Còn khi $\\tau \\to +\\infty$?",
+    "tag": "cr-tau-limits",
+    "answer": "Khi tau -> 0+, P trở thành one-hot nên H -> 0; khi tau -> +inf, P trở thành phân bố đều 1/K nên H -> ln(K).",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu trong code dùng `np.log(P)` thay vì giữ lại biến `log_p = S - lse`, lỗi số nào dễ xảy ra khi một logit rất nhỏ?",
+    "tag": "cr-zero-log-zero",
+    "answer": "P_i underflow thành 0.0 và log(0.0) thành -inf, khiến 0.0 * (-inf) = NaN trong tính entropy.",
+    "kind": "trap",
+    "stage": "defend"
+  }
+]

@@ -28,6 +28,7 @@ Usage:
   ainb mentor verify [ID…] [--tab N]  Check Mentor exercises (default: the PyTorch ones) on a
                                      notebook open in Chrome; passing ones go to verified.json
   ainb mentor reload                 Have the running Mentor read its exercises again
+  ainb mentor stats                  Print learning analytics & difficulty calibration suggestions
 
 Data directory: ${process.env.AINB_HOME ?? "~/.agent-in-notebook"}  (set AINB_HOME to change)
 Custom ACP agents: add them to agents.json in the data directory.`;
@@ -150,8 +151,9 @@ async function main() {
     case "mentor": {
       if (rest[0] === "check") process.exit(await (await import("./mentor/check-cli.js")).mentorCheck(rest.slice(1)));
       if (rest[0] === "reload") process.exit(await (await import("./mentor/check-cli.js")).mentorReload());
+      if (rest[0] === "stats") process.exit(await (await import("./mentor/stats-cli.js")).mentorStats());
       if (rest[0] !== "verify") {
-        console.error("Usage: ainb mentor check [PACK|ID…] [--all] | ainb mentor verify [ID…] [--tab N] | ainb mentor reload");
+        console.error("Usage: ainb mentor check [PACK|ID…] [--all] | ainb mentor verify [ID…] [--tab N] | ainb mentor reload | ainb mentor stats");
         process.exit(2);
       }
       const { mentorVerify } = await import("./mentor/verify-cli.js");

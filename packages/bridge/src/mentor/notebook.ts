@@ -155,8 +155,9 @@ export function scaffoldStarter(ex: Pick<Exercise, "starter" | "functions">, sca
 
 export function exerciseCells(ex: Exercise, opts: NotebookOptions = {}): CellInfo[] {
   const kind = opts.kind ?? "learn";
-  const scaffold = opts.scaffold ?? (kind === "review" ? "blank" : "full");
+  const scaffold = opts.scaffold ?? (kind === "review" || kind === "interview" ? "blank" : "full");
   if (kind === "review") return reviewCells(ex);
+  if (kind === "interview") return interviewCells(ex);
   const cells: Omit<CellInfo, "index">[] = [];
   const md = (id: string, source: string) => cells.push({ id, type: "markdown", source, executionCount: null, outputs: [] });
   const code = (id: string, source: string) => cells.push({ id, type: "code", source, executionCount: null, outputs: [] });
@@ -248,4 +249,46 @@ function reviewCells(ex: Exercise): CellInfo[] {
 
 export function exerciseNotebook(ex: Exercise, opts: NotebookOptions = {}): string {
   return toIpynb(exerciseCells(ex, opts), "python");
+}
+
+/** A mock interview: blank cell, no hints, judge + deep follow-up questions. */
+function interviewCells(ex: Exercise): CellInfo[] {
+  const cells: Omit<CellInfo, "index">[] = [
+    {
+      id: "mentor-brief",
+      type: "markdown",
+      source: [
+        mark(`exercise ${ex.id}`),
+        `# Phỏng vấn thử: ${ex.title}`,
+        "",
+        "> 🎯 Phỏng vấn thử (~20–30 phút): **cài từ cell trống, không có gợi ý**. Qua máy chấm rồi trả lời các câu hỏi vặn sâu của người phỏng vấn.",
+        "",
+        ex.brief,
+      ].join("\n"),
+      executionCount: null,
+      outputs: [],
+    },
+    ...(ex.given.trim()
+      ? [
+          {
+            id: "mentor-given-head",
+            type: "markdown" as const,
+            source: "## Code cho sẵn\n\nChạy cell dưới trước khi làm bài.",
+            executionCount: null,
+            outputs: [],
+          },
+          { id: "mentor-given", type: "code" as const, source: `${GIVEN_MARK}\n${ex.given.trim()}`, executionCount: null, outputs: [] },
+        ]
+      : []),
+    {
+      id: "mentor-build-head",
+      type: "markdown",
+      source: `## Bài làm\n\nCode trong cell có dòng \`${SOLUTION_MARK}\`, rồi bấm **Chấm bài** trong khung chat. Các hàm cần có: ${ex.functions.map((f) => `\`${f}\``).join(", ")}.`,
+      executionCount: null,
+      outputs: [],
+    },
+    { id: SOLUTION_ID, type: "code", source: [SOLUTION_MARK, ex.prelude, "", scaffoldStarter(ex, "blank")].join("\n"), executionCount: null, outputs: [] },
+    { id: "mentor-try", type: "code", source: "# Thử code của bạn ở đây (không được chấm)", executionCount: null, outputs: [] },
+  ];
+  return cells.map((c, index) => ({ ...c, index }));
 }

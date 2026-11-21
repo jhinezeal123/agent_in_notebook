@@ -124,7 +124,9 @@ describe("Jupyter review conflicts", () => {
     const { original, adapter } = setup();
     const shown = adapter.showReview(review());
     original.sharedCell.setSource("new source");
-    await vi.advanceTimersByTimeAsync(1000);
+    // No source-change signal on this fake cell: the slow fallback interval
+    // (2.5s, A4.4) notices the edit.
+    await vi.advanceTimersByTimeAsync(2500);
     expect(await shown.decided).toBe(false);
     shown.resolve(true);
     expect(original.sharedCell.getSource()).toBe("new source");

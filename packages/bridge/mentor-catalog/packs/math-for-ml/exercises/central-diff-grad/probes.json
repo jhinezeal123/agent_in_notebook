@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Dùng khai triển Taylor, vì sao sai phân trung tâm có sai số $O(\\varepsilon^2)$ còn sai phân tiến chỉ là $O(\\varepsilon)$?",
+    "tag": "math-central-taylor",
+    "answer": "Khi lấy f(x+eps) - f(x-eps), số hạng bậc chẵn (f''(x) * eps^2 / 2) tự triệt tiêu hoàn toàn, chỉ còn phần dư từ bậc ba chia cho 2*eps nên còn O(eps^2).",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Nhìn đồ thị Phòng công thức, vì sao chọn $\\varepsilon = 10^{-10}$ lại cho sai số LỚN HƠN $\\varepsilon = 10^{-5}$?",
+    "tag": "math-roundoff-cancellation",
+    "answer": "Do hiện tượng triệt tiêu chữ số có nghĩa (catastrophic cancellation) khi trừ hai số float64 quá gần nhau rồi chia cho 2*eps rất nhỏ.",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao kiểm tra đạo hàm số trên hàm có ReLU tại $x_i = 0$ đôi khi báo sai số lớn dù backprop đúng?",
+    "tag": "math-kink-relu",
+    "answer": "Tại điểm gãy (kink) không khả vi x=0, đoạn [x-eps, x+eps] băng qua góc gãy nên sai phân trung tâm lấy trung bình độ dốc hai phía thay vì đạo hàm một phía.",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu mảng đầu vào `x` có kiểu `int64` mà bạn chỉ viết `work = x.copy()` không ép `dtype=float`, chuyện gì xảy ra khi gán `work[idx] = orig + 1e-5`?",
+    "tag": "math-int-truncation",
+    "answer": "NumPy tự cắt phần thập phân về số nguyên nên `orig + 1e-5` bị làm tròn về lại `orig`, khiến `fp - fm == 0` và gradient sai thành 0 toàn bộ.",
+    "kind": "break",
+    "stage": "defend"
+  }
+]

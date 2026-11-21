@@ -1,7 +1,7 @@
 // An inline review card for notebooks without a native one (JupyterLab, so
 // Kaggle). It lives in a shadow root so neither page nor card styles leak.
 
-import { diffLines, diffStats, withContext, type ReviewInfo } from "@ainb/protocol";
+import { diffLines, diffStats, withContext, type DiffRow, type ReviewInfo } from "@ainb/protocol";
 
 const STYLE = `
 :host { all: initial; display: block; margin: 6px 0 6px 0; font: 12px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -23,6 +23,8 @@ button { font: inherit; border-radius: 6px; padding: 3px 12px; cursor: pointer; 
 .accept:hover { background: #1a5fd0; }
 .reject { background: transparent; color: inherit; border-color: var(--ainb-border, #c9d1e0); }
 .reject:hover { background: rgba(127,127,127,.12); }
+.show-all { display: block; margin: 6px 10px; background: transparent; color: inherit; border-color: var(--ainb-border, #c9d1e0); }
+.show-all:hover { background: rgba(127,127,127,.12); }
 @media (prefers-color-scheme: dark) {
   .card { --ainb-bg: #161b22; --ainb-fg: #e6edf3; --ainb-head: #1f2630; --ainb-border: #36404d; }
   .add { color: #3fb950; } .del { color: #f85149; }
@@ -34,6 +36,17 @@ const KIND_TITLE: Record<ReviewInfo["kind"], string> = {
   insert: "Agent proposes a new cell",
   delete: "Agent proposes deleting this cell",
 };
+
+/** Rows built at once; the rest waits for "Show all" (A6.8). */
+const INITIAL_ROWS = 300;
+/** Rows built per frame while expanding, so a huge cell never blocks the page. */
+const CHUNK_ROWS = 200;
+/**
+ * The display's LCS budget, well under diffLines' default: a thousand-line
+ * cell must not build a 16MB table in the page. Past it the middle shows as
+ * replaced — acceptable for a review, and the full text is still all there.
+ */
+const DISPLAY_MAX_CELLS = 250_000;
 
 export function createReviewCard(review: ReviewInfo, onDecide: (accept: boolean) => void): HTMLElement {
   const host = document.createElement("div");
@@ -49,7 +62,7 @@ export function createReviewCard(review: ReviewInfo, onDecide: (accept: boolean)
   style.textContent = STYLE;
   root.append(style);
 
-  const lines = diffLines(review.before, review.after);
+  const lines = diffLines(review.before, review.after, DISPLAY_MAX_CELLS);
   const { added, removed } = diffStats(lines);
 
   const card = el("div", "card");
@@ -83,10 +96,12 @@ export function createReviewCard(review: ReviewInfo, onDecide: (accept: boolean)
   const body = el("div", "diff");
   const rows = withContext(lines, review.kind === "update" ? 3 : 1_000_000);
   if (!rows.length) body.append(el("div", "empty", "(empty cell)"));
-  for (const r of rows) {
+
+  let rendered = 0;
+  const renderRow = (r: DiffRow) => {
     if (r.op === "skip") {
       body.append(el("div", "row s", `⋯ ${r.count} unchanged line${r.count === 1 ? "" : "s"}`));
-      continue;
+      return;
     }
     const row = el("div", `row ${r.op === "add" ? "a" : r.op === "del" ? "d" : ""}`);
     row.append(
@@ -95,10 +110,49 @@ export function createReviewCard(review: ReviewInfo, onDecide: (accept: boolean)
       el("span", "text", r.text || " "),
     );
     body.append(row);
-  }
+  };
+  const renderUpTo = (n: number) => {
+    for (; rendered < n && rendered < rows.length; rendered++) renderRow(rows[rendered]!);
+  };
+  renderUpTo(INITIAL_ROWS);
   card.append(body);
+
+  // The whole diff must be reviewable before Accept: one button builds the
+  // rest, a chunk per frame, instead of thousands of nodes at once (A6.8).
+  if (rows.length > INITIAL_ROWS) {
+    const more = el("button", "show-all", `Show all ${rows.length} lines`) as HTMLButtonElement;
+    more.title = "Render the rest of the diff";
+    let expanding = false;
+    const expand = () => {
+      if (expanding) return;
+      expanding = true;
+      more.remove();
+      const step = () => {
+        renderUpTo(rendered + CHUNK_ROWS);
+        if (rendered < rows.length) schedule(step);
+      };
+      schedule(step);
+    };
+    // Same activation as Accept/Reject: JupyterLab swallows the mouseup of a
+    // press inside a cell, so the press itself expands; click covers keyboards.
+    more.addEventListener("pointerdown", (e) => {
+      if (e.button === 0) {
+        e.preventDefault();
+        expand();
+      }
+    });
+    more.addEventListener("click", expand);
+    card.append(more);
+  }
+
   root.append(card);
   return host;
+}
+
+/** rAF in the page; setTimeout where it is absent (tests). */
+function schedule(fn: () => void): void {
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fn);
+  else setTimeout(fn, 0);
 }
 
 function el(tag: string, cls: string, text?: string): HTMLElement {

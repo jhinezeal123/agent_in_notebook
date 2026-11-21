@@ -1,11 +1,16 @@
-import type { ComponentChildren } from "preact";
+import { Fragment, type ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, type AgentOption, type ChatCode, type ChatProject, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type Scope } from "@ainb/protocol";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, diffLines, diffStats, type AgentOption, type AppliedChange, type ChatCode, type ChatProject, type ChatSearchHit, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type ReviewInfo, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type AttachedCell, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { AttachedChip, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { Icon, type IconName } from "./icons.js";
 import { MentorBar, WorkshopBar } from "./mentor-bar.js";
+import { dateSeparators, lastUserMessage, queuedMessageIds } from "./transcript.js";
+import { kernelHint, loginHintFrom } from "./chat-hints.js";
+import { exportChatMarkdown } from "./export-chat.js";
+import { contextualSuggestions, matchSlashCommands, type SlashCommand } from "./slash-commands.js";
+import { resolveLang, t, type LangPref, type UiLang } from "./i18n.js";
 import type { MentorStage } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
@@ -29,6 +34,20 @@ export function App() {
   const [attached, setAttached] = useState<AttachedCell[]>([]);
   /** Counts the times the user attached cells, so the input box takes the focus each time. */
   const [attachedAt, setAttachedAt] = useState(0);
+  /** Cells an Edit put back in the composer; the host does not track them, so they ride along attachment updates until sent or removed. */
+  const editedCells = useRef<AttachedCell[]>([]);
+  /** The chat error the user dismissed; a different error shows the banner again. */
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  /** Search bar state (B4.2). */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchScope, setSearchScope] = useState<"chat" | "all">("chat");
+  const [searchIndex, setSearchIndex] = useState(0);
+  const [crossHits, setCrossHits] = useState<ChatSearchHit[]>([]);
+  const [crossLoading, setCrossLoading] = useState(false);
+  /** Accessible polite announcement emitted only when a turn finishes (B5.3). */
+  const [liveAnnounce, setLiveAnnounce] = useState("");
+  const prevStatus = useRef<string | undefined>(undefined);
   const tabRef = useRef(tabId);
   tabRef.current = tabId;
   const agentRef = useRef(prefs.agentId);
@@ -45,9 +64,10 @@ export function App() {
       else if (e.event === "notebooks") setChoices(e.params);
       else if (e.event === "prefs") setPrefsState({ ...DEFAULT_PREFS, ...e.params });
       else if (e.event === "command" && e.params === "chat.clear") clearRef.current();
+      else if (e.event === "command" && e.params === "chat.export") exportRef.current();
       else if (e.event === "attachments") {
         if (e.params.tabId !== tabRef.current) return;
-        setAttached(e.params.cells);
+        setAttached(mergeCells(editedCells.current, e.params.cells));
         if (e.params.added) setAttachedAt((n) => n + 1);
       }
       else if (e.event === "notebook") {
@@ -66,6 +86,17 @@ export function App() {
               if (snap && snap.tabId === tabRef.current) setChat(snap);
             }, () => {}));
             return c;
+          });
+        } else if (method === "chat.meta") {
+          setChat((c) => {
+            if (!c || c.chatId !== params.chatId) return c;
+            return {
+              ...c,
+              ...("settings" in params ? { settings: params.settings } : {}),
+              ...("options" in params ? { options: params.options } : {}),
+              ...("project" in params ? { project: params.project } : {}),
+              ...("code" in params ? { code: params.code } : {}),
+            };
           });
         } else if (method === "chat.usage") {
           setChat((c) => (c && c.chatId === params.chatId ? { ...c, usage: params.usage } : c));
@@ -91,6 +122,8 @@ export function App() {
     setNotebook(null);
     setLoadedTab(null);
     setAttached([]);
+    editedCells.current = [];
+    setDismissedError(null);
     if (tabId === null) return;
     void client.request<NotebookInfo | null>("tab.notebook", { tabId }).then((info) => tabRef.current === tabId && setNotebook(info), () => {});
     void client.request<AttachedCell[]>("attachments.get", { tabId }).then((cells) => tabRef.current === tabId && setAttached(cells), () => {});
@@ -160,21 +193,34 @@ export function App() {
     return snap;
   };
 
-  const send = async (text: string) => {
+  /** Send a message. `resendCells`: a resend carries the original message's cells and leaves the composer's attachments alone. */
+  const send = async (text: string, resendCells?: AttachedCell[]) => {
     if (changingOption) return false;
     setError(null);
+    setDismissedError(null);
     let c = live;
     if (!c || c.agentId !== prefs.agentId) c = (await openChat(prefs.agentId)) ?? null;
     if (!c) return false;
     if (c.tabId !== tabRef.current) return false;
-    const cells = attached;
+    const cells = resendCells ?? attached;
     const ok = await run(client.request("chat.send", { chatId: c.chatId, text, ...(cells.length ? { cells } : {}) }));
     if (ok === undefined) return false;
-    // The cells went with this message; cells attached meanwhile stay for the next one.
-    if (cells.length) void client.request("attachments.remove", { tabId: c.tabId, cellIds: cells.map((x) => x.cellId) }).catch(() => {});
+    if (!resendCells && cells.length) {
+      const sent = new Set(cells.map((x) => x.cellId));
+      editedCells.current = editedCells.current.filter((x) => !sent.has(x.cellId));
+      setAttached((current) => current.filter((x) => !sent.has(x.cellId)));
+      // The cells went with this message; cells attached meanwhile stay for the next one.
+      void client.request("attachments.remove", { tabId: c.tabId, cellIds: cells.map((x) => x.cellId) }).catch(() => {});
+    }
     return true;
   };
-  const detach = (cellId: string) => tabId !== null && void run(client.request("attachments.remove", { tabId, cellIds: [cellId] }));
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const detach = (cellId: string) => {
+    editedCells.current = editedCells.current.filter((c) => c.cellId !== cellId);
+    setAttached((current) => current.filter((c) => c.cellId !== cellId));
+    if (tabId !== null) void run(client.request("attachments.remove", { tabId, cellIds: [cellId] }));
+  };
 
   /** Clear Chat: close the chat, which forgets its saved conversation. */
   const clearRef = useRef(() => {});
@@ -185,6 +231,66 @@ export function App() {
       if (closed) setChat((current) => current?.chatId === id ? null : current);
     });
   };
+
+  /** Export Chat as Markdown (B4.1). */
+  const exportRef = useRef(() => {});
+  exportRef.current = () => {
+    if (!live) return;
+    const md = exportChatMarkdown(live, notebook);
+    const name = notebook?.title || live.notebookKey || "notebook-chat";
+    void run(client.request("chat.export", { filename: name, content: md }));
+  };
+
+  const lang: UiLang = resolveLang(prefs.language);
+
+  // Announce once when a running turn finishes (B5.3 polite aria-live).
+  useEffect(() => {
+    if (prevStatus.current === "running" && live?.status === "idle") {
+      setLiveAnnounce(t("a11y.turnDone", lang));
+      const timer = setTimeout(() => setLiveAnnounce(""), 3000);
+      return () => clearTimeout(timer);
+    }
+    prevStatus.current = live?.status;
+  }, [live?.status, lang]);
+
+  // Global keyboard shortcuts (B4.2 Ctrl+F search, B5.3 Escape = stop when running, Ctrl+/ = focus composer).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && live?.messages.length) {
+        e.preventDefault();
+        setSearchOpen(true);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+        e.preventDefault();
+        setAttachedAt((n) => n + 1);
+      } else if (e.key === "Escape" && searchOpen) {
+        setSearchOpen(false);
+        setSearchQuery("");
+      } else if (e.key === "Escape" && live?.status === "running") {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag !== "SELECT") {
+          void run(client.request("chat.cancel", { chatId: live.chatId }));
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [live?.chatId, live?.status, live?.messages.length, searchOpen, client, run]);
+
+  // Cross-notebook search query (B4.2 phase 2).
+  useEffect(() => {
+    if (!searchOpen || searchScope !== "all") return;
+    const q = searchQuery.trim();
+    if (!q) { setCrossHits([]); return; }
+    let stale = false;
+    setCrossLoading(true);
+    const timer = setTimeout(() => {
+      void client.request<{ hits: ChatSearchHit[] }>("chats.search", { query: q, limit: 30 }).then(
+        (r) => { if (!stale) setCrossHits(r.hits ?? []); },
+        () => { if (!stale) setCrossHits([]); },
+      ).finally(() => { if (!stale) setCrossLoading(false); });
+    }, 220);
+    return () => { stale = true; clearTimeout(timer); };
+  }, [searchOpen, searchScope, searchQuery, client]);
 
   /** Move the notebook to another project (a quick pick in the editor). */
   const moveProject = () => {
@@ -204,6 +310,8 @@ export function App() {
     void run(client.request("chat.verifyNotebook", { chatId: live.chatId })).finally(() => setVerifying(false));
   };
 
+  const manageAgents = () => void run(client.request("studio.open", { view: "settings", section: "agents" }));
+
   const actions: PartActions = useMemo(
     () => ({
       answer: (promptId, optionId) => live && void run(client.request("chat.answer", { chatId: live.chatId, promptId, optionId })),
@@ -216,6 +324,30 @@ export function App() {
       undo: async (messageId) => {
         if (live) await run(client.request("chat.undo", { chatId: live.chatId, messageId }));
       },
+      changes: async (messageId) => {
+        if (!live) return [];
+        const res = await run(client.request<{ changes: AppliedChange[] }>("chat.changes", { chatId: live.chatId, messageId }));
+        return res?.changes ?? [];
+      },
+      pin: (messageId, pinned) => {
+        if (live) void run(client.request("chat.pin", { chatId: live.chatId, messageId, pinned }));
+      },
+      dequeue: (messageId) => {
+        if (live) void run(client.request("chat.dequeue", { chatId: live.chatId, messageId }));
+      },
+      openImage: (mime, data, alt) => {
+        void run(client.request("image.open", { mime, data, alt }));
+      },
+      openReviewDiff: (review: ReviewInfo) => {
+        const title = `${review.kind} ${review.cellType} ${review.index !== undefined ? `[${review.index}]` : review.cellId.slice(0, 10)}`;
+        void run(client.request("review.diff", { before: review.before, after: review.after, title, cellType: review.cellType }));
+      },
+      edit: (text, cells) => {
+        editedCells.current = mergeCells(cells, editedCells.current);
+        setAttached((current) => mergeCells(cells, current));
+        setDraft({ text });
+      },
+      resend: (text, cells) => void sendRef.current(text, cells),
     }),
     [live?.chatId, tabId, !!live?.mentor],
   );
@@ -224,17 +356,67 @@ export function App() {
   const mentorCall = (method: string, extra: Record<string, unknown> = {}) => live && void run(client.request(method, { chatId: live.chatId, ...extra }));
 
   if (!bridge) return <div class="center muted">{error ?? "Loading…"}</div>;
-  if (!connected) return <Setup bridge={bridge} />;
+  if (!connected) return <Setup bridge={bridge} lang={lang} onManageAgents={manageAgents} />;
 
   const agents = bridge.agents;
   const running = live?.status === "running";
+  const queuedCount = live ? queuedMessageIds(live.messages, live.status).size : 0;
+  const lastUser = live ? lastUserMessage(live.messages) : null;
   const allParts = (live?.messages ?? []).flatMap((m) => m.parts);
   const pendingReviews = allParts.filter((p): p is Extract<Part, { type: "review" }> => p.type === "review" && p.status === "pending");
   const pendingPrompts = allParts.filter((p): p is Extract<Part, { type: "prompt" }> => p.type === "prompt" && p.answer === undefined);
   const history = (live?.messages ?? []).filter((m) => m.role === "user").map((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(""));
+  const pinnedMessages = (live?.messages ?? []).filter((m) => m.pinned);
+
+  const searchLower = searchOpen && searchScope === "chat" ? searchQuery.trim().toLowerCase() : "";
+  const matchedMsgIds = useMemo(() => {
+    if (!searchLower || !live) return [] as string[];
+    return live.messages
+      .filter((m) =>
+        m.parts.some((p) => {
+          if (p.type === "text" || p.type === "thought" || p.type === "notice") return p.text.toLowerCase().includes(searchLower);
+          if (p.type === "tool") return p.title.toLowerCase().includes(searchLower) || (p.detail ?? "").toLowerCase().includes(searchLower);
+          if (p.type === "card") return p.card.title.toLowerCase().includes(searchLower) || (p.card.detail ?? "").toLowerCase().includes(searchLower);
+          return false;
+        }),
+      )
+      .map((m) => m.id);
+  }, [searchLower, live?.messages]);
+  const activeSearchMsgId = matchedMsgIds.length ? matchedMsgIds[searchIndex % matchedMsgIds.length] : null;
+  const scrollToMessage = (id: string) => {
+    const el = document.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  const scrollToReview = (reviewId: string) => {
+    const el = document.querySelector<HTMLElement>(`[data-review-id="${CSS.escape(reviewId)}"]`);
+    if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.focus(); }
+  };
+
+  const handleSlashCommand = (cmd: SlashCommand) => {
+    if (cmd.run.kind === "action") {
+      if (cmd.run.action === "save") saveNotebook();
+      else if (cmd.run.action === "verify") verifyNotebook();
+      else if (cmd.run.action === "clear") clearRef.current();
+      else if (cmd.run.action === "compact") {
+        void send("Summarize our work, decisions, and next steps concisely so I can continue in a fresh chat.");
+      }
+      return;
+    }
+    if (cmd.run.needsArg) setDraft({ text: cmd.run.text });
+    else void send(cmd.run.text);
+  };
 
   const agentReady = agents.some((a) => a.id === prefs.agentId && a.available);
   const agentName = agents.find((a) => a.id === prefs.agentId)?.name ?? "the agent";
+  const agentReason = agents.find((a) => a.id === prefs.agentId)?.reason;
+  const composerDisabled = changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agentReady;
+  // Why sending is blocked, said out loud; "starting" already speaks in the status line below.
+  let blocked: string | null = null;
+  if (!agentReady) blocked = `${agentName} is not available.${agentReason ? ` ${agentReason}` : ""}`;
+  else if (changingOption) blocked = "Applying the option change…";
+  else if (!live) blocked = "Opening the chat…";
+  else if (live.agentId !== prefs.agentId) blocked = `Switching to ${agentName}…`;
+  const signIn = blocked ? loginHintFrom(live?.error) ?? loginHintFrom(error) : null;
   // The model sits in the toolbar; the agent's other options open from the agent's button.
   const options = live && live.agentId === prefs.agentId ? live.options : [];
   const modelOptions = options.filter((o) => o.category === "model" && o.kind === "select");
@@ -250,6 +432,7 @@ export function App() {
 
   return (
     <div class={mentor ? "app mentor-chat" : "app"}>
+      <div class="sr-only" aria-live="polite">{liveAnnounce}</div>
       {notebook && (
         <NotebookHeader
           notebook={notebook}
@@ -258,9 +441,63 @@ export function App() {
           choices={choices}
           onPick={(id) => void run(client.request("notebooks.select", { tabId: id }))}
           onMirror={() => tabId !== null && void run(client.request("notebook.mirror", { tabId }))}
+          onOpenChrome={() => void run(client.openLink(notebook.url))}
+          onSearch={live?.messages.length ? () => setSearchOpen((v) => !v) : undefined}
+          onExport={live?.messages.length ? () => exportRef.current() : undefined}
           code={live?.code}
           onPushCode={() => live && void run(client.request("chat.pushCode", { chatId: live.chatId }))}
+          lang={lang}
         />
+      )}
+      {searchOpen && (
+        <div class="search-bar chat-width" role="search">
+          <input
+            type="search"
+            autoFocus
+            value={searchQuery}
+            placeholder={t(searchScope === "chat" ? "search.placeholder" : "search.allPlaceholder", lang)}
+            onInput={(e) => { setSearchQuery((e.target as HTMLInputElement).value); setSearchIndex(0); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && searchScope === "chat" && matchedMsgIds.length) {
+                const next = (searchIndex + (e.shiftKey ? -1 : 1) + matchedMsgIds.length) % matchedMsgIds.length;
+                setSearchIndex(next);
+                scrollToMessage(matchedMsgIds[next]!);
+              }
+            }}
+          />
+          <button class={`linkish small${searchScope === "chat" ? " active" : ""}`} onClick={() => setSearchScope("chat")}>{t("search.thisChat", lang)}</button>
+          <button class={`linkish small${searchScope === "all" ? " active" : ""}`} onClick={() => setSearchScope("all")}>{t("search.allChats", lang)}</button>
+          {searchScope === "chat" && searchQuery.trim() && (
+            <>
+              <span class="muted small">{matchedMsgIds.length ? `${(searchIndex % matchedMsgIds.length) + 1}/${matchedMsgIds.length}` : t("search.noMatches", lang)}</span>
+              {matchedMsgIds.length > 0 && (
+                <>
+                  <button class="icon" aria-label="Previous match" onClick={() => { const n = (searchIndex - 1 + matchedMsgIds.length) % matchedMsgIds.length; setSearchIndex(n); scrollToMessage(matchedMsgIds[n]!); }}>↑</button>
+                  <button class="icon" aria-label="Next match" onClick={() => { const n = (searchIndex + 1) % matchedMsgIds.length; setSearchIndex(n); scrollToMessage(matchedMsgIds[n]!); }}>↓</button>
+                </>
+              )}
+            </>
+          )}
+          <button class="icon" aria-label="Close search" onClick={() => { setSearchOpen(false); setSearchQuery(""); }}><Icon name="close" /></button>
+        </div>
+      )}
+      {searchOpen && searchScope === "all" && searchQuery.trim() && (
+        <div class="cross-search-results chat-width">
+          {crossLoading && <div class="muted small">Searching…</div>}
+          {!crossLoading && !crossHits.length && <div class="muted small">{t("search.noMatches", lang)}</div>}
+          {crossHits.map((h) => (
+            <div key={`${h.notebookKey}:${h.messageId}`} class="cross-hit">
+              <div class="cross-hit-head">
+                <strong>{h.title || h.notebookKey}</strong>
+                <span class="muted small">{h.role} · {new Date(h.createdAt).toLocaleDateString()}</span>
+              </div>
+              <div class="cross-hit-snippet">{h.snippet}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {pinnedMessages.length > 0 && (
+        <PinnedBar messages={pinnedMessages} onJump={scrollToMessage} onUnpin={(id) => actions.pin?.(id, false)} lang={lang} />
       )}
       {mentor && (
         <MentorBar
@@ -287,12 +524,36 @@ export function App() {
       {!notebook ? (
         <Welcome mark>
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
+          <ConnectionChecklist bridge={bridge} notebook={null} agentReady={agentReady} agentName={agentName} onManageAgents={manageAgents} lang={lang} />
         </Welcome>
       ) : (
-        <Transcript key={live?.chatId ?? notebook.key ?? tabId} chat={live} actions={actions} onSuggest={(text) => setDraft({ text })} mentor={!!mentor || !!live?.workshop} review={mentor?.kind === "review"} />
+        <Transcript
+          key={live?.chatId ?? notebook.key ?? tabId}
+          chat={live}
+          notebook={notebook}
+          hasAttached={attached.length > 0}
+          actions={actions}
+          onSuggest={(text) => setDraft({ text })}
+          mentor={!!mentor || !!live?.workshop}
+          review={mentor?.kind === "review"}
+          searchHits={new Set(matchedMsgIds)}
+          activeSearchId={activeSearchMsgId}
+        />
       )}
 
-      {live?.error && <div class="banner error">{live.error}</div>}
+      {live?.error && live.error !== dismissedError && (
+        <div class="banner error" role="alert">
+          <span>{live.error}</span>
+          {lastUser !== null && (
+            <button class="linkish" disabled={composerDisabled} title="Send your last message again, unchanged" onClick={() => void send(lastUser.text, lastUser.cells)}>
+              Send again
+            </button>
+          )}
+          <button class="icon" aria-label="Dismiss" onClick={() => setDismissedError(live.error ?? null)}>
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
       {error && (
         <div class="banner error" role="alert">
           <span>{error}</span>
@@ -305,24 +566,33 @@ export function App() {
       {notebook && (
         <footer class="bottom chat-width">
           {pendingPrompts[0] && <PendingPrompt part={pendingPrompts[0]} more={pendingPrompts.length - 1} actions={actions} />}
-          {pendingReviews.length > 1 && (
-            <div class="bulk">
-              <span>{pendingReviews.length} changes await review</span>
-              <button class="primary small" onClick={() => pendingReviews.forEach((p) => actions.review(p.review.reviewId, true))}>
-                Apply all
-              </button>
-              <button class="secondary small" onClick={() => pendingReviews.forEach((p) => actions.review(p.review.reviewId, false))}>
-                Reject all
-              </button>
+          {pendingReviews.length > 0 && (
+            <ReviewTray
+              reviews={pendingReviews.map((p) => p.review)}
+              onJump={scrollToReview}
+              onApply={(id) => actions.review(id, true)}
+              onReject={(id) => actions.review(id, false)}
+              onOpenDiff={(r) => actions.openReviewDiff?.(r)}
+              lang={lang}
+            />
+          )}
+          {blocked && (
+            <div class="composer-blocked" role="status">
+              <span>{blocked}</span>
+              {!agentReady && <button class="linkish" onClick={manageAgents}>Manage agents…</button>}
+              {signIn && <span class="composer-signin">{signIn}</span>}
             </div>
           )}
           <Composer
             history={history}
             running={running}
+            queued={queuedCount}
             draft={draft}
             focusAt={attachedAt}
-            placeholder={mentor ? "Trao đổi với mentor…" : attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}…`}
-            disabled={changingOption || !live || live.agentId !== prefs.agentId || live.status === "starting" || !agentReady}
+            placeholder={mentor ? "Trao đổi với mentor…" : attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}… (type / for commands)`}
+            disabled={composerDisabled}
+            customSlash={prefs.slashTemplates}
+            onSlash={handleSlashCommand}
             onSend={send}
             onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
             context={
@@ -365,7 +635,7 @@ export function App() {
                         { value: MANAGE, label: "Manage agents…", title: "Add or change agents in Settings" },
                       ]}
                       onChange={(id) => {
-                        if (id === MANAGE) void run(client.request("studio.open", { view: "settings", section: "agents" }));
+                        if (id === MANAGE) manageAgents();
                         else setPrefs({ agentId: id });
                       }}
                     />
@@ -381,6 +651,19 @@ export function App() {
                       )}
                     </div>
                   ))}
+                  <div class="option-row">
+                    <span class="option-name">{t("options.language", lang)}</span>
+                    <Picker
+                      label={t("options.language", lang)}
+                      value={prefs.language ?? "auto"}
+                      options={[
+                        { value: "auto", label: "Auto" },
+                        { value: "en", label: "English" },
+                        { value: "vi", label: "Tiếng Việt" },
+                      ]}
+                      onChange={(v) => setPrefs({ language: v as LangPref })}
+                    />
+                  </div>
                 </OptionsMenu>
               </>
             }
@@ -446,19 +729,24 @@ function Picker({ label, value, options, onChange, disabled, title, class: cls }
   );
 }
 
-function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror, code, onPushCode }: {
+function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror, onOpenChrome, onSearch, onExport, code, onPushCode, lang }: {
   notebook: NotebookInfo;
   machine?: MachineStats;
   tabId: number | null;
   choices: NotebookChoice[];
   onPick: (tabId: number) => void;
   onMirror: () => void;
+  onOpenChrome: () => void;
+  onSearch?: () => void;
+  onExport?: () => void;
   code?: ChatCode;
   onPushCode: () => void;
+  lang: UiLang;
 }) {
   const chrome = tabId !== null && tabId < 0;
   const hasCurrentChoice = choices.some((choice) => choice.tabId === tabId);
   const resources = machineResources(machine);
+  const hint = kernelHint(notebook.platform, notebook.kernel);
   return (
     <header class="notebook-header">
       <div class="notebook-header-body chat-width">
@@ -478,16 +766,32 @@ function NotebookHeader({ notebook, machine, tabId, choices, onPick, onMirror, c
           <div class="notebook-meta">
             <span>{PLATFORM[notebook.platform]}{chrome ? " in Chrome" : ""}</span>
             {notebook.cellCount > 0 && <span>{notebook.cellCount} {notebook.cellCount === 1 ? "cell" : "cells"}</span>}
-            <span class="kernel-state">
+            <span class="kernel-state" title={hint ?? undefined} tabIndex={hint ? 0 : undefined}>
               <span class={`kdot k-${notebook.kernel}`} aria-hidden="true" />
               Kernel {notebook.kernel}
             </span>
             {code && <span><CodeState code={code} onPush={onPushCode} /></span>}
             {resources.map((resource) => <ResourceChip key={resource.key} resource={resource} at={machine!.at} />)}
+            {hint && <span class="kernel-hint">{hint}</span>}
           </div>
         </div>
+        {onSearch && (
+          <button class="ctx-btn" title={t("header.search", lang)} aria-label={t("header.search", lang)} onClick={onSearch}>
+            <Icon name="search" />
+          </button>
+        )}
+        {onExport && (
+          <button class="ctx-btn" title={t("header.export", lang)} aria-label={t("header.export", lang)} onClick={onExport}>
+            <Icon name="download" />
+          </button>
+        )}
+        {notebook.url && notebook.platform !== "vscode" && (
+          <button class="ctx-btn notebook-chrome" title={t("header.openChrome", lang)} aria-label="Open in Chrome" onClick={onOpenChrome}>
+            <Icon name="globe" />
+          </button>
+        )}
         {chrome && (
-          <button class="ctx-btn notebook-mirror" title="Open this notebook in VS Code: edits and runs go to the Chrome tab" aria-label="Open in VS Code" onClick={onMirror}>
+          <button class="ctx-btn notebook-mirror" title={t("header.openMirror", lang)} aria-label="Open in VS Code" onClick={onMirror}>
             <Icon name="open" />
           </button>
         )}
@@ -667,10 +971,32 @@ const MENTOR_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
   { icon: "notebook", label: "Kể lại công thức", text: "Mình hiểu công thức này như sau: " },
 ];
 
-function Transcript({ chat, actions, onSuggest, mentor = false, review = false }: { chat: ChatSnapshot | null; actions: PartActions; onSuggest: (text: string) => void; mentor?: boolean; review?: boolean }) {
+function Transcript({
+  chat,
+  notebook,
+  hasAttached = false,
+  actions,
+  onSuggest,
+  mentor = false,
+  review = false,
+  searchHits,
+  activeSearchId,
+}: {
+  chat: ChatSnapshot | null;
+  notebook?: NotebookInfo | null;
+  hasAttached?: boolean;
+  actions: PartActions;
+  onSuggest: (text: string) => void;
+  mentor?: boolean;
+  review?: boolean;
+  searchHits?: Set<string>;
+  activeSearchId?: string | null;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const searchingRef = useRef(false);
+  searchingRef.current = !!searchHits?.size;
   const [behind, setBehind] = useState(false);
   const hasMessages = !!chat?.messages.length;
 
@@ -678,7 +1004,7 @@ function Transcript({ chat, actions, onSuggest, mentor = false, review = false }
     const el = ref.current;
     if (!el || !content.current) return;
     const follow = () => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (stick.current && !searchingRef.current) el.scrollTop = el.scrollHeight;
     };
     // Streaming text, images and changes to the composer can all resize the view.
     const observer = new ResizeObserver(follow);
@@ -707,10 +1033,11 @@ function Transcript({ chat, actions, onSuggest, mentor = false, review = false }
     );
   }
   if (!chat || !hasMessages) {
+    const dynamic = contextualSuggestions({ notebook, usage: chat?.usage, hasAttached });
     return (
       <Welcome title="What are you working on?" text={<p>Ask about your notebook, or get help editing and running cells.</p>}>
         <div class="suggestions">
-          {SUGGESTIONS.map((s) => (
+          {dynamic.map((s) => (
             <button key={s.text} class="suggestion" onClick={() => onSuggest(s.text)}>
               <Icon name={s.icon} /><span>{s.label}</span><Icon name="chev-r" />
             </button>
@@ -722,10 +1049,14 @@ function Transcript({ chat, actions, onSuggest, mentor = false, review = false }
   const running = chat.status === "running";
   const last = chat.messages.at(-1);
   const liveId = running && last?.role === "agent" ? last.id : null;
+  const queued = queuedMessageIds(chat.messages, chat.status);
+  const separators = dateSeparators(chat.messages);
   return (
     <div class="transcript-wrap">
       <div
         class="transcript"
+        role="log"
+        aria-label="Chat transcript"
         ref={ref}
         onScroll={(e) => {
           const el = e.currentTarget as HTMLDivElement;
@@ -735,11 +1066,22 @@ function Transcript({ chat, actions, onSuggest, mentor = false, review = false }
       >
         <div class="transcript-content chat-width" ref={content}>
           {chat.messages.map((m) => (
-            <Message key={m.id} msg={m} actions={actions} live={m.id === liveId} />
+            <Fragment key={m.id}>
+              {separators.has(m.id) && <div class="date-sep" role="separator"><span>{separators.get(m.id)}</span></div>}
+              <Message
+                msg={m}
+                actions={actions}
+                live={m.id === liveId}
+                queued={queued.has(m.id)}
+                highlight={!!searchHits?.has(m.id)}
+                activeHit={activeSearchId === m.id}
+              />
+            </Fragment>
           ))}
           {running && (
             <div class="working" role="status">
               <span class="dots" aria-hidden="true"><i /><i /><i /></span> Working <Elapsed since={last?.role === "agent" ? last.createdAt : Date.now()} />
+              {queued.size > 0 && <span>· {queued.size} queued</span>}
             </div>
           )}
         </div>
@@ -761,23 +1103,35 @@ function Transcript({ chat, actions, onSuggest, mentor = false, review = false }
   );
 }
 
-function Composer({ history, running, disabled, draft, focusAt, placeholder, onSend, onStop, context, tools }: {
+function Composer({ history, running, queued, disabled, draft, focusAt, placeholder, customSlash, onSlash, onSend, onStop, context, tools }: {
   history: string[];
   running: boolean;
+  /** User messages waiting behind the current turn; Stop asks before discarding them. */
+  queued: number;
   disabled: boolean;
   /** Text put in the box from outside (a suggestion); a new object each time. */
   draft: { text: string } | null;
   /** Changes when the box should take the focus (cells were attached). */
   focusAt: number;
   placeholder: string;
+  customSlash?: Prefs["slashTemplates"];
+  onSlash?: (cmd: SlashCommand) => void;
   onSend: (t: string) => Promise<boolean>;
   onStop: () => void;
   context: ComponentChildren;
   tools: ComponentChildren;
 }) {
   const [text, setText] = useState("");
+  const [slashIdx, setSlashIdx] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(false);
+  /** Stop with a queue asks once, inline (the Undo pattern), before discarding it. */
+  const [confirmStop, setConfirmStop] = useState(false);
+  const slashMatches = useMemo(() => matchSlashCommands(text, customSlash), [text, customSlash]);
+  useEffect(() => { setSlashIdx(0); }, [text]);
+  useEffect(() => {
+    if (!running || queued === 0) setConfirmStop(false);
+  }, [running, queued]);
   /** Position in `history` while recalling earlier prompts with the arrow keys. */
   const recall = useRef<number | null>(null);
   useEffect(() => {
@@ -789,9 +1143,20 @@ function Composer({ history, running, disabled, draft, focusAt, placeholder, onS
   useEffect(() => {
     if (focusAt) area.current?.focus();
   }, [focusAt]);
+  const pickSlash = (cmd: SlashCommand) => {
+    setText("");
+    recall.current = null;
+    onSlash?.(cmd);
+    area.current?.focus();
+  };
   const submit = async () => {
     const t = text.trim();
     if (!t || disabled || sending.current) return;
+    const exact = slashMatches.find((c) => c.name.toLowerCase() === t.toLowerCase());
+    if (exact && onSlash) {
+      pickSlash(exact);
+      return;
+    }
     sending.current = true;
     recall.current = null;
     setText("");
@@ -805,6 +1170,23 @@ function Composer({ history, running, disabled, draft, focusAt, placeholder, onS
   const sendLabel = running ? "Queue follow-up" : "Send";
   return (
     <div class="composer" onClick={(e) => { if (e.target === e.currentTarget) area.current?.focus(); }}>
+      {slashMatches.length > 0 && onSlash && (
+        <div class="slash-menu" role="listbox" aria-label="Slash commands">
+          {slashMatches.map((cmd, idx) => (
+            <button
+              key={cmd.name}
+              type="button"
+              role="option"
+              aria-selected={idx === slashIdx}
+              class={`slash-item${idx === slashIdx ? " active" : ""}`}
+              onMouseDown={(e) => { e.preventDefault(); pickSlash(cmd); }}
+            >
+              <span class="slash-name">{cmd.name}</span>
+              <span class="slash-desc">{cmd.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {context}
       <textarea
         ref={area}
@@ -818,6 +1200,16 @@ function Composer({ history, running, disabled, draft, focusAt, placeholder, onS
         }}
         onKeyDown={(e) => {
           if (e.isComposing) return;
+          if (slashMatches.length > 0 && onSlash) {
+            if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
+            if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
+            if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+              e.preventDefault();
+              pickSlash(slashMatches[slashIdx % slashMatches.length]!);
+              return;
+            }
+            if (e.key === "Escape") { e.preventDefault(); setText(""); return; }
+          }
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             void submit();
@@ -839,11 +1231,23 @@ function Composer({ history, running, disabled, draft, focusAt, placeholder, onS
           }
         }}
       />
+      {confirmStop && (
+        <div class="stop-confirm">
+          <span>Stop and discard {queued} queued message{queued === 1 ? "" : "s"}?</span>
+          <button class="stop small" onClick={() => { setConfirmStop(false); onStop(); }}>Stop</button>
+          <button class="secondary small" onClick={() => setConfirmStop(false)}>Keep</button>
+        </div>
+      )}
       <div class="toolbar">
         <div class="toolbar-options">{tools}</div>
         <div class="toolbar-actions">
           {running && (
-            <button class="send stop-agent" onClick={onStop} title="Stop the agent" aria-label="Stop">
+            <button
+              class="send stop-agent"
+              onClick={() => { if (queued > 0 && !confirmStop) setConfirmStop(true); else onStop(); }}
+              title={queued > 0 && !confirmStop ? "Stop the agent (asks about the queued messages)" : "Stop the agent"}
+              aria-label="Stop"
+            >
               <Icon name="stop" />
             </button>
           )}
@@ -916,7 +1320,200 @@ function OptionsMenu({ label, children }: { label: string; children: ComponentCh
   );
 }
 
-function Setup({ bridge }: { bridge: BridgeState }) {
+function PinnedBar({ messages, onJump, onUnpin, lang }: { messages: ChatSnapshot["messages"]; onJump: (id: string) => void; onUnpin: (id: string) => void; lang: UiLang }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div class="pinned-bar chat-width">
+      <button class="linkish pinned-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name="pin" /> {t("pinned.title", lang)} ({messages.length}) <Icon name={open ? "chev-d" : "chev-r"} />
+      </button>
+      {open && (
+        <div class="pinned-list">
+          {messages.map((m) => {
+            const preview = m.parts.map((p) => (p.type === "text" ? p.text : "")).join(" ").replace(/\s+/g, " ").trim().slice(0, 90) || "(message)";
+            return (
+              <div key={m.id} class="pinned-item">
+                <button class="linkish pinned-jump" onClick={() => onJump(m.id)}>
+                  <span class="muted small">{m.role === "user" ? "You" : "Agent"}:</span> {preview}
+                </button>
+                <button class="icon" aria-label={t("msg.unpin", lang)} title={t("msg.unpin", lang)} onClick={() => onUnpin(m.id)}>
+                  <Icon name="close" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReviewTray({
+  reviews,
+  onJump,
+  onApply,
+  onReject,
+  onOpenDiff,
+  lang,
+}: {
+  reviews: ReviewInfo[];
+  onJump: (reviewId: string) => void;
+  onApply: (reviewId: string) => void;
+  onReject: (reviewId: string) => void;
+  onOpenDiff: (r: ReviewInfo) => void;
+  lang: UiLang;
+}) {
+  const [open, setOpen] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const totals = useMemo(() => {
+    let added = 0;
+    let removed = 0;
+    const per = reviews.map((r) => {
+      const s = diffStats(diffLines(r.before, r.after));
+      added += s.added;
+      removed += s.removed;
+      return { r, ...s };
+    });
+    return { added, removed, per };
+  }, [reviews]);
+
+  if (reviews.length === 1 && !open) {
+    return (
+      <div class="bulk review-tray">
+        <button class="linkish small" onClick={() => onJump(reviews[0]!.reviewId)}>
+          1 change awaits review ({t("review.shortcutHint", lang)})
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div class="bulk review-tray">
+      <div class="review-tray-head">
+        <button class="linkish" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <Icon name={open ? "chev-d" : "chev-r"} /> {reviews.length} {t("review.trayTitle", lang)}
+          <span class="stats">
+            {" "}<span class="add">+{totals.added}</span> <span class="del">−{totals.removed}</span>
+          </span>
+        </button>
+        <div class="review-tray-actions">
+          {confirmAll ? (
+            <>
+              <span class="small">Apply {reviews.length} cells (+{totals.added}/−{totals.removed})?</span>
+              <button class="primary small" onClick={() => { setConfirmAll(false); reviews.forEach((r) => onApply(r.reviewId)); }}>
+                {t("review.confirmApply", lang)}
+              </button>
+              <button class="secondary small" onClick={() => setConfirmAll(false)}>
+                {t("review.cancel", lang)}
+              </button>
+            </>
+          ) : (
+            <>
+              <button class="primary small" onClick={() => setConfirmAll(true)}>
+                {t("review.applyAll", lang)}
+              </button>
+              <button class="secondary small" onClick={() => reviews.forEach((r) => onReject(r.reviewId))}>
+                {t("review.rejectAll", lang)}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {open && (
+        <div class="review-tray-list">
+          {totals.per.map(({ r, added, removed }) => (
+            <div key={r.reviewId} class="review-tray-row">
+              <button class="linkish review-tray-item" onClick={() => onJump(r.reviewId)}>
+                <span>{r.kind} · {r.cellType} {r.index !== undefined ? `[${r.index}]` : r.cellId.slice(0, 8)}</span>
+                {r.label && <span class="muted small"> {r.label}</span>}
+              </button>
+              <span class="stats"><span class="add">+{added}</span> <span class="del">−{removed}</span></span>
+              <button class="linkish small" onClick={() => onOpenDiff(r)}>Diff</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectionChecklist({
+  bridge,
+  notebook,
+  agentReady,
+  agentName,
+  onManageAgents,
+  lang,
+}: {
+  bridge: BridgeState;
+  notebook: NotebookInfo | null;
+  agentReady: boolean;
+  agentName: string;
+  onManageAgents: () => void;
+  lang: UiLang;
+}) {
+  const client = usePanelHost();
+  const bridgeOk = bridge.conn === "connected";
+  const chromeOk = !!bridge.browserConnected;
+  const nbOk = !!notebook;
+  const kernelOk = !!notebook && notebook.kernel !== "disconnected" && notebook.kernel !== "unknown";
+  const row = (ok: boolean, label: string, detail: string, action?: ComponentChildren) => (
+    <li class={`doctor-row ${ok ? "ok" : "miss"}`}>
+      <span class="doctor-mark" aria-hidden="true">{ok ? "✓" : "✗"}</span>
+      <span class="doctor-label">{label}</span>
+      <span class="doctor-detail muted small">{detail}</span>
+      {action}
+    </li>
+  );
+  return (
+    <div class="doctor">
+      <div class="doctor-title">{t("doctor.title", lang)}</div>
+      <ul class="doctor-list">
+        {row(
+          bridgeOk,
+          t("doctor.bridge", lang),
+          bridgeOk ? (bridge.bridgeVersion ? `v${bridge.bridgeVersion}` : "connected") : bridge.conn,
+          !bridgeOk && (
+            <button class="linkish small" onClick={() => void client.copy("pnpm ainb install")}>
+              {t("setup.copyInstall", lang)}
+            </button>
+          ),
+        )}
+        {row(
+          chromeOk,
+          t("doctor.chrome", lang),
+          chromeOk ? "connected" : "optional for local .ipynb",
+          bridgeOk && !chromeOk && (
+            <button class="linkish small" onClick={() => void client.copy("chrome://extensions")}>
+              {t("doctor.copyExt", lang)}
+            </button>
+          ),
+        )}
+        {row(
+          nbOk,
+          t("doctor.notebook", lang),
+          nbOk ? notebook!.title : "none open",
+          bridgeOk && !nbOk && (
+            <span class="doctor-links">
+              <button class="linkish small" onClick={() => void client.openLink("https://colab.research.google.com")}>{t("doctor.openColab", lang)}</button>
+              <button class="linkish small" onClick={() => void client.openLink("https://www.kaggle.com/code")}>{t("doctor.openKaggle", lang)}</button>
+            </span>
+          ),
+        )}
+        {nbOk && row(kernelOk, t("doctor.kernel", lang), notebook!.kernel)}
+        {bridgeOk && row(
+          agentReady,
+          t("doctor.agent", lang),
+          agentReady ? agentName : "none available",
+          !agentReady && (
+            <button class="linkish small" onClick={onManageAgents}>{t("doctor.manageAgents", lang)}</button>
+          ),
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function Setup({ bridge, lang, onManageAgents }: { bridge: BridgeState; lang: UiLang; onManageAgents: () => void }) {
   const client = usePanelHost();
   const [error, setError] = useState<string>();
   const busy = bridge.conn === "connecting";
@@ -926,14 +1523,16 @@ function Setup({ bridge }: { bridge: BridgeState }) {
   };
   return (
     <div class="setup pad">
-      <h1>Connect to the bridge</h1>
-      <p>The agents run on your computer through a small local bridge. It starts by itself once <code>pnpm ainb install</code> has been run.</p>
+      <h1>{t("setup.title", lang)}</h1>
+      <p>{t("setup.desc", lang)} It starts by itself once <code>pnpm ainb install</code> has been run.</p>
       {busy ? <p role="status">Starting the bridge…</p> : <p role="status" class={`status ${bridge.conn}`}>{error ?? bridge.error}</p>}
       <div class="row-actions">
-        <button class="primary" disabled={busy} onClick={() => connect("config.auto")}>{bridge.conn === "replaced" ? "Connect here" : "Start the bridge"}</button>
-        <button class="secondary" disabled={busy} onClick={() => connect("config.prompt")}>Enter pairing token</button>
-        {bridge.config.source === "manual" && <button class="linkish" disabled={busy} onClick={() => connect("config.reset")}>Use local configuration</button>}
+        <button class="primary" disabled={busy} onClick={() => connect("config.auto")}>{bridge.conn === "replaced" ? t("setup.connectHere", lang) : t("setup.start", lang)}</button>
+        <button class="secondary" disabled={busy} onClick={() => connect("config.prompt")}>{t("setup.enterToken", lang)}</button>
+        <button class="linkish" onClick={() => void client.copy("pnpm ainb install")}>{t("setup.copyInstall", lang)}</button>
+        {bridge.config.source === "manual" && <button class="linkish" disabled={busy} onClick={() => connect("config.reset")}>{t("setup.useLocal", lang)}</button>}
       </div>
+      <ConnectionChecklist bridge={bridge} notebook={null} agentReady={false} agentName="" onManageAgents={onManageAgents} lang={lang} />
     </div>
   );
 }
@@ -948,4 +1547,10 @@ function projectTitle(p: ChatProject): string {
 
 function choiceLabel(c: NotebookChoice): string {
   return `${PLATFORM[c.platform]} · ${c.title}${c.place === "chrome" ? " (Chrome)" : ""}`;
+}
+
+/** Cells merged by id, the first list's order first: Edit puts cells back that the host does not track. */
+function mergeCells(a: AttachedCell[], b: AttachedCell[]): AttachedCell[] {
+  const seen = new Set(a.map((c) => c.cellId));
+  return [...a, ...b.filter((c) => !seen.has(c.cellId))];
 }

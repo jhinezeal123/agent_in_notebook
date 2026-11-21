@@ -68,9 +68,11 @@ export class MentorSession {
     this.mentor.record({ t: "void", attemptId: this.attemptId, reason: reason.slice(0, 500) });
   }
 
-  /** Probing answers that finish the defence (a review has none). */
+  /** Probing answers that finish the defence (a review has none; an interview asks at least 2). */
   get probesNeeded(): number {
-    return this.attempt.kind === "review" ? 0 : this.exercise.probes;
+    if (this.attempt.kind === "review") return 0;
+    if (this.attempt.kind === "interview") return Math.max(2, this.exercise.probes);
+    return this.exercise.probes;
   }
 
   /** Notes for the agent's next turn (the learner moved a step themself). */
@@ -113,7 +115,7 @@ export class MentorSession {
     return stage === "done" ? this.attempt.result : undefined;
   }
 
-  /** A verdict: passing moves to the defence (a review is then done, and its result returned). */
+  /** A verdict: passing moves to the defence (a review is then done; an interview finishes if probes are already done). */
   judged(verdict: MentorVerdict): MentorResult | undefined {
     this.verdict = verdict;
     this.mentor.record({
@@ -121,11 +123,14 @@ export class MentorSession {
       ...(verdict.error ? { error: verdict.error } : {}), ...(verdict.metrics?.length ? { metrics: verdict.metrics } : {}),
     });
     if (!verdict.ok || (this.stage !== "lab" && this.stage !== "build")) return undefined;
-    return this.setStage(this.attempt.kind === "review" ? "done" : "defend", "judge");
+    if (this.attempt.kind === "review") return this.setStage("done", "judge");
+    if (this.attempt.kind === "interview" && this.attempt.probes.length >= this.probesNeeded) return this.setStage("done", "judge");
+    return this.setStage("defend", "judge");
   }
 
-  /** The learner pressed "Xin gợi ý": one level up, to the reference solution at most. */
+  /** The learner pressed "Xin gợi ý": one level up, to the reference solution at most (disabled in mock interview). */
   raiseHint(): number {
+    if (this.attempt.kind === "interview") throw new StageRefused("Phỏng vấn thử không có gợi ý: tự viết từ trang trắng.");
     const level = Math.min(MENTOR_HINT_MAX, this.attempt.hintLevel + 1);
     if (level === this.attempt.hintLevel) return level;
     this.mentor.record({ t: "hint", attemptId: this.attemptId, level });
@@ -134,7 +139,7 @@ export class MentorSession {
 
   probe(grade: 0 | 1 | 2, question: string, tag?: string): void {
     if (this.attempt.kind === "review") throw new StageRefused("A review has no defence: nothing to grade (use mentor_recall for the warm-up questions).");
-    if (this.stage !== "defend") throw new StageRefused("Probing questions are graded in the defence step only (after the judge passes).");
+    if (this.attempt.kind !== "interview" && this.stage !== "defend") throw new StageRefused("Probing questions are graded in the defence step only (after the judge passes).");
     this.mentor.record({ t: "probe", attemptId: this.attemptId, grade, question: question.slice(0, 500), ...(tag ? { tag } : {}) });
   }
 

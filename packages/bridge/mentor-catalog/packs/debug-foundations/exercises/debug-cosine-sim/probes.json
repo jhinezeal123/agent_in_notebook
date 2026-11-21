@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Nếu nhân toàn bộ ma trận Y lên 10 lần mà ma trận similarity cũng tăng gấp 10 lần, điều đó nói lên lỗi gì?",
+    "tag": "dbg-cosine-scale-invariance",
+    "answer": "Y chưa được chia cho chuẩn L2 của từng hàng, nên phép tích vô hướng vẫn phụ thuộc vào độ lớn của Y.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Vì sao ta dùng max(||v||, eps) thay vì cộng trực tiếp ||v|| + eps?",
+    "tag": "dbg-cosine-max-vs-add",
+    "answer": "Cộng eps làm sai lệch nhẹ ngay cả khi ||v|| lớn hoặc vừa, còn max(||v||, eps) chỉ chặn mẫu số bằng 0 khi vector có chuẩn nhỏ hơn eps.",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu một hàng của X là vector 0 toàn bộ, kết quả hàng tương ứng trong ma trận cosine phải là gì và không được ra giá trị nào?",
+    "tag": "dbg-cosine-zero-row",
+    "answer": "Phải bằng 0 trên toàn hàng đó và không được sinh ra NaN hay inf.",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Nếu chuẩn hóa sai trục (axis=0 thay vì axis=1), lỗi này sẽ lộ ra thế nào trên ma trận N != D?",
+    "tag": "dbg-cosine-wrong-axis",
+    "answer": "Vector chuẩn sẽ có độ dài D thay vì N, không chia đúng theo từng vector hàng và làm đường chéo của cosine_sim(X, X) khác 1.",
+    "kind": "break",
+    "stage": "defend"
+  }
+]

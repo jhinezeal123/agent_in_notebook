@@ -305,7 +305,7 @@ describe("OpRunner", () => {
 describe("running code without a cell", () => {
   it("passes execute to the adapter and leaves the notebook alone", async () => {
     const { adapter, runner, events } = setup();
-    expect(await runner.run({ op: "execute", code: "1 + 1", waitMs: 1000 })).toEqual({ status: "ok", outputs: [{ kind: "result", text: "1 + 1", mimes: undefined }] });
+    expect(await runner.run({ op: "execute", code: "1 + 1", waitMs: 1000 })).toEqual({ status: "ok", outputs: [{ kind: "result", text: "1 + 1", mimes: undefined }], gen: 0 });
     expect(adapter.executed).toEqual(["1 + 1"]);
     expect(adapter.cells).toHaveLength(3);
     expect(events).toEqual([]);
@@ -323,6 +323,7 @@ describe("running code without a cell", () => {
       status: "error",
       outputs: [{ kind: "result", text: "slow()", mimes: undefined }],
       message: "KeyboardInterrupt: ",
+      gen: 0,
     });
     // Collected: it is gone now.
     await expect(runner.run({ op: "execute_wait", execId: first.execId!, waitMs: 10 })).rejects.toThrow(/No execution/);

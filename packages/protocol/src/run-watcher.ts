@@ -1,7 +1,9 @@
 // Watches only the run state the editors already expose, so every adapter shares it.
-// A fast run can be missed after a kernel restart if it reuses the old execution count,
-// or when a cell is created and finishes within one tick. Chrome may throttle a hidden
-// tab's timer to about once a minute: those events arrive late, not in a different order.
+// An adapter that witnesses runs itself (Jupyter's futures) also hands over a runToken,
+// which catches a fast run reusing the old execution count after a kernel restart and a
+// cell created and finished within one tick. Without a token those two can still be missed.
+// Chrome may throttle a hidden tab's timer to about once a minute: those events arrive
+// late, not in a different order.
 
 import { capText, firstLine, textHash } from "./text.js";
 import type { CellInfo, CellRun, CellRunState } from "./notebook.js";
@@ -24,6 +26,8 @@ interface KnownRun {
   sourceHash?: string;
   /** Last source seen before this run, including a fast run never seen running. */
   lastSourceHash?: string;
+  /** The adapter's evidence of the last run seen, when it has one (see CellRunState.runToken). */
+  runToken?: string;
 }
 
 export class RunWatcher {
@@ -53,7 +57,15 @@ export class RunWatcher {
     for (const s of states) {
       const prev = this.known.get(s.cellId);
       if (!prev) {
-        this.known.set(s.cellId, this.initial(s, now));
+        const fresh = this.initial(s, now);
+        this.known.set(s.cellId, fresh);
+        // A cell that appeared already finished, with a token: the page witnessed its
+        // run within one tick. A pasted or undone old cell has no token, so stays quiet.
+        if (s.runToken && !s.running && s.executionCount != null) {
+          this.finished(s, fresh, now);
+          fresh.startedAt = undefined;
+          fresh.sourceHash = undefined;
+        }
         continue;
       }
       if (s.running && !prev.running) {
@@ -62,7 +74,9 @@ export class RunWatcher {
         prev.lastSourceHash = prev.sourceHash;
       }
       const finished = (prev.running && !s.running)
-        || (!prev.running && !s.running && s.executionCount !== null && s.executionCount !== prev.count);
+        || (!prev.running && !s.running && s.executionCount !== null && s.executionCount !== prev.count)
+        // A new token is a new run even when the count repeats (kernel restart).
+        || (!s.running && !!s.runToken && !!prev.runToken && s.runToken !== prev.runToken);
       if (finished) {
         this.finished(s, prev, now);
         prev.startedAt = undefined;
@@ -70,6 +84,7 @@ export class RunWatcher {
       }
       prev.running = s.running;
       prev.count = s.executionCount;
+      prev.runToken = s.runToken;
     }
 
     const alive = new Set(states.map((s) => s.cellId));
@@ -89,11 +104,36 @@ export class RunWatcher {
       startedAt: s.running ? now : undefined,
       sourceHash: s.running ? sourceHash : undefined,
       lastSourceHash: sourceHash,
+      runToken: s.runToken,
     };
   }
 
+  /**
+   * Forget what was seen and prime again from the current states, without
+   * emitting: after a kernel reconnect the old counts and hashes no longer
+   * describe what a run means. A states read failure keeps the old knowledge.
+   */
+  reprime(): void {
+    let states: CellRunState[];
+    try {
+      states = this.deps.states();
+    } catch {
+      return;
+    }
+    const now = this.deps.now?.() ?? Date.now();
+    this.known.clear();
+    this.ranHash.clear();
+    for (const s of states) this.known.set(s.cellId, this.initial(s, now));
+    this.primed = true;
+  }
+
   isStale(cellId: string, source: string): boolean {
-    return this.ranHash.has(cellId) && this.ranHash.get(cellId) !== textHash(source);
+    return this.isStaleHash(cellId, textHash(source));
+  }
+
+  /** Like isStale, for a caller that already hashed the full source (a sourceHash read). */
+  isStaleHash(cellId: string, hash: string): boolean {
+    return this.ranHash.has(cellId) && this.ranHash.get(cellId) !== hash;
   }
 
   /** Capture an op's source before runCell can let the user edit it. */

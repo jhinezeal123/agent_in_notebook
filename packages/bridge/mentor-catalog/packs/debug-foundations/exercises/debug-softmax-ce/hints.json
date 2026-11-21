@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_large_logits",
+    "text": "Khi giá trị lớn nhất của z là 1000, kết quả của np.exp(z) là gì? Làm sao đưa số mũ lớn nhất về 0 trước khi gọi exp?"
+  },
+  {
+    "level": 0,
+    "test": "test_axis",
+    "text": "Nếu z là ma trận 2D vuông và axis=0, phép trừ z - z.max(...) có broadcast đúng chiều nếu thiếu keepdims không?"
+  },
+  {
+    "level": 1,
+    "text": "Dịch logits bằng cách trừ giá trị lớn nhất trên trục `axis` (giữ chiều), rồi tính log_softmax trực tiếp bằng hiệu giữa logits đã dịch và log-sum-exp thay vì lấy log của thương."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở công thức log-sum-exp",
+    "text": "s = z - max(z theo axis, keepdims=True)\nlog_softmax = s - log(sum(exp(s) theo axis, keepdims=True))"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở dòng log_softmax",
+    "text": "```python\ns = z - z.max(axis=axis, keepdims=True)\nreturn s - np.log(np.exp(s).sum(axis=axis, keepdims=True))\n```"
+  }
+]

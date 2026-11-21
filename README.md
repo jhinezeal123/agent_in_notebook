@@ -116,7 +116,7 @@ Mỗi notebook thuộc về **một project** của OpenResearch. Notebook chưa
   - Bridge đặt **token GitHub của OpenResearch** (`gh auth token`) lên VM, vào file `~/.ainb-git-credentials` mà Git dùng để xác thực. VM clone nhánh đó vào một checkout riêng dưới `~/.ainb-projects/`, trong một phiên terminal riêng. Chat hiển thị đường dẫn checkout.
   - Agent sửa, chạy và commit code ngay trên VM bằng tool quen thuộc của nó; cần nhánh khác thì tự `git fetch`. Shared artifacts và kết quả thử nghiệm thì qua tool `project` của bridge.
   - **Sau mỗi lượt**, VM commit phần còn lại và push nhánh; bridge kéo về worktree trên máy bạn. Khi bạn tự chạy cell, code cũng được tự lưu **10 phút một lần** nếu có hoạt động và agent không bận. Chat chỉ báo khi thật sự có thay đổi được lưu. Mục **Chat Worktree** ở thanh bên phải hiện worktree đó; nút **Changes** liệt kê file đã đổi. File trên 50 MB ở lại trên VM.
-  - Khi Colab/Kaggle cấp một máy mới (khác boot id), chat hiện thẻ **The notebook's machine was replaced** với nút **Restore**. Restore chạy lại kernel setup script của project, clone lại code rồi hỏi có chạy lại các cell theo thứ tự từng chạy trên máy cũ không. **Biến trong bộ nhớ không được khôi phục** — chỉ chạy lại cell mới tạo lại được chúng. Thư viện đã cài, file ngoài thư mục code của project và file trên 50 MB không được lưu; phần làm giữa hai lần tự lưu (tối đa khoảng 10 phút) có thể mất.
+  - Khi Colab/Kaggle cấp một máy mới (khác boot id), chat tự reset trạng thái máy (terminal, file notebook, code) và báo agent ở lượt kế tiếp rằng thư viện đã cài, file ngoài code và biến trong bộ nhớ đã mất; trạng thái code ở header cho biết code sẽ được clone lại ở lượt kế tiếp (hoặc đẩy ngay từ header). Nếu bạn bật tự chạy kernel setup khi kết nối kernel, script của project được chạy lại trên máy mới. **Biến trong bộ nhớ không được khôi phục** — chỉ chạy lại cell mới tạo lại được chúng. Thư viện đã cài, file ngoài thư mục code của project và file trên 50 MB không được lưu; phần làm giữa hai lần tự lưu (tối đa khoảng 10 phút) có thể mất.
   - Kaggle cần bật Internet trong cài đặt notebook thì mới clone được.
   - Project không có GitHub (như Scratch): code không lên máy notebook; chat vẫn dùng được shared artifacts.
 - **Save to project** (nút dưới ô chat, hoặc lệnh trong Command Palette): lưu notebook kèm output vào artifacts của project. Nếu tên file đã thuộc về notebook khác hoặc là bản lưu cũ chưa có danh tính, bản lưu mới dùng tên có hậu tố riêng. Muốn chat Research làm tiếp thì mở một chat Research trong project; nó thấy nhánh `notebook/…` và notebook đã lưu.
@@ -176,6 +176,8 @@ pnpm build
 ```
 
 **Nâng từ bản trước thẻ lỗi (giao thức 3):** page script, bridge và extension VS Code phải cùng dùng giao thức 4 thì thẻ mới hoạt động. Sau `pnpm build`, hãy đóng gói và cài lại extension VS Code ở bước 2, vào `chrome://extensions` chọn **Reload** cho Agent in Notebook rồi reload từng tab notebook, và chạy `pnpm ainb stop` để khởi động lại bridge (VS Code sẽ tự bật bản mới khi cần).
+
+**Nâng từ giao thức 5:** page script, bridge và extension VS Code phải cùng dùng giao thức 6 thì các cờ đọc mới (`sourceHash`, ngân sách ảnh, delta của `execute_wait`) và op `apply_cells` mới hoạt động. Sau `pnpm build`, hãy đóng gói và cài lại extension VS Code ở bước 2, vào `chrome://extensions` chọn **Reload** cho Agent in Notebook rồi reload từng tab notebook, và chạy `pnpm ainb stop` để khởi động lại bridge (VS Code sẽ tự bật bản mới khi cần).
 
 **1. Bridge: đăng ký một lần**
 

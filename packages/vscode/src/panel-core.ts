@@ -40,8 +40,9 @@ export const NO_LOCAL_NOTEBOOKS: LocalNotebooks = {
 /** Panel requests passed to the bridge as they are. */
 const BRIDGE_METHODS = new Set([
   "agents.list", "agents.save", "agents.remove", "agents.test", "chat.get", "chat.send",
-  "chat.cancel", "chat.settings", "chat.option", "chat.answer", "chat.review", "chat.undo", "chat.cardAction", "chat.saveNotebook", "chat.verifyNotebook", "chat.pushCode",
-  "mentor.judge", "mentor.hint", "mentor.stage", "mentor.codeReview", "mentor.report",
+  "chat.cancel", "chat.settings", "chat.option", "chat.answer", "chat.review", "chat.undo", "chat.changes", "chat.pin", "chat.dequeue", "chat.cardAction", "chat.saveNotebook", "chat.verifyNotebook", "chat.pushCode",
+  "chats.search", "research.quota", "research.closeSession",
+  "mentor.status", "mentor.judge", "mentor.hint", "mentor.stage", "mentor.codeReview", "mentor.report",
   "mentor.paper.approve", "mentor.paper.author", "mentor.paper.stopAuthoring",
 ]);
 

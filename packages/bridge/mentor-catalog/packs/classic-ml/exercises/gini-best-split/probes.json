@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Độ bất thuần Gini $G(y) = 1 - \\sum_c p_c^2$ có ý nghĩa xác suất trực giác là gì?",
+    "tag": "cml-gini-prob-meaning",
+    "answer": "Là xác suất chọn ngẫu nhiên 2 mẫu (có hoàn lại) từ nút đó mà chúng thuộc hai lớp khác nhau (tương đương xác suất đoán sai nếu gán nhãn ngẫu nhiên theo phân bố p).",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Vì sao khi tính độ giảm Gini ta phải lấy trung bình **có trọng số** $\\frac{N_L}{N} G(y_L) + \\frac{N_R}{N} G(y_R)$ thay vì trung bình cộng $\\frac{1}{2}(G(y_L) + G(y_R))$?",
+    "tag": "cml-gini-weighted",
+    "answer": "Nếu không có trọng số, cây sẽ chuộng các nhát cắt tách lẻ đúng 1 điểm thuần nhất (G=0) ra khỏi N-1 điểm còn lại vì trung bình 1/2 kéo giảm ảo dù nút lớn gần như không sạch hơn.",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao ta chỉ cần kiểm tra các ngưỡng là trung điểm giữa hai giá trị phân biệt kề nhau thay vì mọi số thực?",
+    "tag": "cml-gini-midpoints",
+    "answer": "Mọi ngưỡng nằm trong khoảng mở giữa hai giá trị dữ liệu liên tiếp đều tạo ra đúng cùng một phân hoạch trái/phải; lấy trung điểm cho lề tách rộng nhất.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Với $K$ lớp cân bằng hoàn toàn ($p_c = 1/K$), Gini đạt cực đại bằng bao nhiêu?",
+    "tag": "cml-gini-max",
+    "answer": "Bằng 1 - 1/K (ví dụ 0.5 cho 2 lớp, 2/3 cho 3 lớp, tiến tới 1 khi K lớn).",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

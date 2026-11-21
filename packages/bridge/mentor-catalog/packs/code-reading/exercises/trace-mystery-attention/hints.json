@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_shapes_general",
+    "text": "Sau khi nhân `X` shape `(B, T, D)` với `Wv` shape `(D, d)`, chiều cuối của `V` và `Y = A @ V` là `D` hay `d`?"
+  },
+  {
+    "level": 0,
+    "test": "test_uniform_weights_match_block",
+    "text": "Ở hàng `i` (đếm từ 0), có bao nhiêu vị trí `j <= i` không bị che thành `-inf`? Khi mọi điểm hợp lệ bằng nhau, mỗi vị trí đó nhận xác suất bao nhiêu?"
+  },
+  {
+    "level": 1,
+    "text": "Q, K, V đều có chiều cuối d; ma trận điểm S và trọng số A có shape (B, T, T). Khi điểm đồng nhất, mỗi hàng i chia đều xác suất 1 trên (i + 1) vị trí đầu tiên (j <= i) và bằng 0 ở phần tam giác trên."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở A_uniform",
+    "text": "Tạo chỉ số hàng i = 0..T-1 và cột j = 0..T-1\nNếu j <= i: giá trị bằng 1 / (i + 1)\nNếu j > i: giá trị bằng 0.0\nHệ số scale của điểm là 1 / căn(d)"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở xây ma trận tam giác",
+    "text": "```python\nrows = np.arange(T)[:, None]\ncols = np.arange(T)[None, :]\nA_uniform = np.where(cols <= rows, 1.0 / (rows + 1.0), 0.0)\n```"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "id": "pca-svd-project",
+  "title": "PCA bằng phân rã SVD",
+  "star": "svd-pca",
+  "skills": [
+    "formula",
+    "tensor"
+  ],
+  "difficulty": 1250,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "pca_fit_transform"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

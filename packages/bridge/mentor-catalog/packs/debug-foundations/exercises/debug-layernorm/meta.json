@@ -1,0 +1,21 @@
+{
+  "id": "debug-layernorm",
+  "title": "Tìm lỗi: LayerNorm sai lệch ở phương sai nhỏ",
+  "star": "debug-softmax-norm",
+  "skills": [
+    "train",
+    "formula"
+  ],
+  "difficulty": 1400,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 2,
+  "functions": [
+    "layer_norm"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "scaffoldFixed": true
+}

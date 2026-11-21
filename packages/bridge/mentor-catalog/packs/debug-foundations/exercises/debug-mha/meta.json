@@ -1,0 +1,21 @@
+{
+  "id": "debug-mha",
+  "title": "Tìm lỗi: tách và gộp head trong Multi-Head Attention bị trộn token",
+  "star": "debug-seq-attn",
+  "skills": [
+    "train",
+    "tensor"
+  ],
+  "difficulty": 1750,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 2,
+  "functions": [
+    "multi_head_attention"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2,
+  "scaffoldFixed": true
+}

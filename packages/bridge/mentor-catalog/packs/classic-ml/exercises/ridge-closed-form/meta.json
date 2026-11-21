@@ -1,0 +1,21 @@
+{
+  "id": "ridge-closed-form",
+  "title": "Nghiệm đóng Ridge Regression (không phạt bias)",
+  "star": "linreg",
+  "skills": [
+    "formula",
+    "tensor"
+  ],
+  "difficulty": 1150,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "ridge_fit",
+    "ridge_predict"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

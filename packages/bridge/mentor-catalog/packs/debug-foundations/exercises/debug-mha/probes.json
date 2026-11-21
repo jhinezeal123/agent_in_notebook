@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao `a.reshape(B, H, T, dh)` chạy không báo lỗi shape nhưng lại sai hoàn toàn về ngữ nghĩa dữ liệu?",
+    "tag": "dbg-mha-reshape-layout",
+    "answer": "Mảng gốc (B, T, D) lưu liên tiếp từng token theo trục T rồi mới đến D. Reshape thẳng sang (B, H, T, dh) chia nửa đầu các token vào head 0 và nửa sau các token vào head 1 thay vì tách trục D thành (H, dh).",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Sau khi tính `w @ v` có shape `(B, H, T, dh)`, nếu gộp lại bằng `.reshape(B, T, D)` mà quên `.transpose(0, 2, 1, 3)` thì điều gì xảy ra?",
+    "tag": "dbg-mha-merge-transpose",
+    "answer": "Các vector của head 0 trên mọi thời điểm bị xếp nối tiếp trước head 1, làm trộn lẫn hoàn toàn thứ tự token và chiều đặc trưng.",
+    "kind": "break",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao lỗi tách/gộp head này hoàn toàn biến mất khi test với `n_heads = 1`?",
+    "tag": "dbg-mha-h1-blind",
+    "answer": "Khi H = 1, trục H chỉ có kích thước 1 nên việc hoán vị giữa T và H trở thành phép đồng nhất về bộ nhớ.",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Trong Multi-Head Attention, hệ số chia cho điểm attention là $\\sqrt{D}$ hay $\\sqrt{D / H}$? Vì sao?",
+    "tag": "dbg-mha-scale-dh",
+    "answer": "Phải chia cho sqrt(D / H) = sqrt(dh), vì mỗi head chỉ lấy tích vô hướng trên không gian con có số chiều dh chứ không phải toàn bộ D.",
+    "kind": "why",
+    "stage": "defend"
+  }
+]

@@ -1,6 +1,6 @@
 // Pure helpers for laying out a transcript message.
 
-import type { Part } from "@ainb/protocol";
+import type { AttachedCell, ChatMessage, ChatStatus, Part } from "@ainb/protocol";
 
 export type ToolPart = Extract<Part, { type: "tool" }>;
 export type Item = { kind: "part"; part: Part } | { kind: "tools"; tools: ToolPart[] };
@@ -71,4 +71,82 @@ export function summarizeTools(tools: ToolPart[]): string {
     }
   }
   return [...counts].map(([action, n]) => (n > 1 ? `${action} ×${n}` : action)).join(" · ");
+}
+
+/**
+ * User messages that have not reached the agent yet. Wire v6 marks queued
+ * messages explicitly (including those waiting behind a notebook job like
+ * Verify/Judge); while a turn runs we also fall back to user messages after
+ * the last agent message so older snapshots behave the same.
+ */
+export function queuedMessageIds(messages: ChatMessage[], status: ChatStatus): Set<string> {
+  const queued = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "user" && m.queued) queued.add(m.id);
+  }
+  if (status !== "running") return queued;
+  let lastAgent = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === "agent") { lastAgent = i; break; }
+  }
+  // No agent message yet (the turn's reply is still empty): nothing to be behind.
+  if (lastAgent < 0) return queued;
+  for (let i = lastAgent + 1; i < messages.length; i++) {
+    const m = messages[i]!;
+    if (m.role === "user") queued.add(m.id);
+  }
+  return queued;
+}
+
+/** The last user message that has text, verbatim with its own attached cells, for "Send again". */
+export function lastUserMessage(messages: ChatMessage[]): { text: string; cells: AttachedCell[] } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== "user") continue;
+    const text = m.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+    if (text.trim()) return { text, cells: m.parts.flatMap((p) => (p.type === "cells" ? p.cells : [])) };
+  }
+  return null;
+}
+
+/** The local calendar day of a timestamp, for telling days apart. */
+function dayKey(at: number): string {
+  const d = new Date(at);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** A day's label in a transcript: "Today", "Yesterday", else the local date. */
+export function dayLabel(at: number, now: number = Date.now()): string {
+  const day = dayKey(at);
+  if (day === dayKey(now)) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (day === dayKey(yesterday.getTime())) return "Yesterday";
+  return new Date(at).toLocaleDateString([], { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+}
+
+/**
+ * Where a transcript crosses into a new local day: message id → the day's label.
+ * The first message gets one only when it is from an earlier day, so a chat
+ * that stays within today reads without dividers.
+ */
+export function dateSeparators(messages: ChatMessage[], now: number = Date.now()): Map<string, string> {
+  const out = new Map<string, string>();
+  let prev: string | null = null;
+  for (const m of messages) {
+    const day = dayKey(m.createdAt);
+    if (prev === null ? day !== dayKey(now) : day !== prev) out.set(m.id, dayLabel(m.createdAt, now));
+    prev = day;
+  }
+  return out;
+}
+
+/** When a message was sent, as a short local time (the user bubble's foot). */
+export function messageTime(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** A message's full local date and time, for its hover title. */
+export function messageTitle(at: number): string {
+  return new Date(at).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }

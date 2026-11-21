@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_bias_not_penalized",
+    "text": "Nếu bạn ghép cột 1 vào X và cộng `lam * I` lên toàn bộ ma trận, phần tử cuối cùng ứng với bias có đang bị phạt không?"
+  },
+  {
+    "level": 0,
+    "test": "test_scaling_by_n_matters",
+    "text": "Trong hàm mục tiêu có hệ số `1/N` ở số hạng MSE: cả hai vế của hệ phương trình chuẩn đã chia cho `N` trước khi cộng `lam * I` chưa?"
+  },
+  {
+    "level": 1,
+    "text": "Quy tâm X và y bằng cách trừ trung bình trước, giải hệ tuyến tính cho w với ma trận hiệp phương sai (Xc^T Xc)/N + lam*I, rồi suy ra b = y_mean - x_mean @ w."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở bước quy tâm và giải hệ",
+    "text": "x_mean = trung bình X theo cột; y_mean = trung bình y\nXc = X - x_mean; yc = y - y_mean\nGiải hệ ((Xc^T Xc)/N + lam * I) w = (Xc^T yc)/N bằng linalg.solve\nb = y_mean - x_mean @ w"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở giải hệ tuyến tính",
+    "text": "```python\nA = (Xc.T @ Xc) / N + float(lam) * np.eye(D)\nrhs = (Xc.T @ yc) / N\nw = np.linalg.solve(A, rhs)\nb = y_mean - float(x_mean @ w)\n```"
+  }
+]

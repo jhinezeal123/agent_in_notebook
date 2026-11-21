@@ -1,21 +1,29 @@
 // A notebook open in a Chrome tab (Colab, Kaggle, Jupyter), shown and edited
 // in VS Code. The browser keeps the notebook and runs it; VS Code holds a live
 // copy:
-// - browser to VS Code: the cells are read every second, each with a
-//   fingerprint of its outputs; changed sources, cells added, removed or
-//   moved, runs, and any output that changed (also while a cell runs) show up.
-//   The outputs follow the page whatever it says about runs;
+// - browser to VS Code: every second the cells are read as digests (a hash of
+//   each source and a fingerprint of its outputs, no payload); only what
+//   changed is fetched — a changed source without its outputs, changed outputs
+//   with them. Cells added, removed or moved in the browser are followed with
+//   the fewest edits (cells that stay put keep their place and their spinner);
+//   the whole notebook is rebuilt only when most of it changed. The outputs
+//   follow the page whatever it says about runs; a running cell printing more
+//   than 100 KB of text is shown live at most every 2 s;
 // - a reload of the page (or of the extension) pauses the copy; it follows the
 //   notebook again when the same notebook comes back in that tab;
 // - VS Code to browser: the user's edits are sent as they type (a short pause
-//   first), cells added, removed or moved are sent in order, and running a
-//   cell runs it in the browser.
-// A cell the user is still editing keeps the user's text. Saving does
-// nothing: Colab and Kaggle save the notebook themselves.
+//   first) as a compare-and-set from the browser text the edit started from:
+//   if the cell changed in Chrome meanwhile, nothing is sent, the cell is read
+//   again, and the user is told their unsent edit stays in the editor until
+//   they edit it again. Cells added, removed or moved are sent in order, and
+//   running a cell runs it in the browser.
+// A cell the user is still editing keeps the user's text. Saving does nothing
+// (Colab and Kaggle save the notebook themselves); the dirty mark is cleared
+// once per poll, when no push is on its way.
 
 import * as vscode from "vscode";
-import type { BrowserOp, CellInfo, CellType, NotebookInfo } from "@ainb/protocol";
-import { planPush, pullAction, sameOrder, toEditorOutputs, type LocalCell } from "./mirror-sync.js";
+import { textHash, type BrowserOp, type CellInfo, type CellType, type NotebookInfo } from "@ainb/protocol";
+import { planPull, planPush, pullAction, sameOrder, toEditorOutputs, type LocalCell, type PullStep } from "./mirror-sync.js";
 
 export const MIRROR_TYPE = "ainb-chrome-notebook";
 const SCHEME = "ainb-chrome";
@@ -25,6 +33,9 @@ const PUSH_DELAY_MS = 400;
 const RUN_WAIT_MS = 1500;
 /** How long a mirror waits for its tab's notebook to come back (a reload) before letting go. */
 const AWAY_MS = 3 * 60_000;
+/** A running cell printing more text than this is shown live at most every LIVE_THROTTLE_MS. */
+const LIVE_THROTTLE_TEXT = 100_000;
+const LIVE_THROTTLE_MS = 2000;
 
 type Request = (method: string, params: unknown) => Promise<unknown>;
 
@@ -200,6 +211,8 @@ interface Known {
   id: string;
   type: CellType;
   source: string;
+  /** textHash(source): compared with the digest a poll reads, so an unchanged source is never fetched. */
+  sourceHash: string;
   executionCount: number | null;
   running: boolean;
   /** Fingerprint of the outputs shown here; null: not read yet, read them. */
@@ -212,12 +225,20 @@ export class Mirror {
   private structure?: ReturnType<typeof setTimeout>;
   private structurePush: Promise<void> = Promise.resolve();
   private readonly executions = new Map<string, vscode.NotebookCellExecution>();
+  /** The browser source each cell's unsent edit started from: the compare-and-set base of its push. */
+  private readonly editBase = new Map<string, string>();
+  /** Cells whose push lost a compare-and-set: their text stays in the editor, unsent, until the user edits again. */
+  private readonly conflicted = new Set<string>();
+  /** When a running cell's large output was last shown live (see LIVE_THROTTLE_MS). */
+  private readonly liveShownAt = new Map<string, number>();
   /** Set while the tab's notebook is away (reloading): when it fires, the mirror lets go. */
   private awayTimer?: ReturnType<typeof setTimeout>;
   private awayNote?: vscode.Disposable;
   private readonly timer: ReturnType<typeof setInterval>;
   /** Pushes to the browser, one at a time and in order. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Tasks on the queue, waiting or running: the document is saved only when it is 0. */
+  private pending = 0;
   private polling = false;
   private editVersion = 0;
   /** Runs started here whose run_cells has not answered, and a count of those started: a poll read across one is stale. */
@@ -234,7 +255,9 @@ export class Mirror {
   ) {
     this.known = document.getCells().flatMap((cell) => {
       const id = idOf(cell);
-      return id ? [{ id, type: typeOf(cell), source: cell.document.getText(), executionCount: cell.executionSummary?.executionOrder ?? null, running: false, outputsHash: null }] : [];
+      if (!id) return [];
+      const source = cell.document.getText();
+      return [{ id, type: typeOf(cell), source, sourceHash: textHash(source), executionCount: cell.executionSummary?.executionOrder ?? null, running: false, outputsHash: null }];
     });
     this.language = document.getCells().find((cell) => cell.kind === vscode.NotebookCellKind.Code)?.document.languageId ?? "python";
     this.timer = setInterval(() => void this.poll(), POLL_MS);
@@ -248,6 +271,9 @@ export class Mirror {
     this.awayNote?.dispose();
     for (const execution of this.executions.values()) execution.end(undefined);
     this.executions.clear();
+    this.editBase.clear();
+    this.conflicted.clear();
+    this.liveShownAt.clear();
   }
 
   detach(message: string): void {
@@ -279,13 +305,22 @@ export class Mirror {
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    this.pending++;
     const next = this.queue.then(task, task);
-    this.queue = next.catch(() => {});
+    this.queue = next.then(() => { this.pending--; }, () => { this.pending--; });
     return next;
   }
 
   private busy(): boolean {
     return this.pushes.size > 0 || this.structure !== undefined;
+  }
+
+  /** Forget the per-cell state of cells the browser no longer has. */
+  private pruneCellState(): void {
+    const ids = new Set(this.known.map((k) => k.id));
+    for (const id of [...this.editBase.keys()]) if (!ids.has(id)) this.editBase.delete(id);
+    for (const id of [...this.conflicted]) if (!ids.has(id)) this.conflicted.delete(id);
+    for (const id of [...this.liveShownAt.keys()]) if (!ids.has(id)) this.liveShownAt.delete(id);
   }
 
   // ---------------------------------------------------------------- VS Code -> browser
@@ -304,12 +339,21 @@ export class Mirror {
     for (const change of event.cellChanges) {
       if (!change.document) continue;
       const cell = change.cell;
+      const id = idOf(cell);
+      if (id) {
+        // A new edit may send the cell again, from the browser text it now starts from.
+        this.conflicted.delete(id);
+        if (!this.editBase.has(id)) {
+          const known = this.known.find((k) => k.id === id);
+          if (known) this.editBase.set(id, known.source);
+        }
+      }
       clearTimeout(this.pushes.get(cell));
       this.pushes.set(cell, setTimeout(() => void this.flush(cell).catch((e) => this.failed(e)), PUSH_DELAY_MS));
     }
   }
 
-  /** Send a cell's text now if it differs from the browser's. */
+  /** Send a cell's text now if it differs from the browser's, as a compare-and-set from the edit's base. */
   private flush(cell: vscode.NotebookCell): Promise<void> {
     clearTimeout(this.pushes.get(cell));
     this.pushes.delete(cell);
@@ -318,12 +362,51 @@ export class Mirror {
       const known = id ? this.known.find((k) => k.id === id) : undefined;
       if (!id || !known || cell.index < 0) return;
       const source = cell.document.getText();
-      if (source === known.source) return;
-      await this.op({ op: "update_cell", cellId: id, source, review: false, byUser: true });
+      if (source === known.source) {
+        this.editBase.delete(id);
+        this.conflicted.delete(id);
+        return;
+      }
+      // A lost compare-and-set keeps the text here unsent: pushing it again would
+      // overwrite what the browser now holds with a stale edit. Only a new edit sends it.
+      if (this.conflicted.has(id)) return;
+      const expectedSource = this.editBase.get(id) ?? known.source;
+      const res = await this.op({ op: "update_cell", cellId: id, source, review: false, byUser: true, expectedSource }) as { applied: boolean; conflict?: boolean };
+      if (res.conflict) {
+        this.editBase.delete(id);
+        this.conflicted.add(id);
+        await this.readConflicted(cell, id, known);
+        if (cell.index >= 0) void vscode.window.showWarningMessage(`Cell ${cell.index + 1} changed in Chrome; your unsent edit was kept in the editor but not pushed. Edit it again to send.`);
+        return;
+      }
       this.editVersion++;
       known.source = source;
-      await this.saved();
+      known.sourceHash = textHash(source);
+      this.editBase.delete(id);
     });
+  }
+
+  /** A push lost its compare-and-set: read the cell again (text and outputs) so the mirror knows what the browser holds. */
+  private async readConflicted(cell: vscode.NotebookCell, id: string, known: Known): Promise<void> {
+    const { cells } = await this.op({ op: "get_cells", cellIds: [id], includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
+    const now = cells[0];
+    if (!now || cell.index < 0) return;
+    known.source = now.source;
+    known.sourceHash = textHash(now.source);
+    known.outputsHash = now.outputsHash ?? null;
+    known.running = !!now.running;
+    const outputs = now.outputs ?? [];
+    const count = now.executionCount ?? null;
+    if (now.running) {
+      this.started(cell, id);
+      if (this.executions.has(id)) {
+        this.showLive(id, outputs);
+        this.liveShownAt.set(id, Date.now());
+      }
+    } else {
+      known.executionCount = count;
+      this.finished(cell, id, count, outputs, count === null ? undefined : !outputs.some((o) => o.kind === "error"));
+    }
   }
 
   /** Bring the browser's cells in line with the mirror's: removed, moved and new cells. */
@@ -349,13 +432,14 @@ export class Mirror {
     const { cells: remote } = await this.op({ op: "get_cells" }) as { cells: CellInfo[] };
     this.editVersion++;
     const previous = new Map(this.known.map((k) => [k.id, k.outputsHash]));
-    this.known = remote.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: previous.get(c.id) ?? null }));
-    await this.saved();
+    this.known = remote.map((c) => ({ id: c.id, type: c.type, source: c.source, sourceHash: textHash(c.source), executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: previous.get(c.id) ?? null }));
+    this.pruneCellState();
   }
 
-  /** The browser has every edit: nothing is left to save. */
+  /** The browser has every edit: nothing is left to save. Called once per poll, when the queue is idle. */
   private async saved(): Promise<void> {
-    if (this.document.isDirty && !this.busy()) await this.document.save();
+    if (this.detached || this.awayTimer || this.document.isClosed) return;
+    if (this.document.isDirty && !this.busy() && this.pending === 0) await this.document.save();
   }
 
   // ---------------------------------------------------------------- runs
@@ -381,6 +465,9 @@ export class Mirror {
       }
       const id = idOf(cell);
       if (!id) continue;
+      // The cell's text lost a compare-and-set: running would execute the browser's
+      // text, not what the editor shows. The user was told; a new edit sends it again.
+      if (this.conflicted.has(id)) return;
       this.started(cell, id, true);
       this.runsInFlight++;
       this.runsStarted++;
@@ -389,7 +476,10 @@ export class Mirror {
         const result = results[0];
         // Still running: polling sees it finish.
         if (result && result.status !== "timeout") this.finished(cell, id, result.executionCount ?? null, result.outputs ?? [], result.status !== "error");
-        else if (result) this.showLive(id, result.outputs ?? []);
+        else if (result) {
+          this.showLive(id, result.outputs ?? []);
+          this.liveShownAt.set(id, Date.now());
+        }
         const known = this.known.find((k) => k.id === id);
         if (known) {
           known.running = result?.status === "timeout";
@@ -448,6 +538,7 @@ export class Mirror {
       }
     }
     this.executions.delete(id);
+    this.liveShownAt.delete(id);
     if (executionCount) execution.executionOrder = executionCount;
     void execution.replaceOutput(editorOutputs(outputs));
     execution.end(success, timed ? Date.now() : undefined);
@@ -459,6 +550,25 @@ export class Mirror {
     void this.executions.get(id)?.replaceOutput(editorOutputs(outputs));
   }
 
+  /** A running cell printing a lot of text is shown live at most every LIVE_THROTTLE_MS; small outputs follow every poll. */
+  private throttledLive(id: string, outputs: CellInfo["outputs"]): boolean {
+    const last = this.liveShownAt.get(id);
+    if (last === undefined) return false; // never shown: the first live output always goes out
+    const textLength = (outputs ?? []).reduce((n, o) => n + (o.text?.length ?? 0), 0);
+    if (textLength <= LIVE_THROTTLE_TEXT) return false;
+    return Date.now() - last < LIVE_THROTTLE_MS;
+  }
+
+  /** Stop showing a cell's run (it left the notebook, or its cell object is being replaced). */
+  private endExecution(id: string): void {
+    const execution = this.executions.get(id);
+    if (execution) {
+      execution.end(undefined);
+      this.executions.delete(id);
+    }
+    this.liveShownAt.delete(id);
+  }
+
   // ---------------------------------------------------------------- browser -> VS Code
 
   private async poll(): Promise<void> {
@@ -468,7 +578,9 @@ export class Mirror {
       const version = this.editVersion;
       const runs = this.runsStarted;
       const current = () => version === this.editVersion && !this.busy() && !this.awayTimer && !this.detached && !this.document.isClosed && !this.runsInFlight && runs === this.runsStarted;
-      const { cells: remote } = await this.op({ op: "get_cells", outputsHash: true }) as { cells: CellInfo[] };
+      // Digests only: a hash of each source and a fingerprint of its outputs.
+      // No source, no outputs and no image crosses the wire for an unchanged cell.
+      const { cells: remote } = await this.op({ op: "get_cells", sourceHash: true, outputsHash: true }) as { cells: CellInfo[] };
       // Read before a run started here reached the browser: it would end that run's spinner.
       if (current()) await this.enqueue(async () => {
         if (current()) await this.pull(remote, current);
@@ -478,6 +590,8 @@ export class Mirror {
     } finally {
       this.polling = false;
     }
+    // One save per cycle, once every push has landed — not after each flush.
+    await this.saved().catch(() => {});
   }
 
   private async pull(remote: CellInfo[], current: () => boolean): Promise<void> {
@@ -495,21 +609,91 @@ export class Mirror {
       return;
     }
     this.structurePush = Promise.resolve(); // The cell order agrees again after a failed push.
-    const edit = new vscode.WorkspaceEdit();
-    let edits = 0;
-    const changed: { cell: vscode.NotebookCell; known: Known; remote: CellInfo }[] = [];
-    for (const [i, r] of remote.entries()) {
-      const known = this.known[i]!;
-      const cell = local[i]!;
-      if (r.source !== known.source && cell.document.getText() === known.source) {
-        // Changed in the browser (by the agent or in the page), not being edited here.
-        edit.replace(cell.document.uri, new vscode.Range(0, 0, cell.document.lineCount, 0), r.source);
-        edits++;
+    if (action === "diff") {
+      const steps = planPull(knownOrder, remoteOrder);
+      // Most of the notebook changed, or its ids cannot be matched: rebuild instead.
+      if (!steps) {
+        await this.rebuild(current);
+        return;
       }
-      known.source = r.source;
+      await this.applyStructure(steps, remote, current);
+    }
+    if (current()) await this.syncCells(remote);
+  }
+
+  /**
+   * Cells were added, removed or moved in the browser: edit only what changed.
+   * A cell that stays put keeps its cell object, its metadata and its running
+   * execution; a moved or new cell that is running gets a fresh spinner.
+   */
+  private async applyStructure(steps: PullStep[], remote: CellInfo[], current: () => boolean): Promise<void> {
+    // New cells (added, or retyped) are inserted with their real text and outputs: read just those.
+    const newIds = steps.flatMap((s) => (s.op === "insert" ? [s.id] : []));
+    const fetched = new Map<string, CellInfo>();
+    if (newIds.length) {
+      const { cells } = await this.op({ op: "get_cells", cellIds: newIds, includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
+      for (const c of cells) fetched.set(c.id, c);
+      // One vanished again: the next poll plans from what is there then.
+      if (newIds.some((id) => !fetched.has(id))) return;
+    }
+    if (!current()) return;
+    const remoteById = new Map(remote.map((c) => [c.id, c]));
+    const previous = new Map(this.known.map((k) => [k.id, k]));
+    for (const step of steps) {
+      if (step.op === "insert") {
+        const edit = new vscode.WorkspaceEdit();
+        edit.set(this.document.uri, [vscode.NotebookEdit.insertCells(step.index, [cellData(fetched.get(step.id)!, this.language)])]);
+        if (!(await vscode.workspace.applyEdit(edit))) return;
+      } else {
+        const cell = this.document.getCells().find((c) => idOf(c) === step.id);
+        if (!cell || cell.index < 0) return;
+        // The cell object goes away: its run ends here; one still running gets a new spinner below.
+        this.endExecution(step.id);
+        const edit = new vscode.WorkspaceEdit();
+        edit.set(this.document.uri, [vscode.NotebookEdit.deleteCells(new vscode.NotebookRange(cell.index, cell.index + 1))]);
+        if (!(await vscode.workspace.applyEdit(edit))) return;
+        if (step.op === "move") {
+          // NotebookEdit has no move: splice the one cell out and back in, carrying
+          // its text (even an unsent edit), its outputs and its browser id.
+          const data = new vscode.NotebookCellData(cell.kind, cell.document.getText(), cell.document.languageId);
+          data.metadata = { ...cell.metadata };
+          data.outputs = [...cell.outputs];
+          data.executionSummary = cell.executionSummary;
+          const insert = new vscode.WorkspaceEdit();
+          insert.set(this.document.uri, [vscode.NotebookEdit.insertCells(step.index, [data])]);
+          if (!(await vscode.workspace.applyEdit(insert))) return;
+        }
+      }
+      if (step.op !== "delete" && remoteById.get(step.id)?.running) {
+        const cell = this.document.getCells().find((c) => idOf(c) === step.id);
+        if (cell) this.started(cell, step.id);
+      }
+    }
+    // What the browser holds, in its order: kept cells carry what we already know
+    // (the digest sync fetches whatever changed); new cells come from the read above.
+    this.known = remote.map((r) => {
+      const kept = previous.get(r.id);
+      if (kept && kept.type === r.type) return kept;
+      const full = fetched.get(r.id);
+      return full
+        ? { id: r.id, type: r.type, source: full.source, sourceHash: textHash(full.source), executionCount: full.executionCount ?? null, running: !!full.running, outputsHash: full.outputsHash ?? null }
+        : { id: r.id, type: r.type, source: "", sourceHash: textHash(""), executionCount: r.executionCount ?? null, running: !!r.running, outputsHash: null };
+    });
+    this.pruneCellState();
+  }
+
+  /** Same cells in both: fetch only what the digests say changed, and follow runs. */
+  private async syncCells(remote: CellInfo[]): Promise<void> {
+    const local = this.document.getCells();
+    const sourceOnly: { cell: vscode.NotebookCell; known: Known; remote: CellInfo }[] = [];
+    const withOutputs: { cell: vscode.NotebookCell; known: Known; remote: CellInfo }[] = [];
+    for (const [i, r] of remote.entries()) {
+      const known = this.known[i];
+      const cell = local[i];
+      if (!known || !cell || known.id !== r.id) continue;
       const running = !!r.running;
       const count = r.executionCount ?? null;
-      // Also after a rebuild, which ends the runs it shows: one still running gets its spinner back.
+      // Also after a structural edit, which ends the runs it replaces: one still running gets its spinner back.
       if (running) this.started(cell, r.id);
       const ended = !running && this.executions.has(r.id);
       const outputsChanged = r.outputsHash !== undefined && r.outputsHash !== known.outputsHash;
@@ -517,44 +701,94 @@ export class Mirror {
       known.running = running;
       // Compared on what the browser answers, not on run events: whatever the
       // page says about runs, a changed output is read and shown.
-      if (ended || outputsChanged || countChanged) changed.push({ cell, known, remote: r });
-      else known.executionCount = count;
+      if (ended || outputsChanged || countChanged) withOutputs.push({ cell, known, remote: r });
+      else {
+        known.executionCount = count;
+        if (r.sourceHash !== known.sourceHash) sourceOnly.push({ cell, known, remote: r });
+      }
     }
-    if (edits) {
-      await vscode.workspace.applyEdit(edit);
-      await this.saved();
+    if (sourceOnly.length) {
+      // Only the text changed: read it without the outputs.
+      const { cells } = await this.op({ op: "get_cells", cellIds: sourceOnly.map((c) => c.remote.id) }) as { cells: CellInfo[] };
+      const read = new Map(cells.map((c) => [c.id, c]));
+      const edit = new vscode.WorkspaceEdit();
+      let edits = 0;
+      for (const { cell, known, remote: r } of sourceOnly) {
+        const now = read.get(r.id);
+        if (!now || cell.index < 0) continue;
+        const base = known.source;
+        // Changed in the browser (by the agent or in the page), not being edited here.
+        if (now.source !== base && cell.document.getText() === base) {
+          edit.replace(cell.document.uri, new vscode.Range(0, 0, cell.document.lineCount, 0), now.source);
+          edits++;
+        }
+        // The browser's text is what we know from now on, even while the user edits
+        // this cell: its push compares against the base the edit started from.
+        known.source = now.source;
+        known.sourceHash = textHash(now.source);
+      }
+      if (edits) await vscode.workspace.applyEdit(edit);
     }
-    if (!changed.length) return;
-    const { cells } = await this.op({ op: "get_cells", cellIds: changed.map((c) => c.remote.id), includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
+    if (!withOutputs.length) return;
+    const { cells } = await this.op({ op: "get_cells", cellIds: withOutputs.map((c) => c.remote.id), includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
     const read = new Map(cells.map((c) => [c.id, c]));
-    for (const { cell, known, remote: r } of changed) {
+    const edit = new vscode.WorkspaceEdit();
+    let edits = 0;
+    for (const { cell, known, remote: r } of withOutputs) {
       const now = read.get(r.id);
       if (!now || cell.index < 0) continue;
+      const base = known.source;
+      if (now.source !== base && cell.document.getText() === base) {
+        edit.replace(cell.document.uri, new vscode.Range(0, 0, cell.document.lineCount, 0), now.source);
+        edits++;
+      }
+      known.source = now.source;
+      known.sourceHash = textHash(now.source);
       const outputs = now.outputs ?? [];
       const count = now.executionCount ?? null;
       if (now.running) {
         // Shown as running nowhere (another kernel selected): try again on the next tick.
         if (!this.executions.has(r.id)) continue;
-        this.showLive(r.id, outputs);
+        // A large live output is shown at most every 2 s; the hash still advances,
+        // and the finished run always shows everything.
+        if (!this.throttledLive(r.id, outputs)) {
+          this.showLive(r.id, outputs);
+          this.liveShownAt.set(r.id, Date.now());
+        }
       } else if (!this.finished(cell, r.id, count, outputs, count === null ? undefined : !outputs.some((o) => o.kind === "error"))) {
         continue;
       }
       known.outputsHash = now.outputsHash ?? null;
       if (!now.running) known.executionCount = count;
     }
+    if (edits) await vscode.workspace.applyEdit(edit);
   }
 
-  /** Cells were added, removed or moved in the browser: read the whole notebook again. */
+  /** Most of the notebook changed, or the mirror lost track of it: read the whole notebook again. */
   private async rebuild(current: () => boolean): Promise<void> {
     const { cells } = await this.op({ op: "get_cells", includeOutputs: true, outputsHash: true }) as { cells: CellInfo[] };
     if (!current()) return;
+    // An edit that lost its compare-and-set stays in the editor, as the user was told.
+    const keptText = new Map<string, string>();
+    for (const cell of this.document.getCells()) {
+      const id = idOf(cell);
+      if (id && this.conflicted.has(id)) keptText.set(id, cell.document.getText());
+    }
     for (const execution of this.executions.values()) execution.end(undefined);
     this.executions.clear();
-    this.known = cells.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: c.outputsHash ?? null }));
+    this.liveShownAt.clear();
+    this.editBase.clear();
+    const ids = new Set(cells.map((c) => c.id));
+    for (const id of [...this.conflicted]) if (!ids.has(id)) this.conflicted.delete(id);
+    this.known = cells.map((c) => ({ id: c.id, type: c.type, source: c.source, sourceHash: textHash(c.source), executionCount: c.executionCount ?? null, running: !!c.running, outputsHash: c.outputsHash ?? null }));
     const edit = new vscode.WorkspaceEdit();
-    edit.set(this.document.uri, [vscode.NotebookEdit.replaceCells(new vscode.NotebookRange(0, this.document.cellCount), cells.map((c) => cellData(c, this.language)))]);
+    edit.set(this.document.uri, [vscode.NotebookEdit.replaceCells(new vscode.NotebookRange(0, this.document.cellCount), cells.map((c) => {
+      const data = cellData(c, this.language);
+      const text = keptText.get(c.id);
+      if (text !== undefined) data.value = text;
+      return data;
+    }))]);
     if (await vscode.workspace.applyEdit(edit)) this.structurePush = Promise.resolve();
-    await this.saved();
   }
 
   private failed(e: unknown): void {

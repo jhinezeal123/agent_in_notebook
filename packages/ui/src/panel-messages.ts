@@ -17,7 +17,14 @@ export interface BridgeState {
   error?: string;
   agents: AgentInfo[];
   bridgeVersion?: string;
+  /** Whether the Chrome browser extension is currently connected to the bridge. */
+  browserConnected?: boolean;
   config: BridgeConfig;
+}
+
+export interface CustomSlashTemplate {
+  name: string;
+  prompt: string;
 }
 
 export interface Prefs {
@@ -25,6 +32,10 @@ export interface Prefs {
   scope: Scope;
   review: boolean;
   notebookOnly: boolean;
+  /** User-defined slash command templates (B5.1). */
+  slashTemplates?: CustomSlashTemplate[];
+  /** UI language override (B5.4): "auto" | "en" | "vi". */
+  language?: "auto" | "en" | "vi";
 }
 
 export const DEFAULT_PREFS: Prefs = { agentId: "claude", scope: "write", review: true, notebookOnly: true };
@@ -49,7 +60,7 @@ export type PanelEvent =
   /** The cells attached to the next message about a notebook; `added`: the user just attached some. */
   | { event: "attachments"; params: { tabId: number; cells: AttachedCell[]; added?: boolean } }
   /** A command from the view's title bar. */
-  | { event: "command"; params: "chat.clear" }
+  | { event: "command"; params: "chat.clear" | "chat.export" }
   | { event: "bridge"; params: { method: string; params: unknown } };
 
 export type { AttachedCell, ChatSettings };

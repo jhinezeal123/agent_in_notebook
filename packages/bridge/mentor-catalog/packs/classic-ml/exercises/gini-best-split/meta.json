@@ -1,0 +1,21 @@
+{
+  "id": "gini-best-split",
+  "title": "Độ bất thuần Gini và tìm điểm chia tốt nhất",
+  "star": "decision-tree",
+  "skills": [
+    "formula",
+    "blank"
+  ],
+  "difficulty": 1350,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "gini_impurity",
+    "best_split"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

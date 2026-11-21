@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_mean_over_real_tokens",
+    "text": "Mẫu số của phép tính trung bình hiện tại là số token thật hay tổng số ô bao gồm cả padding?"
+  },
+  {
+    "level": 0,
+    "test": "test_empty_mask",
+    "text": "Điều gì xảy ra nếu mọi phần tử trong mask đều bằng 0?"
+  },
+  {
+    "level": 1,
+    "text": "Chia tổng NLL đã nhân mask cho tổng số phần tử hợp lệ trong mask thay vì tổng kích thước mảng, và trả về 0.0 nếu tổng mask bằng 0."
+  },
+  {
+    "level": 2,
+    "when": "sai mẫu số và ca biên",
+    "text": "total = tổng của mask (kiểu float)\nnếu total == 0: trả về 0.0\ntrả về -(picked * mask).sum() / total"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở chia theo mask",
+    "text": "```python\nmask = np.asarray(mask, dtype=float)\ntotal = mask.sum()\nif total == 0:\n    return 0.0\nreturn float(-(picked * mask).sum() / total)\n```"
+  }
+]

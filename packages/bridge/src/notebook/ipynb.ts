@@ -17,6 +17,8 @@ export interface NbCell {
   outputs?: CellOutput[];
   /** The outputs and execution count as the file holds them, to tell when they were changed. */
   outputsKey?: string;
+  /** The page's fingerprint of the cell's real outputs, when the last read carried one. */
+  outputsHash?: string;
 }
 
 export class NotebookFormatError extends Error {}
@@ -124,6 +126,26 @@ export function asCellInfo(cells: NbCell[]): CellInfo[] {
 
 export function fromCellInfo(cells: CellInfo[]): NbCell[] {
   return cells.map((c) => ({ id: c.id, type: c.type, source: c.source, executionCount: c.executionCount, outputs: c.outputs }));
+}
+
+/**
+ * The editor's cells as the file's cells, without serializing and parsing the
+ * file back: `outputs` stays the editor's (the cache the next write renders
+ * from), while `outputsKey` describes exactly what the file will hold, byte
+ * for byte as parseIpynb would read it back.
+ */
+export function toFileCells(cells: CellInfo[]): NbCell[] {
+  return cells.map((c) => {
+    const cell: NbCell = { id: c.id, type: c.type, source: c.source };
+    if (c.type === "code") {
+      const exec = c.executionCount ?? null;
+      const outputs = c.outputs ?? [];
+      cell.executionCount = exec;
+      cell.outputs = outputs;
+      cell.outputsKey = JSON.stringify([exec, outputs.map((o) => sortKeys(outputToIpynb(o, exec)))]);
+    }
+    return cell;
+  });
 }
 
 export type CellEdit =

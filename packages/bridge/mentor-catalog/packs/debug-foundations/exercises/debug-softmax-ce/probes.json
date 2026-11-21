@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao cộng thêm một hằng số $c$ vào mọi phần tử trên trục softmax không làm thay đổi xác suất đầu ra?",
+    "tag": "dbg-softmax-shift-invariance",
+    "answer": "Vì exp(z_i + c) = exp(c) * exp(z_i), thừa số exp(c) xuất hiện ở cả tử số lẫn mẫu số nên tự triệt tiêu.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Nếu chỉ dịch $z - \\max(z)$ rồi vẫn viết `np.log(np.exp(s) / sum(np.exp(s)))`, chuyện gì xảy ra khi một phần tử có $s_i = -1000$?",
+    "tag": "dbg-log-underflow",
+    "answer": "exp(-1000) bị underflow thành 0.0, rồi log(0.0) thành -inf thay vì giá trị hữu hạn gần -1000. Phải dùng dạng s - log(sum(exp(s))).",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Tại sao cần `keepdims=True` khi lấy max và sum theo `axis`?",
+    "tag": "dbg-softmax-keepdims",
+    "answer": "Để kết quả giữ số chiều như z và broadcast đúng theo đúng trục `axis` (đặc biệt khi z là ma trận vuông hoặc axis != -1).",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Trong `cross_entropy(logits, targets)`, nếu `logits` có phần tử rất lớn thì gọi `log_softmax` có tránh được NaN không?",
+    "tag": "dbg-ce-stability",
+    "answer": "Có, vì `log_softmax` làm việc trực tiếp trong miền log nhờ log-sum-exp, không bao giờ phải tính log của xác suất bị underflow.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

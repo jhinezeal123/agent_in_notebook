@@ -1,0 +1,21 @@
+{
+  "id": "entropy-kl-div",
+  "title": "Shannon Entropy và KL Divergence",
+  "star": "entropy-kl",
+  "skills": [
+    "formula",
+    "theory"
+  ],
+  "difficulty": 1200,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "shannon_entropy",
+    "kl_divergence"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

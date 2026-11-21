@@ -19,6 +19,9 @@ import { Banner, Button, Icon, RunBadge, errorText } from "./ui.js";
 import { ConfirmModal, ExtLink, LoadingRow, Modal, Spinner, Badge, TextInput } from "./compute-ui.js";
 import { HfSection, K8sSection, ModalSection, RaySection, TinkerSection, VercelSection } from "./compute-quick.js";
 import { KaggleSection, OpenResearchSection, SlurmSection, SshSection } from "./compute-hosts.js";
+import { DEFAULT_RATES, RATES_UPDATED, estimateRunCost, formatCost, loadRates, monthlyTotalCost, saveRates } from "./cost.js";
+import { hostRequest } from "./tunnel.js";
+import type { KaggleQuotaStatus } from "@ainb/protocol";
 
 const TARGET_CARD_DESCRIPTIONS: Record<ComputeTargetId, () => string> = {
   local: m.compute_description_local,
@@ -133,21 +136,34 @@ function runtimeLabel(run: Run): string {
   return "—";
 }
 
-function InstancesTable({ instances, emptyLabel }: { instances: Run[]; emptyLabel: string }) {
+function InstancesTable({ instances, emptyLabel, rates }: { instances: Run[]; emptyLabel: string; rates: Record<string, number> }) {
   if (instances.length === 0) return <p className="empty-box">{emptyLabel}</p>;
   return (
     <div className="rtable-wrap">
       <table className="rtable">
-        <thead><tr><th>{m.settings_page_backend()}</th><th>{m.settings_page_status()}</th><th>{m.settings_page_started()}</th><th>{m.settings_page_runtime()}</th></tr></thead>
+        <thead>
+          <tr>
+            <th>{m.settings_page_backend()}</th>
+            <th>{m.settings_page_status()}</th>
+            <th>{m.settings_page_started()}</th>
+            <th>{m.settings_page_runtime()}</th>
+            <th title={`Estimated from running time (excluding queue) using ${RATES_UPDATED} rates`}>~Cost (est.)</th>
+          </tr>
+        </thead>
         <tbody>
           {instances.map((run) => {
             const url = typeof run.backend?.url === "string" ? run.backend.url : undefined;
+            const est = estimateRunCost(run, rates);
+            const costTitle = est
+              ? `Estimate: ${est.key} @ $${est.ratePerHour.toFixed(2)}/hr · running ${fmtDuration(est.runningMs)}${est.queueMs > 1000 ? ` (queued ${fmtDuration(est.queueMs)})` : ""}${est.uncertain ? " · run lost/incomplete" : ""}`
+              : "No paid rate configured for this backend/flavor";
             return (
               <tr key={run.id}>
                 <td><span className="backend-cell"><BackendBadge backend={run.backend} />{url && <ExtLink href={url}><span title={m.settings_page_open_job_page()}>↗</span></ExtLink>}</span></td>
                 <td><RunBadge run={run} /></td>
                 <td>{timeAgo(run.createdAt)}</td>
                 <td>{runtimeLabel(run)}</td>
+                <td className="mono" title={costTitle}>{est ? `${formatCost(est.dollars)}${est.uncertain ? "?" : ""}` : "—"}</td>
               </tr>
             );
           })}
@@ -178,7 +194,7 @@ function useAllRuns(): { runs: Run[] | null; error: string | null; refreshing: b
   };
 }
 
-function ComputeActivity({ onViewHistory }: { onViewHistory: () => void }) {
+function ComputeActivity({ onViewHistory, rates }: { onViewHistory: () => void; rates: Record<string, number> }) {
   const { runs, error, refreshing, reload } = useAllRuns();
   const byRecent = (a: Run, b: Run) => b.createdAt - a.createdAt;
   const running = runs?.filter((r) => runActive(r.status)).sort(byRecent);
@@ -191,20 +207,115 @@ function ComputeActivity({ onViewHistory }: { onViewHistory: () => void }) {
         <Button small onClick={onViewHistory}>{past?.length ? m.instances_view_history_count({ count: fmtNumber(past.length) }) : m.instances_view_history()}</Button>
       </div>
       {error && <p className="err-text">{error}</p>}
-      {!running ? <LoadingRow><Spinner /> {m.settings_page_loading()}</LoadingRow> : <InstancesTable instances={running} emptyLabel={m.instances_nothing_running()} />}
+      {!running ? <LoadingRow><Spinner /> {m.settings_page_loading()}</LoadingRow> : <InstancesTable instances={running} emptyLabel={m.instances_nothing_running()} rates={rates} />}
     </section>
   );
 }
 
-function InstanceHistory({ onBack }: { onBack: () => void }) {
+function InstanceHistory({ onBack, rates, onChangeRates }: { onBack: () => void; rates: Record<string, number>; onChangeRates: (next: Record<string, number>) => void }) {
   const { runs, error, refreshing, reload } = useAllRuns();
+  const [editRates, setEditRates] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+  const monthly = runs ? monthlyTotalCost(runs, rates) : null;
+  const updateRate = (key: string, raw: string) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return;
+    const next = { ...rates, [key]: n };
+    saveRates(next);
+    onChangeRates(next);
+  };
   return (
     <>
       <button type="button" className="back" onClick={onBack}><Icon name="chev-r" /> {m.settings_page_back_to_compute()}</button>
-      <div className="sec-head"><h2>{m.settings_page_instance_history()}</h2><Button small onClick={reload} disabled={refreshing}><Icon name="refresh" /> {m.settings_page_refresh()}</Button></div>
+      <div className="sec-head">
+        <h2>{m.settings_page_instance_history()}</h2>
+        {monthly && monthly.counted > 0 && (
+          <span className="muted small" title={`Estimate only (not a bill). Public rates as of ${RATES_UPDATED}; excludes queue time.`}>
+            This month: <b>{formatCost(monthly.total)}</b> ({monthly.counted} runs · est. {RATES_UPDATED})
+          </span>
+        )}
+        <Button small onClick={() => setEditRates((v) => !v)}>{editRates ? "Hide rates" : "Edit rates ($/hr)"}</Button>
+        <Button small onClick={reload} disabled={refreshing}><Icon name="refresh" /> {m.settings_page_refresh()}</Button>
+      </div>
+      {editRates && (
+        <div className="sec rates-box">
+          <p className="muted small">Hourly USD estimates (table date {RATES_UPDATED}; not an invoice). Add SSH/Vast hosts as <code>ssh:alias</code>.</p>
+          <div className="rates-grid">
+            {Object.entries(rates).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => (
+              <label key={k} className="rate-row">
+                <span className="mono small">{k}</span>
+                <input type="number" step="0.01" min="0" className="inp rate-inp" value={v} onChange={(e) => updateRate(k, e.target.value)} />
+              </label>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: "6px" }}>
+            <input className="inp" placeholder="e.g. ssh:vast-4090" value={newKey} onChange={(e) => setNewKey(e.target.value)} />
+            <input type="number" step="0.01" min="0" className="inp rate-inp" placeholder="$/hr" value={newVal} onChange={(e) => setNewVal(e.target.value)} />
+            <Button small onClick={() => {
+              const k = newKey.trim().toLowerCase();
+              const n = Number(newVal);
+              if (!k || !Number.isFinite(n) || n < 0) return;
+              const next = { ...rates, [k]: n };
+              saveRates(next);
+              onChangeRates(next);
+              setNewKey("");
+              setNewVal("");
+            }}>Add</Button>
+            <Button small onClick={() => { saveRates(DEFAULT_RATES); onChangeRates({ ...DEFAULT_RATES }); }}>Reset defaults</Button>
+          </div>
+        </div>
+      )}
       {error && <p className="err-text">{error}</p>}
-      {!runs ? <LoadingRow><Spinner /> {m.settings_page_loading()}</LoadingRow> : <InstancesTable instances={[...runs].sort((a, b) => b.createdAt - a.createdAt)} emptyLabel={m.instances_none_yet()} />}
+      {!runs ? <LoadingRow><Spinner /> {m.settings_page_loading()}</LoadingRow> : <InstancesTable instances={[...runs].sort((a, b) => b.createdAt - a.createdAt)} emptyLabel={m.instances_none_yet()} rates={rates} />}
     </>
+  );
+}
+
+function KaggleQuotaBanner() {
+  const [quota, setQuota] = useState<KaggleQuotaStatus | null>(null);
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const load = (refresh = false) => {
+    void hostRequest<KaggleQuotaStatus>("research.quota", { refresh }).then(setQuota, () => {});
+  };
+  useEffect(() => { load(false); }, []);
+  if (!quota || !quota.configured) return null;
+  const hasWarn = quota.lowGpuAccounts.length > 0 || quota.idleSessions.length > 0;
+  if (!hasWarn) return null;
+  const close = async (sessionId: string) => {
+    setClosingId(sessionId);
+    try {
+      await hostRequest("research.closeSession", { sessionId });
+      load(true);
+    } finally {
+      setClosingId(null);
+    }
+  };
+  return (
+    <section className="sec">
+      {quota.lowGpuAccounts.length > 0 && (
+        <Banner tone="warn">
+          Low Kaggle GPU quota:{" "}
+          {quota.accounts
+            .filter((a) => quota.lowGpuAccounts.includes(a.account))
+            .map((a) => `${a.account} (${a.gpu ? `${a.gpu.remaining.toFixed(1)}h / ${a.gpu.total}h left` : "low"})`)
+            .join(", ")}.
+        </Banner>
+      )}
+      {quota.idleSessions.map((s) => (
+        <Banner key={s.id} tone="warn">
+          <div className="row">
+            <span>
+              Idle Kaggle session <code>{s.id.slice(0, 12)}</code> ({s.account}) has no active run — burning weekly GPU quota.
+            </span>
+            <span className="spacer" />
+            <Button small disabled={closingId === s.id} onClick={() => void close(s.id)}>
+              {closingId === s.id ? "Closing…" : "Close session"}
+            </Button>
+          </div>
+        </Banner>
+      ))}
+    </section>
   );
 }
 
@@ -420,6 +531,7 @@ export function ComputeTab({ onOpenEnvironment }: { onOpenEnvironment: () => voi
   const [selectedTarget, setSelectedTarget] = useState<ComputeTargetId | null>(null);
   const [quick, setQuick] = useState<ComputeTargetId | null>(null);
   const [history, setHistory] = useState(false);
+  const [rates, setRates] = useState<Record<string, number>>(() => loadRates());
   useEffect(() => {
     const open = () => { if (pendingHostConnect()) setSelectedTarget("ssh"); };
     open();
@@ -451,13 +563,14 @@ export function ComputeTab({ onOpenEnvironment }: { onOpenEnvironment: () => voi
   const selected = selectedTarget ? settings?.targets.find((t) => t.id === selectedTarget) : null;
   const quickTarget = quick ? settings?.targets.find((t) => t.id === quick) : null;
 
-  if (history) return <InstanceHistory onBack={() => setHistory(false)} />;
+  if (history) return <InstanceHistory onBack={() => setHistory(false)} rates={rates} onChangeRates={setRates} />;
   if (selected && !QUICK_SETUP_TARGETS.includes(selected.id)) {
     return <BackendDetailPage target={selected} isDefault={defaultBackend === selected.id} onBack={() => setSelectedTarget(null)} />;
   }
   return (
     <>
-      <ComputeActivity onViewHistory={() => setHistory(true)} />
+      <KaggleQuotaBanner />
+      <ComputeActivity onViewHistory={() => setHistory(true)} rates={rates} />
       {settingsQuery.error && !settings ? <Banner tone="error">{settingsQuery.error.message}</Banner>
         : !settings ? <LoadingRow><Spinner /> {m.settings_page_checking_compute_targets()}</LoadingRow>
           : (

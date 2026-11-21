@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Trong công thức hậu nghiệm, đại lượng $1/\\sigma^2$ gọi là độ chính xác (precision). Quy tắc cập nhật Bayes viết theo precision đẹp ở chỗ nào?",
+    "tag": "math-bayes-precision",
+    "answer": "Precision hậu nghiệm đơn giản bằng tổng precision tiên nghiệm cộng n lần precision quan sát, còn trung bình hậu nghiệm là trung bình có trọng số theo precision.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Tại sao phương sai tiên đoán $\\mathrm{Var}(x_{\\text{new}} \\mid x_{1:n}) = \\sigma_n^2 + \\sigma^2$ luôn lớn hơn $\\sigma^2$ kể cả khi $n \\to \\infty$?",
+    "tag": "math-epistemic-aleatoric",
+    "answer": "sigma_n^2 là bất định nhận thức (epistemic — giảm về 0 khi n -> inf), còn sigma^2 là nhiễu ngẫu nhiên nội tại (aleatoric) của mỗi lần đo mới nên không bao giờ triệt tiêu.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Ước lượng MAP của $\\theta$ trong mô hình này có mối liên hệ toán học trực tiếp nào với Ridge regression (L2 regularization)?",
+    "tag": "math-bayes-ridge",
+    "answer": "Log prior chuẩn đóng góp số hạng bậc hai -(theta - mu0)^2 / (2 var0), tương đương hệt phạt L2 với hệ số lambda = obs_var / var0.",
+    "kind": "compare",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi phương sai tiên nghiệm `var0` rất lớn ($\\sigma_0^2 \\to \\infty$, tiên nghiệm rất phẳng), $\\mu_n$ và $\\sigma_n^2$ tiến về gì?",
+    "tag": "math-bayes-flat-prior",
+    "answer": "mu_n tiến về trung bình mẫu (ước lượng MLE) và var_post tiến về obs_var / n.",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

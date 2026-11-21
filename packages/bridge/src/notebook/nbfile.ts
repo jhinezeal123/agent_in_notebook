@@ -13,10 +13,10 @@
 //   review's outcome comes back with the call.
 
 import { posix } from "node:path";
-import { decide, type CellInfo, type CellType, type NotebookInfo, type ToolAction } from "@ainb/protocol";
-import { parseIpynb, toIpynb, NotebookFormatError, type NbCell } from "./ipynb.js";
+import { decide, type CellInfo, type CellType, type NotebookInfo, type NotebookOp, type ToolAction } from "@ainb/protocol";
+import { parseIpynb, toFileCells, toIpynb, NotebookFormatError, type NbCell } from "./ipynb.js";
 import { Unreachable, type KernelExec } from "./kernel.js";
-import { claim, hello, readFile, removeFile, sameStat, stat, writeFile, type Places, type Stat } from "./vmfs.js";
+import { claim, hello, readFile, removeFile, sameStat, stat, writeFile, WRITE_CHUNK_KERNEL, WRITE_CHUNK_TERMINAL, type Places, type Stat } from "./vmfs.js";
 import type { ReviewOutcome, ToolContext } from "./tools.js";
 
 /** The notebook file's state, kept by the chat. */
@@ -26,8 +26,13 @@ export class NotebookMirror {
   name: string | null = null;
   path: string | null = null;
   claimed = false;
-  /** What the file held when the bridge last wrote (or read) it. */
-  last: { text: string; stat: Stat; cells: NbCell[] } | null = null;
+  /**
+   * What the file held when the bridge last wrote (or read) it. `cells` keeps
+   * the editor's outputs (the cache the next write renders from) with the key
+   * of what the file holds and the page's fingerprint of the real outputs, so
+   * a sync can tell what changed without pulling every output again.
+   */
+  last: { text: string; stat: Stat; cells: NbCell[]; title: string; language: string } | null = null;
 }
 
 /** Where a platform's kernel works, for when the kernel cannot be asked. */
@@ -127,10 +132,47 @@ export async function notebookPath(ctx: ToolContext, info: NotebookInfo): Promis
   return m.path;
 }
 
-/** The notebook's text as an .ipynb file, from the editor. */
-async function render(ctx: ToolContext, info: NotebookInfo): Promise<string> {
-  const { cells } = await ctx.call({ op: "get_cells", includeOutputs: true });
-  return toIpynb(cells, info.language);
+/**
+ * The notebook as the file holds it, read in two tiers: first the structure
+ * with a fingerprint of each code cell's outputs (`outputsHash`, no outputs
+ * on the wire), then the outputs of only the cells whose fingerprint changed
+ * or is unknown; the rest keep the outputs cached from the last write.
+ * `unchanged`: nothing the file holds differs from the last write, so no
+ * outputs were fetched at all.
+ */
+async function readForFile(ctx: ToolContext, info: NotebookInfo): Promise<{ text: string; cells: NbCell[]; unchanged: boolean }> {
+  const prev = ctx.mirror.last;
+  const { cells: outline } = await ctx.call({ op: "get_cells", outputsHash: true });
+  const cached = new Map((prev?.cells ?? []).filter((c) => c.id).map((c) => [c.id!, c]));
+  // A cell without a fingerprint (a page that does not hash) is unknown, not equal.
+  const need = outline
+    .filter((c) => c.type === "code" && (!cached.has(c.id) || c.outputsHash === undefined || cached.get(c.id)!.outputsHash !== c.outputsHash))
+    .map((c) => c.id);
+  const unchanged =
+    !!prev &&
+    !need.length &&
+    prev.title === info.title &&
+    prev.language === info.language &&
+    prev.cells.length === outline.length &&
+    outline.every((c, i) => {
+      const p = prev!.cells[i]!;
+      return p.id === c.id && p.type === c.type && p.source === c.source && (p.executionCount ?? null) === (c.executionCount ?? null);
+    });
+  if (unchanged) return { text: prev!.text, cells: prev!.cells, unchanged: true };
+  const fetched = new Map<string, CellInfo>();
+  if (need.length) {
+    const { cells } = await ctx.call({ op: "get_cells", cellIds: need, includeOutputs: true, outputsHash: true });
+    for (const c of cells) fetched.set(c.id, c);
+  }
+  const view: CellInfo[] = outline.map((c) => ({
+    ...c,
+    outputs: c.type === "code" ? (fetched.get(c.id)?.outputs ?? cached.get(c.id)?.outputs ?? []) : undefined,
+  }));
+  const cells = toFileCells(view);
+  for (const [i, c] of outline.entries()) {
+    if (c.type === "code") cells[i]!.outputsHash = fetched.get(c.id)?.outputsHash ?? c.outputsHash;
+  }
+  return { text: toIpynb(view, info.language), cells, unchanged: false };
 }
 
 /**
@@ -148,11 +190,18 @@ export async function syncOut(ctx: ToolContext): Promise<string[]> {
       const notes: string[] = [];
       for (let attempt = 0; attempt < 3; attempt++) {
         const m = ctx.mirror;
-        const text = await render(ctx, info);
-        if (m.last && text === m.last.text) return notes;
-        const r = await writeFile(machineExec(ctx), m.path!, Buffer.from(text, "utf8"), m.last ? m.last.stat : "any");
+        const { text, cells, unchanged } = await readForFile(ctx, info);
+        if (unchanged) return notes;
+        if (m.last && text === m.last.text) {
+          // The file reads the same (outputs changed past what it holds, say);
+          // keep the fresh fingerprints and cache, and the stat of what is there.
+          m.last = { ...m.last, cells, title: info.title, language: info.language };
+          return notes;
+        }
+        const writeChunk = info.serverTerminals ? WRITE_CHUNK_TERMINAL : WRITE_CHUNK_KERNEL;
+        const r = await writeFile(machineExec(ctx), m.path!, Buffer.from(text, "utf8"), m.last ? m.last.stat : "any", { writeChunk });
         if (!("conflict" in r)) {
-          m.last = { text, stat: r.stat, cells: parseIpynb(text).cells };
+          m.last = { text, stat: r.stat, cells, title: info.title, language: info.language };
           return notes;
         }
         // Changed on the machine since it was written: apply that first.
@@ -185,9 +234,10 @@ export async function syncIn(ctx: ToolContext): Promise<string[]> {
 /** Rewrite the file from the editor, whatever it holds now. */
 async function writeBack(ctx: ToolContext, info: NotebookInfo): Promise<void> {
   const m = ctx.mirror;
-  const text = await render(ctx, info);
-  const r = await writeFile(machineExec(ctx), m.path!, Buffer.from(text, "utf8"), "any");
-  if (!("conflict" in r)) m.last = { text, stat: r.stat, cells: parseIpynb(text).cells };
+  const { text, cells } = await readForFile(ctx, info);
+  const writeChunk = info.serverTerminals ? WRITE_CHUNK_TERMINAL : WRITE_CHUNK_KERNEL;
+  const r = await writeFile(machineExec(ctx), m.path!, Buffer.from(text, "utf8"), "any", { writeChunk });
+  if (!("conflict" in r)) m.last = { text, stat: r.stat, cells, title: info.title, language: info.language };
 }
 
 /** File to editor, under the edit lock. Leaves `last` at what the file held. */
@@ -219,7 +269,7 @@ async function pullLocked(ctx: ToolContext, info: NotebookInfo): Promise<string[
     return [`${where} was changed into something that is not a notebook (${e.message}). The notebook did not change; the file was written again from it.`];
   }
   const base = m.last.cells;
-  m.last = { text, stat: st, cells };
+  m.last = { text, stat: st, cells, title: info.title, language: info.language };
   const report = await describeApplied(ctx, await applyCells(ctx, base, cells, { concurrent: true }), false);
   const notes = report.noop ? [] : [`${where} changed on the machine; this reached the notebook in ${editorName(info)}:`, ...report.lines];
   if (outputsTouched(base, cells)) notes.push("Outputs and execution counts in the notebook file come from running cells; changes to them were not applied.");
@@ -256,10 +306,11 @@ interface Planned {
  * moves and inserts, each checked against the mode, with review when it is on.
  * Cells are matched by id. `concurrent`: the editor may have changed since
  * `base` (the user kept working); a cell changed on both sides keeps the user's
- * version. Call under the edit lock; reviews are opened, not awaited.
+ * version. `editor`: a read already taken under the edit lock, to not read
+ * again. Call under the edit lock; reviews are opened, not awaited.
  */
-export async function applyCells(ctx: ToolContext, base: NbCell[], target: NbCell[], opts: { concurrent: boolean }): Promise<Applied> {
-  const { cells: editor } = await ctx.call({ op: "get_cells" });
+export async function applyCells(ctx: ToolContext, base: NbCell[], target: NbCell[], opts: { concurrent: boolean; editor?: CellInfo[] }): Promise<Applied> {
+  const editor = opts.editor ?? (await ctx.call({ op: "get_cells" })).cells;
   const live = new Map<string, CellInfo>(editor.map((c) => [c.id, c]));
   const baseById = new Map(base.filter((c) => c.id).map((c) => [c.id!, c]));
   const done: string[] = [];
@@ -302,78 +353,156 @@ export async function applyCells(ctx: ToolContext, base: NbCell[], target: NbCel
   const changed = plan.filter((p) => p.id && p.cell.source !== baseById.get(p.id)!.source);
   const added = plan.filter((p) => !p.id);
 
+  // Plan every step first, in the order the single ops went before (updates,
+  // deletes, moves, inserts), then run them as one batch. The notebook's order
+  // is simulated along the way so each step's index is the one it would have
+  // seen running alone; a new cell is a slot until its result names its id.
+  const steps: CellStep[] = [];
+  const notes: StepNote[] = [];
+  const order: (string | symbol)[] = editor.map((c) => c.id);
+  const inserts: InsertPlan[] = [];
+
   for (const p of changed) {
     const what = `Change to cell ${p.id}`;
     if (!untouched(p.id!, what)) continue;
     const ok = allowed("update", p.id!, what);
     if (!ok) continue;
-    const res = await ctx.call({ op: "update_cell", cellId: p.id!, source: p.cell.source, review: ok.review });
-    if (res.reviewId) reviews.push({ reviewId: res.reviewId, what });
-    else if (res.applied) done.push(`cell ${p.id} changed`);
+    steps.push({ op: "update_cell", cellId: p.id!, source: p.cell.source, review: ok.review });
+    notes.push({ kind: "update", what, id: p.id! });
   }
 
-  const order = editor.map((c) => c.id);
   for (const c of removed) {
     const what = `Deleting cell ${c.id}`;
     if (!live.has(c.id!)) continue;
     if (!untouched(c.id!, what)) continue;
     const ok = allowed("delete", c.id!, what);
     if (!ok) continue;
-    const res = await ctx.call({ op: "delete_cell", cellId: c.id!, review: ok.review });
-    if (res.reviewId) reviews.push({ reviewId: res.reviewId, what });
-    else {
-      done.push(`cell ${c.id} deleted`);
-      order.splice(order.indexOf(c.id!), 1);
-    }
+    steps.push({ op: "delete_cell", cellId: c.id!, review: ok.review });
+    notes.push({ kind: "delete", what, id: c.id! });
+    // A reviewed delete stays in the notebook until the user decides.
+    if (!ok.review) order.splice(order.indexOf(c.id!), 1);
   }
 
   // Order the kept cells as the target has them, moving as few as possible.
   const kept = plan.filter((p) => p.id && order.includes(p.id)).map((p) => p.id!);
   const stable = longestIncreasing(kept.map((id) => order.indexOf(id)));
   if (stable.size < kept.length && allowed("move", kept[0]!, "Reordering cells")) {
-    const move = async (id: string, to: (order: string[]) => number) => {
+    const move = (id: string, to: (order: (string | symbol)[]) => number) => {
       order.splice(order.indexOf(id), 1);
       const at = to(order);
       order.splice(at, 0, id);
-      await ctx.call({ op: "move_cell", cellId: id, index: at });
-      done.push(`cell ${id} moved to index ${at}`);
+      steps.push({ op: "move_cell", cellId: id, index: at });
+      notes.push({ kind: "move", id, at });
     };
     const firstStable = kept.findIndex((_, j) => stable.has(j));
     // Cells before the first one that stays go, in order, right before it.
     for (let j = (firstStable < 0 ? kept.length : firstStable) - 1; j >= 0; j--) {
       const anchor = kept[j + 1];
-      await move(kept[j]!, (o) => (anchor ? o.indexOf(anchor) : o.length));
+      move(kept[j]!, (o) => (anchor ? o.indexOf(anchor) : o.length));
     }
     for (let j = Math.max(0, firstStable) + 1; firstStable >= 0 && j < kept.length; j++) {
       if (stable.has(j)) continue;
       const prev = kept[j - 1]!;
-      await move(kept[j]!, (o) => o.indexOf(prev) + 1);
+      move(kept[j]!, (o) => o.indexOf(prev) + 1);
     }
   }
 
   // New cells go right after the cell that precedes them in the target.
   if (added.length) {
-    let prev: string | null = null;
+    let prev: string | symbol | null = null;
     for (const p of plan) {
       if (p.id) {
         if (order.includes(p.id)) prev = p.id;
         continue;
       }
-      const kind = cellKind(p.cell.type);
-      const what = `New ${kind} cell${prev ? ` after cell ${prev}` : " at the top"}`;
-      const ok = allowed("insert", null, what);
-      if (!ok) continue;
+      const d = decide(ctx.settings(), "insert", null, ctx.targets());
+      if (!d.allow) {
+        // The refusal's wording names the cell before it, known once results are back.
+        inserts.push({ cell: p.cell, prevRef: prev, refused: d.reason });
+        continue;
+      }
       const index = prev ? order.indexOf(prev) + 1 : 0;
-      const res = await ctx.call({ op: "insert_cell", index, cellType: p.cell.type, source: p.cell.source, review: ok.review });
-      if (!res.cellId) continue;
-      order.splice(index, 0, res.cellId);
-      prev = res.cellId;
-      if (res.reviewId) reviews.push({ reviewId: res.reviewId, what: `${what} (id ${res.cellId})` });
-      else done.push(`new ${kind} cell ${res.cellId} inserted at index ${index}`);
+      const slot = Symbol("new cell");
+      steps.push({ op: "insert_cell", index, cellType: p.cell.type, source: p.cell.source, review: d.review });
+      notes.push({ kind: "insert", slot, index, cellType: p.cell.type });
+      inserts.push({ cell: p.cell, prevRef: prev, stepIndex: steps.length - 1, index, slot });
+      order.splice(index, 0, slot);
+      prev = slot;
     }
   }
 
+  const results = await runSteps(ctx, steps);
+
+  // What each step did, in step order; a new cell's id names it from here on.
+  const slotIds = new Map<symbol, string>();
+  for (const [i, note] of notes.entries()) {
+    const r = (results[i] ?? {}) as { applied?: boolean; reviewId?: string; cellId?: string | null };
+    if (note.kind === "update") {
+      if (r.reviewId) reviews.push({ reviewId: r.reviewId, what: note.what });
+      else if (r.applied) done.push(`cell ${note.id} changed`);
+    } else if (note.kind === "delete") {
+      if (r.reviewId) reviews.push({ reviewId: r.reviewId, what: note.what });
+      else done.push(`cell ${note.id} deleted`);
+    } else if (note.kind === "move") {
+      done.push(`cell ${note.id} moved to index ${note.at}`);
+    } else if (r.cellId) {
+      slotIds.set(note.slot, r.cellId);
+    }
+  }
+  for (const ins of inserts) {
+    const kind = cellKind(ins.cell.type);
+    const prevId = typeof ins.prevRef === "string" ? ins.prevRef : ins.prevRef ? slotIds.get(ins.prevRef) : undefined;
+    const what = `New ${kind} cell${prevId ? ` after cell ${prevId}` : " at the top"}`;
+    if (ins.refused !== undefined) {
+      skipped.push(`${what}: not applied. ${ins.refused}`);
+      continue;
+    }
+    const r = (results[ins.stepIndex!] ?? {}) as { cellId?: string | null; reviewId?: string };
+    if (!r.cellId) continue;
+    if (r.reviewId) reviews.push({ reviewId: r.reviewId, what: `${what} (id ${r.cellId})` });
+    else done.push(`new ${kind} cell ${r.cellId} inserted at index ${ins.index}`);
+  }
+
   return { done, skipped, reviews };
+}
+
+/** One cell change of a batch. */
+type CellStep = Extract<NotebookOp, { op: "update_cell" | "insert_cell" | "delete_cell" | "move_cell" }>;
+
+/** What a step's result will say for the agent, alongside the step itself. */
+type StepNote =
+  | { kind: "update"; what: string; id: string }
+  | { kind: "delete"; what: string; id: string }
+  | { kind: "move"; id: string; at: number }
+  | { kind: "insert"; slot: symbol; index: number; cellType: CellType };
+
+/** An insert as planned: allowed (a step) or refused (the mode's reason). */
+interface InsertPlan {
+  cell: NbCell;
+  /** The cell it follows: an id, or the slot of an insert planned before it. */
+  prevRef: string | symbol | null;
+  refused?: string;
+  stepIndex?: number;
+  index?: number;
+  slot?: symbol;
+}
+
+/**
+ * Run the planned steps in order, as one batch op: the page applies each step
+ * exactly as if it were sent alone, so review, journal and events keep their
+ * order, and answers one result per step. Running the steps one by one is a
+ * fallback only for a page that does not know the op (an answer without
+ * `results`); never after a partial batch — an error propagates as it would
+ * on the single-op path, because the steps before the failure are already
+ * applied and journaled.
+ */
+async function runSteps(ctx: ToolContext, steps: CellStep[]): Promise<unknown[]> {
+  if (!steps.length) return [];
+  const batch = await ctx.call({ op: "apply_cells", steps });
+  if (batch && Array.isArray(batch.results)) return batch.results;
+  const out: unknown[] = [];
+  for (const step of steps) out.push(await ctx.call(step));
+  return out;
 }
 
 /** What applying did, for the agent. `wait`: wait for the user's review decisions first (outside any lock). */

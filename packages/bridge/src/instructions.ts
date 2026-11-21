@@ -214,13 +214,14 @@ const PROJECT_CONTEXT_MAX = 8000;
 const PROJECT_TOOLS =
   'Tools (MCP server "project"): artifact_list, artifact_read, artifact_write (the shared artifacts: only results the user asked for); ' +
   "save_notebook (this notebook, with outputs, to the shared artifacts); " +
+  "experiment_list, run_read (read-only view of this project's OpenResearch experiments, runs, metrics and logs); " +
   "paper_search, paper_read (the research literature).";
 
 function sizeText(n: number): string {
   return n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
 }
 
-/** What the agent is told about the notebook's project (not its experiments or runs): on the session's first turn, after a compaction, after a move. */
+/** What the agent is told about the notebook's project: on the session's first turn, after a compaction, after a move. */
 export function projectContext(b: ProjectBrief, note?: string): string {
   const head = [
     `Project: ${b.name} (OpenResearch id ${b.id}).${b.paperId ? ` Paper: arXiv ${b.paperId}.` : ""}${b.githubUrl ? ` Repository: ${b.githubUrl}.` : ""}`,
@@ -230,6 +231,18 @@ export function projectContext(b: ProjectBrief, note?: string): string {
   if (note) head.unshift(note);
   const sections: string[] = [];
   for (const d of b.docs) sections.push(`## ${d.name} (first lines)\n${d.head}`);
+  if (b.experiments?.length) {
+    sections.push(
+      `## Experiments (${b.experiments.length})\n` +
+        b.experiments
+          .map((e) => {
+            const r = e.latestRun;
+            const runText = r ? ` — latest run ${r.id}: ${r.status}${r.result ? ` (${r.result})` : ""}` : " — no runs yet";
+            return `- ${e.title} [${e.id}]${runText}`;
+          })
+          .join("\n"),
+    );
+  }
   sections.push(
     b.artifacts.length
       ? `## Shared artifacts (${b.artifactsTotal}${b.artifactsTotal > b.artifacts.length ? `, newest ${b.artifacts.length}` : ""})\n${b.artifacts.map((a) => `- artifacts/${a.path} (${sizeText(a.size)})`).join("\n")}`

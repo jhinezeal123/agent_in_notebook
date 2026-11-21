@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_first_step_size",
+    "text": "Vì `m` và `v` được khởi tạo bằng 0, ở bước t=1 giá trị trung bình trượt `m` và `v` đang bị lệch về 0 bao nhiêu lần?"
+  },
+  {
+    "level": 0,
+    "test": "test_matches_reference",
+    "text": "Biến đếm bước `t` cần được tăng lên trước hay sau khi tính bước cập nhật tham số?"
+  },
+  {
+    "level": 1,
+    "text": "Tăng bộ đếm bước t trước vòng lặp và hiệu chỉnh độ lệch khởi tạo (bias correction) cho cả m và v bằng cách chia cho (1 - b1^t) và (1 - b2^t)."
+  },
+  {
+    "level": 2,
+    "when": "thiếu bias correction",
+    "text": "Bước 1: tăng bộ đếm bước t thêm 1 trước vòng lặp.\nBước 2: chia moment bậc 1 cho (1 trừ b1 mũ t) và chia moment bậc 2 cho (1 trừ b2 mũ t).\nBước 3: dùng hai moment đã hiệu chỉnh để cập nhật tham số p."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở dòng bias correction",
+    "text": "```python\nt = state[\"t\"] + 1\n# trong vòng lặp:\nm_hat = m[k] / (1 - b1 ** t)\nv_hat = v[k] / (1 - b2 ** t)\nout[k] = p - lr * m_hat / (np.sqrt(v_hat) + eps)\n```"
+  }
+]

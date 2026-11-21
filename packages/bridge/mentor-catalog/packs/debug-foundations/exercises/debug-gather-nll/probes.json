@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Vì sao việc thêm padding token không được phép làm thay đổi giá trị loss trung bình của batch?",
+    "tag": "dbg-mask-padding-invariance",
+    "answer": "Padding chỉ để ghép các câu khác độ dài vào cùng tensor; nó không mang thông tin học, nếu chia cho tổng số phần tử B*T thì gradient của các câu dài bị thu nhỏ theo lượng padding.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Nếu toàn bộ mask trong một batch bằng 0 thì phép chia cho mask.sum() gây ra gì, và ta xử lý ra sao?",
+    "tag": "dbg-empty-mask",
+    "answer": "Chia cho 0 tạo NaN; cần kiểm tra nếu tổng mask bằng 0 thì trả về 0.0.",
+    "kind": "edge",
+    "stage": "defend"
+  },
+  {
+    "q": "Tại sao trong `masked_nll` lại cần ép `mask` sang kiểu float trước khi nhân và cộng?",
+    "tag": "dbg-mask-dtype",
+    "answer": "Mask có thể truyền vào dưới dạng bool hoặc int; ép float đảm bảo phép nhân và phép chia nhất quán, không bị chia nguyên hay lỗi kiểu.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "So sánh `np.take_along_axis` với fancy indexing `log_probs[rows, cols, targets]` khi đầu vào có thể tổng quát hơn 2 chiều dẫn đầu.",
+    "tag": "dbg-gather-take-along",
+    "answer": "`take_along_axis` với `targets[..., None]` và `axis=-1` hoạt động với mọi số chiều dẫn đầu, còn fancy indexing 2 chỉ số sẽ hỏng nếu không phải đúng (B, T, V).",
+    "kind": "compare",
+    "stage": "defend"
+  }
+]

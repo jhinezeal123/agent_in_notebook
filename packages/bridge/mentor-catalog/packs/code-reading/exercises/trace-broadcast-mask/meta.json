@@ -1,0 +1,21 @@
+{
+  "id": "trace-broadcast-mask",
+  "title": "Đọc hiểu code: chuẩn hóa có mask trên chuỗi",
+  "star": "trace-broadcast",
+  "skills": [
+    "tensor",
+    "theory"
+  ],
+  "difficulty": 1150,
+  "minutes": 15,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "trace_shapes",
+    "predict_invariants"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

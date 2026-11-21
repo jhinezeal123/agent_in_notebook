@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_centered_and_reconstruction",
+    "text": "Trước khi phân rã SVD, trung bình của mỗi đặc trưng đã được đưa về 0 chưa?"
+  },
+  {
+    "level": 0,
+    "test": "test_variance_ordering_and_full_rank",
+    "text": "Phương sai ứng với thành phần thứ j tỉ lệ thuận với $\\sigma_j$ hay $\\sigma_j^2$?"
+  },
+  {
+    "level": 1,
+    "text": "Trừ trung bình theo trục mẫu (axis=0), gọi thin SVD, lấy k hàng đầu của Vt làm components, chiếu X đã quy tâm lên components.T, và tính evr từ bình phương các giá trị kỳ dị."
+  },
+  {
+    "level": 2,
+    "when": "kẹt ở các bước SVD",
+    "text": "1. Quy tâm X theo trục 0\n2. Thin SVD lấy U, S, Vt\n3. components là k hàng đầu của Vt; Z = X_quy_tam @ components.T\n4. evr = (k phần tử đầu của S^2) / tổng(S^2), xử lý riêng khi tổng = 0"
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở dòng SVD và evr",
+    "text": "```python\n_U, S, Vt = np.linalg.svd(Xc, full_matrices=False)\ncomponents = Vt[:k]\nZ = Xc @ components.T\nsq = S ** 2\nevr = sq[:k] / sq.sum() if sq.sum() > 0 else np.zeros(k)\n```"
+  }
+]

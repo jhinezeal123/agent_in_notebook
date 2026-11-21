@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Tại sao đặt `scores = -inf` tại các vị trí bị che TRƯỚC softmax lại khác với nhân `weights * mask` SAU softmax?",
+    "tag": "dbg-attn-mask-order",
+    "answer": "Đặt -inf trước softmax khiến exp(-inf) = 0 ngay trong mẫu số của softmax, nên phần xác suất còn lại được chuẩn hóa lại đúng bằng 1 trên các vị trí hợp lệ.",
+    "kind": "why",
+    "stage": "lab"
+  },
+  {
+    "q": "Nếu đặt `scores = 0` thay vì `-inf` cho vị trí bị che trước softmax thì chuyện gì xảy ra?",
+    "tag": "dbg-attn-mask-zero",
+    "answer": "exp(0) = 1 > 0, nên vị trí bị che vẫn nhận trọng số dương đáng kể và rò rỉ thông tin tương lai.",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Tại sao cần chia cho $\\sqrt{d_k}$ trước softmax (thay vì chia cho $d_k$ hoặc không chia)?",
+    "tag": "dbg-attn-scale-sqrt",
+    "answer": "Nếu Q, K có phương sai 1 thì tích vô hướng có phương sai d_k (độ lệch chuẩn sqrt(d_k)); chia sqrt(d_k) đưa phương sai về 1 để softmax không bão hòa.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi Q, K, V có dạng 4D `(B, H, T, d_k)`, phép chuyển vị hai trục cuối nên viết thế nào?",
+    "tag": "dbg-attn-swapaxes",
+    "answer": "Dùng `np.swapaxes(K, -1, -2)` (hoặc `K.transpose(..., -1, -2)`) thay vì `K.T` vì `.T` đảo ngược toàn bộ 4 trục.",
+    "kind": "shape",
+    "stage": "defend"
+  }
+]

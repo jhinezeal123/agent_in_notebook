@@ -1,0 +1,30 @@
+[
+  {
+    "q": "Tensor hiệu sau khi chèn trục mới có shape (N, M, D). Mỗi trục 0, 1, 2 đại diện cho đại lượng nào?",
+    "tag": "dbg-pairwise-axis-meaning",
+    "answer": "Trục 0 là chỉ số điểm trong X (N), trục 1 là chỉ số điểm trong Y (M), trục 2 (axis=-1) là các tọa độ đặc trưng (D).",
+    "kind": "shape",
+    "stage": "lab"
+  },
+  {
+    "q": "Nếu N = M = D = 3 thì lỗi cộng nhầm trục 0 có bị phát hiện bởi kiểm tra shape không? Ta cần kiểm tra gì thêm?",
+    "tag": "dbg-square-shape-mask",
+    "answer": "Không, vì mọi shape đều là (3, 3). Phải kiểm tra đường chéo khi X = Y (phải bằng 0) hoặc thử shape không vuông N != M != D.",
+    "kind": "trap",
+    "stage": "defend"
+  },
+  {
+    "q": "Vì sao khi debug các hàm tensor ta nên luôn chọn các chiều phân biệt nhau (ví dụ N=4, M=5, D=3)?",
+    "tag": "dbg-distinct-dims",
+    "answer": "Chiều phân biệt giúp mọi lỗi nhầm trục hoặc transpose sai lộ ra ngay lập tức qua shape sai thay vì bị che lấp.",
+    "kind": "why",
+    "stage": "defend"
+  },
+  {
+    "q": "Khi D = 1 (mỗi điểm là 1 số thực), việc bỏ trục cuối có còn hợp lệ không? Kết quả có shape gì?",
+    "tag": "dbg-pairwise-d1",
+    "answer": "Còn hợp lệ, tổng theo axis=-1 khử chiều D=1 để trả về đúng shape (N, M).",
+    "kind": "edge",
+    "stage": "defend"
+  }
+]

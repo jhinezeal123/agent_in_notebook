@@ -30,13 +30,23 @@ export function detectJupyter(): boolean {
   return findPanel() !== null;
 }
 
+/** A lumino-style signal connection, remembered so it can be undone. */
+interface Link { signal: Any; cb: Any }
+
 export class JupyterAdapter implements NotebookAdapter {
   readonly platform: NotebookInfo["platform"];
   private readonly cards = new Map<string, HTMLElement>();
   private readonly server = new ServerPython(() => this.openTerminal());
 
-  constructor() {
+  /**
+   * `nudge` asks the OpRunner for a beat right now (main.ts passes
+   * runner.pulseNow). Editor signals call it; the runner's background timer
+   * keeps running at its own pace — Kaggle's packaged JupyterLab may lack or
+   * miswire a signal, so a signal is an early tick, never the only source.
+   */
+  constructor(private readonly nudge: () => void = () => {}) {
     this.platform = /(^|\.)kaggle\.(com|net)$/.test(location.hostname) || /kaggle/i.test(document.referrer) ? "kaggle" : "jupyter";
+    this.hookRunSignals();
   }
 
   private get app(): Any {
@@ -98,7 +108,7 @@ export class JupyterAdapter implements NotebookAdapter {
   private running(cell: Any): boolean {
     if (cell.model.type !== "code") return false;
     if (cell.model.executionState === "running") return true;
-    if (this.futureRunning(cell.outputArea?.future)) return true;
+    if (this.futureRunning(cell.outputArea?.future, cell.model.id)) return true;
     // Older JupyterLab shows "[*]"; Kaggle draws a spinner instead, so this alone misses its runs.
     return /\*/.test(cell.promptNode?.textContent ?? "");
   }
@@ -106,16 +116,21 @@ export class JupyterAdapter implements NotebookAdapter {
   /** Kernel futures seen, and those whose run has ended. */
   private readonly seenFutures = new WeakSet<object>();
   private readonly doneFutures = new WeakSet<object>();
+  /** Per-cell generation of witnessed runs: the runToken evidence (A4.4). */
+  private readonly generations = new Map<string, number>();
 
   /**
    * A cell's output area keeps the future of its last run (not disposed when
    * it ends), so a future whose `done` has not settled is a run in progress:
    * true on any JupyterLab 4 and whatever the page draws as the prompt.
+   * A future seen for the first time is a new run of its cell: bump the
+   * generation the watcher reads as runToken, independent of the count.
    */
-  private futureRunning(future: Any): boolean {
+  private futureRunning(future: Any, cellId?: string): boolean {
     if (!future || typeof future !== "object" || future.isDisposed || this.doneFutures.has(future)) return false;
     if (!this.seenFutures.has(future)) {
       this.seenFutures.add(future);
+      if (cellId) this.generations.set(cellId, (this.generations.get(cellId) ?? 0) + 1);
       const end = () => { this.doneFutures.add(future); };
       Promise.resolve(future.done).then(end, end);
       // First sight: an old future settles on the next microtask; until then
@@ -156,8 +171,20 @@ export class JupyterAdapter implements NotebookAdapter {
   }
 
   runStates(): CellRunState[] {
-    return this.widgets().filter((w) => w.model.type === "code")
-      .map((w) => ({ cellId: w.model.id, running: this.running(w), executionCount: w.model.executionCount ?? null }));
+    const alive = new Set<string>();
+    const states = this.widgets().filter((w) => w.model.type === "code")
+      .map((w) => {
+        const id: string = w.model.id;
+        alive.add(id);
+        const running = this.running(w);
+        const gen = this.generations.get(id);
+        const state: CellRunState = { cellId: id, running, executionCount: w.model.executionCount ?? null };
+        // Only a witnessed run gives a token; a pasted or undone old cell has none.
+        if (gen !== undefined) state.runToken = String(gen);
+        return state;
+      });
+    for (const id of this.generations.keys()) if (!alive.has(id)) this.generations.delete(id);
+    return states;
   }
 
   setSource(cellId: string, source: string): boolean {
@@ -172,7 +199,41 @@ export class JupyterAdapter implements NotebookAdapter {
     const ycell = shared.insertCell(index, { cell_type: type, source, metadata: {} });
     // The cell widget is created asynchronously after the model change.
     const id: string = ycell.id;
-    for (let i = 0; i < 50 && !this.widgets().some((w) => w.model.id === id); i++) await new Promise((r) => setTimeout(r, 20));
+    const present = (): boolean => {
+      try {
+        return this.widgets().some((w) => w.model.id === id);
+      } catch {
+        return false;
+      }
+    };
+    if (present()) return id;
+    // cellsChange says when the widget list moved (A4.3); the old 20ms×50 loop
+    // stays as the fallback for builds without the signal, and as the timeout.
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let hooked = false;
+      let tries = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearInterval(timer);
+        if (hooked) {
+          try { shared.cellsChange.disconnect(onChange); } catch { /* already gone */ }
+        }
+        resolve();
+      };
+      const onChange = () => { if (present()) finish(); };
+      const timer = setInterval(() => { if (present() || ++tries >= 50) finish(); }, 20);
+      try {
+        if (typeof shared.cellsChange?.connect === "function") {
+          shared.cellsChange.connect(onChange);
+          hooked = true;
+        }
+      } catch {
+        // no signal in this build: the loop alone waits
+      }
+      if (present()) finish();
+    });
     return id;
   }
 
@@ -332,6 +393,7 @@ export class JupyterAdapter implements NotebookAdapter {
       card.remove();
       this.cards.delete(review.reviewId);
       clearInterval(keepAttached);
+      unhookSource?.();
       const current = findCell();
       current?.node?.classList.remove("ainb-pending-delete");
       // Never overwrite or delete edits made while the diff was waiting.
@@ -343,6 +405,33 @@ export class JupyterAdapter implements NotebookAdapter {
       return accept;
     });
 
+    // The cell's sharedModel says at once when its source changes (A4.4): give
+    // up the review then, not a poll later. Both signal names are tried — the
+    // exact one depends on the @jupyter/ydoc build; the slow interval below is
+    // the fallback when neither exists, and re-attaches the card when the DOM
+    // is redrawn. The accept path re-checks the source anyway, so an edit is
+    // never overwritten even in the fallback window.
+    let unhookSource: (() => void) | null = null;
+    const onSourceChange = () => {
+      const c = findCell();
+      if (!c || c.model.sharedModel.getSource() !== expectedSource) settle(false);
+    };
+    try {
+      const sm = cell.model.sharedModel;
+      for (const sig of [sm?.sourceChange, sm?.changed]) {
+        if (sig && typeof sig.connect === "function") {
+          sig.connect(onSourceChange);
+          const prev = unhookSource;
+          unhookSource = () => {
+            prev?.();
+            try { sig.disconnect(onSourceChange); } catch { /* already gone */ }
+          };
+        }
+      }
+    } catch {
+      // no signals in this build
+    }
+
     // Re-rendering can recreate cell nodes; keep the card on the cell, and give
     // up the review if the user deletes or changes the cell.
     const keepAttached = setInterval(() => {
@@ -352,7 +441,7 @@ export class JupyterAdapter implements NotebookAdapter {
       } else if (!c.node.contains(card)) {
         this.attachCard(review.reviewId, c, card);
       }
-    }, 1000);
+    }, 2500);
 
     return { decided: finished, resolve: (accept) => settle(accept) };
   }
@@ -368,15 +457,126 @@ export class JupyterAdapter implements NotebookAdapter {
     let hooked: Any = null;
     const hook = () => {
       const p = findPanel();
-      if (!p || p === hooked) return;
-      hooked = p;
-      p.content.activeCellChanged?.connect?.(() => cb());
-      p.content.selectionChanged?.connect?.(() => cb());
-      cb();
+      if (p && p !== hooked) {
+        hooked = p;
+        p.content.activeCellChanged?.connect?.(() => cb());
+        p.content.selectionChanged?.connect?.(() => cb());
+        cb();
+      }
+      // The same re-hook sweep keeps the run signals on the current panel.
+      this.hookRunSignals();
     };
     hook();
     this.app?.shell?.currentChanged?.connect?.(() => hook());
-    setInterval(hook, 2000);
+    this.selectionTimer = setInterval(hook, 2000);
+  }
+
+  // ------------------------------------------------------------------ run signals (A4.3)
+
+  private signalPanel: Any = null;
+  private signalKernel: Any = null;
+  private readonly panelLinks: Link[] = [];
+  private readonly kernelLinks: Link[] = [];
+  /** Output models already hooked; weak, so deleted cells take their links along. */
+  private readonly hookedOutputs = new WeakSet<object>();
+  private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  private selectionTimer: ReturnType<typeof setInterval> | null = null;
+  private disposed = false;
+
+  private link(signal: Any, cb: (...args: Any[]) => void, bucket: Link[]): void {
+    try {
+      if (signal && typeof signal.connect === "function") {
+        signal.connect(cb);
+        bucket.push({ signal, cb });
+      }
+    } catch {
+      // signal absent or different in this build
+    }
+  }
+
+  private unlink(bucket: Link[]): void {
+    for (const { signal, cb } of bucket) {
+      try { signal.disconnect(cb); } catch { /* already gone */ }
+    }
+    bucket.length = 0;
+  }
+
+  /** Coalesce a burst of signals into one early beat (~60ms debounce). */
+  private scheduleNudge(): void {
+    if (this.disposed || this.nudgeTimer) return;
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = null;
+      try {
+        this.nudge();
+      } catch {
+        // the runner is gone
+      }
+    }, 60);
+  }
+
+  /**
+   * Public JupyterLab 4 signals: the kernel's status/connection, the notebook
+   * model's changes, and each cell's outputs. Every hook is optional — a
+   * packaged build (Kaggle) may lack one; the runner's timer covers that.
+   */
+  private hookRunSignals(): void {
+    if (this.disposed) return;
+    const p = findPanel();
+    if (!p) return;
+    if (p !== this.signalPanel) {
+      this.unlink(this.panelLinks);
+      this.unlink(this.kernelLinks);
+      this.signalKernel = null;
+      this.signalPanel = p;
+      const nudge = () => this.scheduleNudge();
+      this.link(p.sessionContext?.kernelChanged, () => { this.hookKernel(); nudge(); }, this.panelLinks);
+      const shared = p.content?.model?.sharedModel;
+      this.link(shared?.changed, nudge, this.panelLinks);
+      this.link(shared?.cellsChange, () => { this.hookOutputs(); nudge(); }, this.panelLinks);
+    }
+    this.hookKernel();
+    this.hookOutputs();
+  }
+
+  private hookKernel(): void {
+    try {
+      const k = this.signalPanel?.sessionContext?.session?.kernel ?? null;
+      if (!k || k === this.signalKernel) return;
+      this.unlink(this.kernelLinks);
+      this.signalKernel = k;
+      const nudge = () => this.scheduleNudge();
+      this.link(k.statusChanged, nudge, this.kernelLinks);
+      this.link(k.connectionStatusChanged, nudge, this.kernelLinks);
+    } catch {
+      // session not ready yet; kernelChanged tries again
+    }
+  }
+
+  private hookOutputs(): void {
+    try {
+      for (const w of this.signalPanel?.content?.widgets ?? []) {
+        const om = w?.model?.outputs;
+        if (!om || typeof om !== "object" || this.hookedOutputs.has(om)) continue;
+        if (typeof om.changed?.connect === "function") {
+          om.changed.connect(() => this.scheduleNudge());
+          this.hookedOutputs.add(om);
+        }
+      }
+    } catch {
+      // widgets mid-rebuild
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.nudgeTimer) clearTimeout(this.nudgeTimer);
+    this.nudgeTimer = null;
+    if (this.selectionTimer) clearInterval(this.selectionTimer);
+    this.selectionTimer = null;
+    this.unlink(this.panelLinks);
+    this.unlink(this.kernelLinks);
+    this.signalPanel = null;
+    this.signalKernel = null;
   }
 }
 

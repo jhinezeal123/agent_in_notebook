@@ -1,0 +1,45 @@
+{
+  "protocol": 1,
+  "id": "debug-foundations",
+  "name": "Phòng khám bug nền móng",
+  "description": "10 bài tìm và sửa lỗi thật hay gặp trong broadcasting, chuẩn hóa, tối ưu và attention (NumPy).",
+  "constellation": {
+    "id": "debug-foundations",
+    "name": "Phòng khám bug",
+    "description": "Chẩn đoán triệu chứng và sửa 1–2 lỗi cài sẵn trên code chạy được.",
+    "daily": false
+  },
+  "stars": [
+    {
+      "id": "debug-tensor",
+      "name": "Bug shape & trục",
+      "after": [
+        "broadcasting"
+      ]
+    },
+    {
+      "id": "debug-softmax-norm",
+      "name": "Bug ổn định số & norm",
+      "after": [
+        "debug-tensor",
+        "softmax"
+      ]
+    },
+    {
+      "id": "debug-train-optim",
+      "name": "Bug tối ưu & dropout",
+      "after": [
+        "debug-softmax-norm",
+        "optim"
+      ]
+    },
+    {
+      "id": "debug-seq-attn",
+      "name": "Bug attention",
+      "after": [
+        "debug-train-optim",
+        "sdpa"
+      ]
+    }
+  ]
+}

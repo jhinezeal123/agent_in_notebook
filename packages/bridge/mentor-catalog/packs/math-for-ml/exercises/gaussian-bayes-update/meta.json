@@ -1,0 +1,21 @@
+{
+  "id": "gaussian-bayes-update",
+  "title": "Cập nhật hậu nghiệm Bayes (Normal–Normal)",
+  "star": "bayes-posterior",
+  "skills": [
+    "formula",
+    "theory"
+  ],
+  "difficulty": 1300,
+  "minutes": 20,
+  "requires": [
+    "numpy"
+  ],
+  "order": 1,
+  "functions": [
+    "posterior_normal",
+    "predictive_normal"
+  ],
+  "prelude": "import numpy as np",
+  "probes": 2
+}

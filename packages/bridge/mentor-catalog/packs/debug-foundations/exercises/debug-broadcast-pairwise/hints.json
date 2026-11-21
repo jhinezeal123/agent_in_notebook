@@ -1,0 +1,26 @@
+[
+  {
+    "level": 0,
+    "test": "test_shape",
+    "text": "Sau phép trừ có shape (N, M, D), bạn đang cộng gộp theo trục nào để giữ lại N hàng và M cột?"
+  },
+  {
+    "level": 0,
+    "test": "test_values",
+    "text": "Khoảng cách Euclid bình phương cộng bình phương hiệu trên các tọa độ đặc trưng hay trên các mẫu?"
+  },
+  {
+    "level": 1,
+    "text": "Kiểm tra đối số trục của phép tổng bình phương: ta cần khử chiều đặc trưng D (trục cuối cùng), không phải trục mẫu N."
+  },
+  {
+    "level": 2,
+    "when": "nhầm trục tổng",
+    "text": "diff có shape (N, M, D)\nCộng bình phương theo trục cuối cùng (axis = -1) để còn lại (N, M)."
+  },
+  {
+    "level": 3,
+    "when": "kẹt ở dòng trả về",
+    "text": "```python\nreturn (diff ** 2).sum(axis=-1)\n```"
+  }
+]
