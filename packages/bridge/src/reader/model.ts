@@ -11,6 +11,7 @@ import {
   type ReaderGoal,
   type ReaderGrade,
   type ReaderNote,
+  type ReaderStudySession,
   type ReaderPass,
   type ReaderScore,
   type ReaderWriteKind,
@@ -21,6 +22,7 @@ import { emptyQuality, type ReaderQuality } from "./eval.js";
 
 export type ReaderEvent =
   | { t: "r.open"; at: number }
+  | { t: "r.session"; at: number; action: "start" | "end"; startedAt?: number }
   | { t: "r.widgetAnswer"; at: number; id: string; choice: number; correct: boolean }
   | { t: "r.cardsProposed"; at: number; cards: ReaderCard[] }
   | { t: "r.cardKeep"; at: number; card: ReaderCard }
@@ -105,6 +107,7 @@ export interface ReaderState {
   /** Last time a section was read before an answer. */
   readAt: Map<string, number>;
   quality: ReaderQuality;
+  session?: ReaderStudySession;
 }
 
 export function emptyReaderState(): ReaderState {
@@ -126,6 +129,10 @@ export function foldReader(events: Iterable<ReaderEvent>, into: ReaderState = em
     if (!e || typeof e !== "object" || typeof e.at !== "number") continue;
     s.lastAt = Math.max(s.lastAt, e.at);
     switch (e.t) {
+      case "r.session":
+        if (e.action === "start") s.session = { startedAt: e.at };
+        else if (e.action === "end" && s.session?.startedAt === e.startedAt && s.session) s.session.endedAt = e.at;
+        break;
       case "r.quality":
         for (const key of Object.keys(s.quality) as (keyof ReaderQuality)[]) {
           const n = e.counts?.[key];

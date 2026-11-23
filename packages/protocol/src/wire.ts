@@ -474,6 +474,7 @@ export interface BridgeMethods {
   /** Easy-read: open a paper to read (fetched and converted the first time). */
   "reader.open": { params: { source: { arxiv: string } | { pdfPath: string } | { paperId: string } }; result: ReaderView };
   "reader.get": { params: { paperId: string }; result: ReaderView };
+  "reader.session": { params: { paperId: string; action: "start" | "end" }; result: ReaderView };
   /** The papers read so far, latest first. */
   "reader.list": { params: Record<string, never>; result: { papers: ReaderLibraryItem[] } };
   /** Time spent in a section (the tab sends it in slices); the section is where the reader is now. */

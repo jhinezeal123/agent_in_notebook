@@ -22,7 +22,7 @@ Nghiên cứu đầy đủ kèm nguồn: [`docs/easy-read-nghien-cuu.md`](easy-r
 1. **AI không đọc hộ.** Bạn làm phần *nghĩ*: đoán, nhớ lại, giải thích, phản biện. AI chuẩn bị, hỏi, phản hồi, và giải thích ngay khi bạn hỏi. Thứ duy nhất bị giữ lại là đáp án của việc đang chờ bạn làm.
 2. **Mọi điều AI nói về paper trỏ về đúng chỗ trong paper**, bấm được, và câu trích được máy so với paper thật trước khi tới tay bạn.
 3. **Luật do máy giữ, không chỉ do prompt**: thứ tự các bước, đáp án bị ẩn, câu hỏi phải qua kiểm.
-4. **Mỗi buổi ≤ 40 phút** xong một việc trọn vẹn; tiến độ và lịch ôn tính từ nhật ký, không do AI tự khai.
+4. **Mỗi buổi ≤ 40 phút.** Thanh đọc đếm ngược theo đồng hồ của buổi; mốc bắt đầu và kết thúc còn khi mở lại tab. Khi hết giờ, bấm **Bắt đầu buổi mới** để tiếp tục nộp checkpoint. Tiến độ và lịch ôn lấy từ nhật ký.
 
 **Đội agent**: *gia sư* (chat với bạn) · *người soạn* (chạy nền, soạn trước một bước so với bạn: bản đồ paper, câu hỏi, widget) · *người kiểm* (giải mù từng câu trắc nghiệm, không thấy đáp án) · *đồng nghiệp lề* (phản biện ở lượt 3). Tất cả chạy trên agent ACP bạn đang dùng.
 
@@ -186,7 +186,7 @@ Với mỗi mục:
 
 ### D.8 Gia sư (luôn có trong khung chat)
 
-- Hỏi gì cũng được, bất cứ lúc nào; mỗi ý về paper kèm **chip trích dẫn** `§4.1`, `Eq. 3`, `tr. 5`, bấm là tab đọc cuộn tới và tô sáng.
+- Hỏi gia sư bất cứ lúc nào. Bridge giữ phần văn bản của câu trả lời đến cuối lượt. Mỗi đoạn trình bày claim của paper cần có một câu trích tìm được trong văn bản paper để hiện trong chat. Chip trích dẫn cuộn tới đúng chỗ và tô sáng. Với lời giải thích từ kiến thức ngoài paper, suy luận hay gợi ý, gia sư dùng nhãn riêng.
 - Câu trả lời tách rõ: *paper nói* · *kiến thức ngoài paper* · *suy luận của gia sư*.
 - Với việc đang chờ bạn làm (checkpoint, 5C, câu đào sâu), gia sư không nói đáp án mà gợi ý theo thang 0–3; ngoài ra giải thích thẳng. Luật này do **bridge** giữ (đáp án của việc đang chờ không có trong ngữ cảnh của gia sư), không chỉ dựa vào lời dặn trong prompt: prompt một mình không giữ được cấu trúc (Kestin et al.; OpenAI tự nhận Study Mode "không nhất quán"), và trợ giúp AI không rào chắn làm *giảm* kỹ năng tự làm sau đó (Bastani et al.).
 - Không có thanh trượt "giải thích kiểu người mới ↔ chuyên gia": LLM chỉ đổi độ phức tạp đúng hướng 33–46 % số lần. Thay vào đó là các *loại* trợ giúp rõ ràng: Giải thích · Ví dụ cụ thể · Ký hiệu · Vì sao · Kiến thức nền.
@@ -543,7 +543,7 @@ Sau khi soạn nội dung cho paper bằng bridge đang chạy, dùng `pnpm ainb
 
 ### G.1 Rủi ro và giới hạn đã biết
 
-- **AI sai về paper.** Lớp bù: câu trích phải có thật (kiểm bằng máy), người kiểm giải mù, mốc bấm được để bạn tự đối chiếu, nút Báo câu sai, và luật tách "paper nói / ngoài paper / suy luận". Không lớp nào tuyệt đối; widget qua tự kiểm chỉ chứng minh nó *tự nhất quán* với các bất biến người soạn viết ra, như bài của xưởng.
+- Bridge xác nhận vị trí và nội dung câu trích. Người đọc có thể bấm chip để đối chiếu diễn giải và suy luận với ngữ cảnh đầy đủ. Người kiểm giải mù checkpoint và **Báo câu sai** rút câu bị phát hiện lỗi.
 - **Chấm câu tự luận bằng AI không ổn định tuyệt đối.** Vì vậy điểm tự luận chỉ có 0/1/2 theo rubric, luôn kèm trích đúng câu chữ của bạn, và bạn có thể phản đối ("Mình nghĩ câu này đúng vì…") để gia sư chấm lại một lần.
 - **Chi phí agent.** Bản đồ paper ~2–4 phút agent; mỗi mục một lô câu hỏi + một lượt kiểm; mỗi widget 1–3 vòng. Soạn trước một bước so với bạn để không tốn cho phần bạn không đọc tới.
 - **HTML của arXiv** có thể lỗi ở paper dùng gói LaTeX lạ (bảng, thuật toán); khi đó tab đọc chuyển sang PDF, agent vẫn đọc LaTeX.

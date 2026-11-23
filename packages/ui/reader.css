@@ -310,3 +310,5 @@ button { font: inherit; color: inherit; }
 .er-widget-plot { margin: 8px 0; color: var(--vscode-textLink-foreground); }
 .er-widget-plot svg { width: 100%; max-width: 520px; display: block; }
 .er-notation-tip { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - 16px)); padding: 6px 9px; pointer-events: none; color: var(--vscode-editorHoverWidget-foreground); background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-editorHoverWidget-border); border-radius: 4px; }
+.er-session { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.er-session-time { font-variant-numeric: tabular-nums; font-weight: 600; }

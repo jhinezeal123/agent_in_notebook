@@ -16,6 +16,8 @@ export interface ChatRole {
   snapshot(): Partial<ChatSnapshot>;
   /** A turn's whole prompt, in place of the coding agent's. */
   prompt(turn: RoleTurn): Promise<string>;
+  /** Buffer the reply's prose until this check can publish it as a whole. */
+  reviewReply?(text: string): string;
   /** The tools the agent gets, in place of the notebook's. */
   tools(): readonly ToolDef<any, any>[];
   /** Run one of them. `ctx` is the chat's own, for the role to add to. */

@@ -10,6 +10,7 @@ import { callTool, tool, type ToolContext, type ToolDef, type ToolResult } from 
 import type { ReaderHub } from "./index.js";
 import type { ReaderTutorPort } from "./passes.js";
 import { READER_TOOLS, sectionOf, type ReaderToolContext, type ReaderToolHost } from "./tools.js";
+import { reviewReaderReply } from "./reply.js";
 
 /** The tutor's fixed mode: no tool that edits anything; the agent's own tools refused. */
 export const READER_SETTINGS: ChatSettings = { scope: "auto", review: false, targetCellIds: [], notebookOnly: true };
@@ -97,6 +98,10 @@ export class ReaderChat implements ChatRole, ReaderToolHost {
     return blocks.filter(Boolean).join("\n\n");
   }
 
+  reviewReply(text: string): string {
+    return reviewReaderReply(this.hub.doc(this.paperId), text);
+  }
+
   tools(): readonly ToolDef<any, any>[] {
     return TUTOR_TOOLS;
   }
@@ -177,8 +182,8 @@ Language: answer in Vietnamese. Keep technical terms in English, and give a term
 
 Ground what you say in the paper:
 - Read before you answer: paper_find for words or a phrase, paper_read for a section (by its id), paper_figure for a figure or table${pdf ? ", paper_page to look at a PDF page (formulas taken out of a PDF are often garbled: look at the page before explaining a formula)" : ""}. Do not answer about the paper from memory.
-- After each statement about the paper, put an anchor the reader can click: [[S4.SS1]] a section, [[S4.SS1.p2]] a paragraph, [[S2.E1]] an equation, [[S1.F1]] a figure, [[S3.T1]] a table${pdf ? ", [[page-4]] a page, [[p4: \"exact words\"]] a phrase on a page" : ", [[S4.SS1.p2: \"exact words\"]] a phrase in a paragraph"}. Use only ids that appear in your tool results. Quoted words must be the paper's exact words, at most ~15 of them.
-- Keep apart what the paper says (anchored), what you know from outside the paper (start it with "Ngoài paper:"), and your own inference ("Suy luận:"). Say so when the paper does not say something.
+- Write one claim about the paper per paragraph, starting with "Paper nói:" and ending with an exact citation such as [[S4.SS1.p2: "exact English words from the paper"]]${pdf ? ' or [[p4: "exact words from that page"]]' : ""}. Take a whole clause of about 5–15 words from a tool result. Use actual ids. You can add bare equation, figure, table or section chips in the same paragraph to point out a detail.
+- Start separate paragraphs with "Ngoài paper:" for outside knowledge, "Suy luận:" for your inference, or "Hướng dẫn:" for a hint, question or practical next step. Use a blank line between paragraphs. The bridge checks all citation chips and holds back paper claims without a matching quote before publishing the reply.
 
 When the reader selects a passage, it comes as <reader-selection kind=… anchor=…>, and the message says what they want:
 - Giải thích (explain): what it says in plain words, then the role it plays in the paper's argument, tied to what came before it.

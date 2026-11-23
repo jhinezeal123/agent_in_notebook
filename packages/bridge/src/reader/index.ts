@@ -2,7 +2,7 @@
 // notes, and what the reading tab and the tutor ask of them. Like Mentor, it
 // stands apart from the chat: the chat knows it only as a role (chat.ts here).
 
-import type { ReaderAnchor, ReaderLibraryItem, ReaderNote, ReaderSectionView, ReaderView } from "@ainb/protocol";
+import { readerSessionRemaining, type ReaderAnchor, type ReaderLibraryItem, type ReaderNote, type ReaderSectionView, type ReaderView } from "@ainb/protocol";
 import { parseArxivId, paperIdFor } from "../mentor/fetch.js";
 import { arxivIdInPdf, docFromPages, docText, type ReaderDoc } from "./doc.js";
 import { ReaderAuthor, type ReaderAuthorHost } from "./author.js";
@@ -169,7 +169,34 @@ export class ReaderHub {
       warnings: meta.warnings, ...(meta.arxivHint ? { arxivHint: meta.arxivHint } : {}),
       openedAt: meta.openedAt, lastAt: Math.max(state.lastAt, meta.openedAt),
       ...(state.goal ? { goal: state.goal } : {}), pass: state.pass, guideRev: this.revs.get(paperId) ?? 0,
+      ...(state.session ? { session: { ...state.session } } : {}),
     };
+  }
+
+  studySession(paperId: string, action: "start" | "end", at = Date.now()): ReaderView {
+    this.meta(paperId);
+    const current = this.store.state(paperId).session;
+    const remaining = current ? readerSessionRemaining(current, at) : 0;
+    if (action === "start" && !remaining) {
+      this.store.append(paperId, { t: "r.session", action, at });
+      return this.changed(paperId);
+    }
+    if (action === "end" && current && remaining > 0) {
+      this.store.append(paperId, { t: "r.session", action, at, startedAt: current.startedAt });
+      return this.changed(paperId);
+    }
+    return this.view(paperId);
+  }
+
+  /** Opens the first guided session for existing readers. Only they can start another. */
+  requireStudySession(paperId: string, at = Date.now()): void {
+    this.meta(paperId);
+    const session = this.store.state(paperId).session;
+    if (!session) {
+      this.studySession(paperId, "start", at);
+      return;
+    }
+    if (!readerSessionRemaining(session, at)) throw new Error("Buổi đọc đã kết thúc. Bấm Bắt đầu buổi mới để làm tiếp.");
   }
 
   /**

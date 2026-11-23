@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ChatSnapshot, ReaderGuide, ReaderLibraryItem, ReaderView } from "@ainb/protocol";
+import type { ChatSnapshot, MessagePatch, ReaderGuide, ReaderLibraryItem, ReaderView } from "@ainb/protocol";
 import { itemId, rightChoice, type ItemInput } from "../src/reader/items.js";
 import { Bridge } from "../src/server.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
@@ -133,6 +133,28 @@ describe("easy-read through the bridge", () => {
     expect(text).toContain(`IMAGES 1 image/jpeg:${JPEG.toString("base64").length}`);
     expect(text).toContain('RESULT paper_page: Page 2 of the PDF (cite it as [[page-2]]');
     expect(existsSync(join(home, "mentor", "papers", paperId, "reader", "pages", "2.jpg"))).toBe(true);
+  });
+
+  it("publishes only checked paper claims, including across ACP message chunks", async () => {
+    const snap = await editor.request<ChatSnapshot>("chat.open", { tabId: READER_TAB, agentId: "fake", reader: { paperId } });
+    const patches: MessagePatch[] = [];
+    const detach = editor.rpc.on("chat.patch", (p: MessagePatch) => { if (p.role === "agent") patches.push(p); });
+    try {
+      const result = await turn(snap.chatId, script([{ readerReply: [
+        "Paper nói: Kiến trúc dùng scaled dot-product attention [[p2: \"We use scaled dot-product ",
+        "attention.\"]].\n\n",
+        "Paper nói: FABRICATED_RESULT [[p2: \"The model used recurrent neural networks.\"]].\n\n",
+        "Paper nói: UNCHECKED_RESULT [[page-2]].\n\n",
+        "Ngoài paper: Có thể thử một ví dụ đồ chơi.",
+      ] }]));
+      expect(result).toContain('[[page-2: "We use scaled dot-product attention."]]');
+      expect(result).toContain("Ngoài paper: Có thể thử một ví dụ đồ chơi.");
+      expect(result).toContain("đoạn trích khớp");
+      expect(result).not.toMatch(/FABRICATED_RESULT|UNCHECKED_RESULT/);
+      expect(JSON.stringify(patches)).not.toMatch(/FABRICATED_RESULT|UNCHECKED_RESULT/);
+    } finally {
+      detach();
+    }
   });
 });
 

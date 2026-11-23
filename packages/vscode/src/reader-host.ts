@@ -200,6 +200,7 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
       case "reader.progress":
       case "reader.mark":
       case "reader.note":
+      case "reader.session":
       case "reader.pdfText":
       case "reader.rendered":
       case "reader.get": {

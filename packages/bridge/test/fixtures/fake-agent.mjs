@@ -70,11 +70,18 @@ const app = agent({ name: "fake-agent" })
     s.cancelled = false;
     s.turns++;
     const text = params.prompt.map((b) => (b.type === "text" ? b.text : "")).join("");
-    const say = (t) =>
+    if (text.includes("<reader>\n")) s.reader = true;
+    let said = false;
+    const emitText = (t) =>
       client.notify("session/update", {
         sessionId: params.sessionId,
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } },
       });
+    const say = (t) => {
+      const framed = s.reader ? (said ? "" : "Hướng dẫn: ") + t.replace(/\n[\t ]*\n/g, "\n\nHướng dẫn: ") : t;
+      said = true;
+      return emitText(framed);
+    };
     if (text.includes("<agent-in-notebook>")) await say("[saw playbook]");
     if (text.includes("<earlier-conversation>")) await say("[saw recap]");
     if (text.includes("<undo-note>")) await say("[saw undo note]");
@@ -87,7 +94,7 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<reader-checker>\n")) await say("[saw reader-checker playbook]");
     const grading = text.match(/<reader-grade write="[^"]+" kind="([^"]+)"/);
     if (grading) await say(`[saw reader-grade ${grading[1]}]`);
-    if (text.includes("ECHO_PROMPT")) await say(`[prompt]${text}[/prompt]`);
+    if (text.includes("ECHO_PROMPT")) await say(`[prompt]${s.reader ? text.replaceAll("[[", "［［") : text}[/prompt]`);
     const selection = text.match(/<reader-selection kind="[^>]*>/);
     if (selection) await say(`[saw ${selection[0]}]`);
     if (text.includes("<hint-request level=")) await say(`[saw hint ${text.match(/<hint-request level="(\d)"/)?.[1]}${text.includes("Reference solution:") ? " with solution" : ""}]`);
@@ -126,6 +133,10 @@ const app = agent({ name: "fake-agent" })
     const vars = { reported: text.match(/reported it as wrong:\n"""\n([\s\S]*?)\n"""/)?.[1] ?? "" };
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
+      if (step.readerReply !== undefined) {
+        await emitText("\n\n");
+        for (const chunk of step.readerReply) await emitText(chunk);
+      }
       if (step.say) await say(step.say);
       if (step.image) {
         await client.notify("session/update", {

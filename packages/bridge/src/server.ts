@@ -715,6 +715,10 @@ export class Bridge {
       throw new Error("Cần link arXiv, file PDF, hoặc một paper đã đọc.");
     }));
     rpc.handle("reader.get", guard<"reader.get">((p) => this.reader.view(String(p.paperId))));
+    rpc.handle("reader.session", guard<"reader.session">((p) => {
+      if (p.action !== "start" && p.action !== "end") throw new Error("Chọn bắt đầu hoặc kết thúc buổi đọc.");
+      return this.reader.studySession(String(p.paperId), p.action);
+    }));
     rpc.handle("reader.list", guard<"reader.list">(() => ({ papers: this.reader.list() })));
     rpc.handle("reader.related", guard<"reader.related">((p) => this.reader.related.get(String(p.paperId))));
     rpc.handle("reader.lab.open", guard<"reader.lab.open">((p) => {
@@ -787,19 +791,23 @@ export class Bridge {
     }));
     rpc.handle("reader.widget.answer", guard<"reader.widget.answer">((p) => {
       const paperId = String(p.paperId);
+      this.reader.requireStudySession(paperId);
       this.reader.widgets.answer(paperId, String(p.id), p.choice);
       return this.reader.passes.guide(paperId);
     }));
     rpc.handle("reader.goal", guard<"reader.goal">((p) => {
+      this.reader.requireStudySession(String(p.paperId));
       this.readerAgent(String(p.paperId), p.agentId);
       return this.reader.passes.goal(String(p.paperId), p.goal);
     }));
     rpc.handle("reader.pass", guard<"reader.pass">((p) => {
+      this.reader.requireStudySession(String(p.paperId));
       this.readerAgent(String(p.paperId), p.agentId);
       return this.reader.passes.pass(String(p.paperId), Number(p.pass) as 1 | 2 | 3 | 4, !!p.done);
     }));
     rpc.handle("reader.answer", guard<"reader.answer">((p) => {
       const paperId = String(p.paperId);
+      this.reader.requireStudySession(paperId);
       const choice = p.choice ?? {};
       if (p.pretest) {
         this.reader.passes.pretest(paperId, String(p.item), { ...(choice.options?.length ? { option: choice.options[0] } : {}), ...(typeof choice.text === "string" ? { text: choice.text } : {}) });
@@ -810,6 +818,7 @@ export class Bridge {
     }));
     rpc.handle("reader.write", guard<"reader.write">((p) => {
       const paperId = String(p.paperId);
+      this.reader.requireStudySession(paperId);
       // The paper's tutor grades: the chat given, else any open chat of the paper.
       const given = typeof p.chatId === "string" ? [...this.chats.values()].find((c) => c.id === p.chatId) : undefined;
       const chat = given && readerOf(given)?.paperId === paperId ? given : [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
@@ -823,7 +832,10 @@ export class Bridge {
       const { id, graded } = this.reader.passes.write(paperId, { kind: p.kind, ...(p.unit ? { unit: String(p.unit) } : {}), ...(p.key ? { key: String(p.key) } : {}), ...(typeof p.text === "string" ? { text: p.text } : {}), ...(p.fields ? { fields: p.fields } : {}) }, port);
       return { id, graded, guide: this.reader.passes.guide(paperId) };
     }));
-    rpc.handle("reader.skip", guard<"reader.skip">((p) => this.reader.passes.skip(String(p.paperId), String(p.task))));
+    rpc.handle("reader.skip", guard<"reader.skip">((p) => {
+      this.reader.requireStudySession(String(p.paperId));
+      return this.reader.passes.skip(String(p.paperId), String(p.task));
+    }));
     rpc.handle("reader.report", guard<"reader.report">((p) => this.reader.passes.report(String(p.paperId), String(p.item), String(p.reason ?? ""))));
     rpc.handle("reader.author", guard<"reader.author">((p) => {
       const paperId = String(p.paperId);

@@ -7,7 +7,7 @@
 // says when one is read.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { READER_ASK_LABEL, readerCiteLabel, type ReaderAnchor, type ReaderAskKind, type ReaderGuide, type ReaderNote, type ReaderSectionView, type ReaderView } from "@ainb/protocol";
+import { READER_ASK_LABEL, readerCiteLabel, readerSessionRemaining, type ReaderAnchor, type ReaderAskKind, type ReaderGuide, type ReaderNote, type ReaderSectionView, type ReaderStudySession, type ReaderView } from "@ainb/protocol";
 import { anchorFor, selectionText } from "./anchors.js";
 import { HtmlDoc } from "./doc-html.js";
 import { PdfDoc } from "./doc-pdf.js";
@@ -16,6 +16,7 @@ import type { DocHandle, ReaderInit, ReaderPageHost } from "./host.js";
 import { ReaderWidgets } from "./widget-host.js";
 import { Cite, Md } from "./bits.js";
 import { EquationNotation } from "./notation.js";
+import { StudyClock } from "./session.js";
 
 /** How often time spent is sent to the bridge, and how long without a sign of the reader it stops counting. */
 const FLUSH_MS = 15_000;
@@ -47,6 +48,8 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
   const docRef = useRef<DocHandle | null>(null);
   const currentRef = useRef<string | undefined>(undefined);
   currentRef.current = current;
+  const sessionRef = useRef<ReaderStudySession>();
+  sessionRef.current = view?.session;
 
   const say = useCallback((text: string) => {
     setToast(text);
@@ -83,7 +86,7 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
     });
   }, [host]);
 
-  usePageTime(host, currentRef, () => void host.request<ReaderView>("reader.get").then(setView, () => {}));
+  usePageTime(host, currentRef, sessionRef, () => void host.request<ReaderView>("reader.get").then(setView, () => {}));
 
   // The passes: asked again whenever the bridge says they changed.
   const loadGuide = useCallback(() => {
@@ -235,6 +238,10 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
           </div>
         </div>
         {guide && <PassBar guide={guide} onOpen={() => setAside((a) => (a === "guide" ? null : "guide"))} />}
+        <StudyClock session={view.session} change={async (action) => {
+          try { setView(await host.request<ReaderView>("reader.session", { action })); }
+          catch (e) { say((e as Error).message); }
+        }} />
         <div class="er-progress" title="Mục đã đọc: đủ khoảng 40 % thời gian ước tính, hoặc bạn tự đánh dấu">
           <span class="er-progress-bar"><span style={{ width: `${own.length ? Math.round((readCount / own.length) * 100) : 0}%` }} /></span>
           {readCount}/{own.length} mục
@@ -377,7 +384,7 @@ function NoteItem({ note, sections, onAction, peer }: { note: ReaderNote; sectio
  * Time spent reading, per section: counted while the tab is shown and the
  * reader has done something in the last few minutes; sent every 15 seconds.
  */
-function usePageTime(host: ReaderPageHost, current: { current: string | undefined }, refresh: () => void): void {
+function usePageTime(host: ReaderPageHost, current: { current: string | undefined }, session: { current: ReaderStudySession | undefined }, refresh: () => void): void {
   useEffect(() => {
     let lastSign = Date.now();
     const pending = new Map<string, number>();
@@ -390,7 +397,12 @@ function usePageTime(host: ReaderPageHost, current: { current: string | undefine
     };
     const tick = setInterval(() => {
       const at = current.current;
-      if (!at || document.visibilityState !== "visible" || Date.now() - lastSign > IDLE_MS) return;
+      const now = Date.now();
+      if (session.current && !readerSessionRemaining(session.current, now)) {
+        flush();
+        return;
+      }
+      if (!at || document.visibilityState !== "visible" || now - lastSign > IDLE_MS) return;
       pending.set(at, (pending.get(at) ?? 0) + 1000);
     }, 1000);
     const send = setInterval(flush, FLUSH_MS);

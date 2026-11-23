@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { READER_SESSION_MS, readerSessionRemaining } from "@ainb/protocol";
 import { DAY_MS, scheduleCard } from "../src/reader/cards.js";
 import { DeepSchema } from "../src/reader/deep.js";
 import { readerLab } from "../src/reader/lab.js";
@@ -7,6 +8,22 @@ import { cleanShelves, LORA, LORA_ID, testHub } from "./fixtures/reader/fake-arx
 import { ZERO_MCQ } from "./fixtures/reader/lora-guide.js";
 
 afterAll(cleanShelves);
+
+it("keeps a reading session across opens and requires a fresh start at 40 minutes", async () => {
+  const { hub } = testHub();
+  await hub.open({ arxiv: LORA });
+  const now = Date.now();
+  hub.requireStudySession(LORA_ID, now);
+  const initial = hub.studySession(LORA_ID, "start", now + 1000).session!;
+  expect(initial.startedAt).toBe(now);
+  expect((await hub.open({ paperId: LORA_ID })).session).toEqual(initial);
+  expect(readerSessionRemaining(initial, now + READER_SESSION_MS - 1)).toBe(1);
+  expect(() => hub.requireStudySession(LORA_ID, now + READER_SESSION_MS)).toThrow("Bắt đầu buổi mới");
+  const later = now + READER_SESSION_MS + 1000;
+  expect(hub.studySession(LORA_ID, "start", later).session).toEqual({ startedAt: later });
+  expect(hub.studySession(LORA_ID, "end", later + 2000).session?.endedAt).toBe(later + 2000);
+  expect(() => hub.requireStudySession(LORA_ID, later + 2001)).toThrow("Bắt đầu buổi mới");
+});
 
 const evidence = ZERO_MCQ.evidence[0]!;
 const widget = WidgetSchema.parse({

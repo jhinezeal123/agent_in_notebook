@@ -90,6 +90,18 @@ export interface ReaderView {
   pass?: ReaderPass;
   /** Changes whenever the guide (`reader.guide`) does: the tab asks for it again. */
   guideRev?: number;
+  session?: ReaderStudySession;
+}
+
+export const READER_SESSION_MS = 40 * 60_000;
+
+export interface ReaderStudySession {
+  startedAt: number;
+  endedAt?: number;
+}
+
+export function readerSessionRemaining(session: ReaderStudySession, now: number): number {
+  return session.endedAt !== undefined ? 0 : Math.min(READER_SESSION_MS, Math.max(0, session.startedAt + READER_SESSION_MS - now));
 }
 
 /** A paper in the reading list. */
