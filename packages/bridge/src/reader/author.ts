@@ -19,7 +19,7 @@ import { ItemSchema, itemId, MapSchema, PackSchema, pretestId, type ItemInput, t
 import { atLeastApply, lintItem, lintMapPart, lintPack, nearDuplicate } from "./lint.js";
 import { pagedDoc, type ReaderAuthorQueue, type ReaderPasses } from "./passes.js";
 import { READER_TOOLS, type ReaderToolContext, type ReaderToolHost } from "./tools.js";
-import { WidgetSchema } from "./widgets.js";
+import { decodeWidgetTool, WidgetToolSchema, type WidgetSchema } from "./widgets.js";
 import { DeepSchema } from "./deep.js";
 import { CardBatchSchema } from "./cards.js";
 import { measureRules } from "./eval.js";
@@ -205,7 +205,7 @@ export class ReaderAuthor implements ReaderAuthorQueue {
   }
 
   private async doWidget(paperId: string, request: ReaderWidgetRequest, chat: AuthorChat, signal: AbortSignal): Promise<void> {
-    const context = `Make one interactive numeric example for ${JSON.stringify(request)}. Read the cited part. Use reader_widget_write. Express arithmetic as ["operator", arg, arg] with + - * / pow min max, or a single argument for sqrt exp log abs. A string operand names a parameter. Use a tiny worked example, state which numbers are illustrative, ask for a prediction before showing results, and give concrete comparisons to try. For a curve or points set series.axis to a parameter. Set steps to show one output at a time, or set matrix dimensions for row-major outputs. Each control is a slider by default; options or toggle can be used for discrete controls. Supply independently calculated expectations for at least two input configurations from the cited formula. Output Vietnamese.`;
+    const context = `Make one interactive numeric example for ${JSON.stringify(request)}. Read the cited part. Use reader_widget_write. Each output expression is a JSON string encoding a numeric operand, a parameter name, or an array ["operator", arg, arg] with + - * / pow min max; sqrt exp log abs take one argument. For example, expression: '[ "*", "r", 8 ]'. Use a tiny worked example, state which numbers are illustrative, ask for a prediction before showing results, and give concrete comparisons to try. For a curve or points set series.axis to a parameter. Set steps to show one output at a time, or set matrix dimensions for row-major outputs. Each control is a slider by default; options or toggle can be used for discrete controls. Supply independently calculated expectations for at least two input configurations from the cited formula. Output Vietnamese.`;
     for (let turn = 0; turn < TURNS && !signal.aborted && !this.hub.widgets.read(paperId, request.id); turn++) {
       chat.send(turn ? "Sửa ví dụ theo kết quả tự kiểm." : "Soạn ví dụ tương tác.", context);
       await chat.whenIdle(signal);
@@ -470,9 +470,9 @@ const itemsFix = tool({
 const widgetWrite = tool({
   name: "reader_widget_write",
   description: "Save the interactive example for the active request. The bridge validates every evidence quote, expression, and test before saving.",
-  schema: WidgetSchema,
+  schema: WidgetToolSchema,
   async run(ctx: ReaderToolContext & { reader: AuthorToolHost }, args): Promise<ToolResult> {
-    ctx.reader.author.writeWidget(ctx.reader.paperId, args);
+    ctx.reader.author.writeWidget(ctx.reader.paperId, decodeWidgetTool(args));
     return { text: "Saved: the widget passed its checks." };
   },
 });

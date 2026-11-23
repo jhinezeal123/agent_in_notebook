@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { READER_SESSION_MS, readerSessionRemaining } from "@ainb/protocol";
+import { z } from "zod";
 import { DAY_MS, scheduleCard } from "../src/reader/cards.js";
 import { DeepSchema } from "../src/reader/deep.js";
 import { readerLab } from "../src/reader/lab.js";
-import { checkWidget, WidgetSchema } from "../src/reader/widgets.js";
+import { checkWidget, decodeWidgetTool, WidgetSchema, WidgetToolSchema } from "../src/reader/widgets.js";
 import { cleanShelves, LORA, LORA_ID, testHub } from "./fixtures/reader/fake-arxiv.js";
 import { ZERO_MCQ } from "./fixtures/reader/lora-guide.js";
 
@@ -37,6 +38,15 @@ const widget = WidgetSchema.parse({
 });
 
 describe("interactive examples", () => {
+  it("uses a portable ACP tool schema and still validates the decoded expressions", () => {
+    const schema = JSON.stringify(z.toJSONSchema(WidgetToolSchema, { target: "draft-7" }));
+    expect(schema).not.toMatch(/"items":\s*\[/);
+    const outputs = widget.model.outputs.map((o) => ({ ...o, expression: JSON.stringify(o.expression) }));
+    const input = WidgetToolSchema.parse({ ...widget, model: { ...widget.model, outputs } });
+    expect(decodeWidgetTool(input)).toEqual(widget);
+    input.model.outputs[0]!.expression = "[not JSON";
+    expect(() => decodeWidgetTool(input)).toThrow("expression must be valid JSON");
+  });
   it("keeps the model and answer private until the guess, then exposes a Python lab and allows reporting", async () => {
     const { hub } = testHub();
     await hub.open({ arxiv: LORA });

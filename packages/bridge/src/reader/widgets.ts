@@ -10,6 +10,7 @@ const number = z.number().finite();
 const label = z.string().trim().min(1).max(200);
 // checkWidget validates the tree's grammar and depth.
 const expression = z.union([z.number(), z.string(), z.tuple([z.string()]).rest(z.unknown())]);
+const output = z.object({ label, expression });
 export const WidgetSchema = z.object({
   title: label, explanation: z.string().trim().min(1).max(1600),
   evidence: z.array(EvidenceSchema).min(1).max(4),
@@ -20,13 +21,35 @@ export const WidgetSchema = z.object({
       name: z.string().regex(/^[a-z][a-z0-9_]{0,23}$/), label, min: number, max: number, step: number.positive(), init: number,
       options: z.array(z.object({ label, value: number })).min(2).max(8).optional(), toggle: z.boolean().optional(),
     })).min(1).max(8),
-    outputs: z.array(z.object({ label, expression })).min(1).max(16),
+    outputs: z.array(output).min(1).max(16),
     series: z.object({ axis: label, min: number, max: number, count: z.number().int().min(2).max(80), style: z.enum(["line", "points"]).optional() }).optional(),
     matrix: z.object({ rows: z.number().int().min(2).max(8), columns: z.number().int().min(2).max(8), heatmap: z.boolean().optional() }).optional(),
     steps: z.boolean().optional(),
   }),
   tests: z.array(z.object({ name: label, inputs: z.record(z.string(), number), output: z.number().int().nonnegative(), expected: number, tolerance: number.nonnegative().max(0.01).default(1e-8) })).min(2).max(20),
 });
+
+// The tuple's Draft-7 schema uses a list for "items". Some ACP providers
+// require an object there, so the tool accepts a JSON string for the AST.
+// The internal schema and the evaluator still check exactly the same tree.
+export const WidgetToolSchema = WidgetSchema.extend({
+  model: WidgetSchema.shape.model.extend({
+    outputs: z.array(output.extend({
+      expression: z.string().trim().min(1).max(4000).describe('A JSON-encoded expression, e.g. ["*", "r", 8]'),
+    })).min(1).max(16),
+  }),
+});
+
+export function decodeWidgetTool(input: z.infer<typeof WidgetToolSchema>): z.infer<typeof WidgetSchema> {
+  const outputs = input.model.outputs.map(({ label, expression }, i) => {
+    try {
+      return { label, expression: JSON.parse(expression) as unknown };
+    } catch {
+      throw new Error(`Output ${i + 1}: expression must be valid JSON.`);
+    }
+  });
+  return WidgetSchema.parse({ ...input, model: { ...input.model, outputs } });
+}
 
 type Widget = z.infer<typeof WidgetSchema> & ReaderWidgetRequest;
 
