@@ -528,6 +528,8 @@ Workflow `test` trên GitHub chạy `pnpm typecheck`, `pnpm build` và `pnpm tes
 4. Lượt 3–4: câu đào sâu được chấm theo rubric, phản đối được một lần; thẻ ôn giữ lại hiện ở Khởi động sau 5 ngày (kiểm nhanh bằng ngày giả trong test, như các test lịch ôn của Mentor).
 5. Bấm Reproduce: xưởng mở với đúng paper, không lấy lại nội dung.
 
+Đợt nghiệm thu ngày 24/11/2026 dùng VS Code 1.147 và Claude ACP. Tab LoRA đã nhận trích dẫn đã kiểm từ gia sư. PDF cục bộ đã gửi ảnh trang cho gia sư qua `paper_page`. Trên DDPM, lượt thử đã nộp 5C, một checkpoint và tóm tắt, mở khóa hai widget sau câu dự đoán, chấm bài Đào sâu theo rubric, chấm lại một lần và đưa thẻ đã giữ vào Khởi động. CI giả lập ngày thứ năm để kiểm lịch ôn. Luồng Reproduce đã có kiểm thử qua bridge với notebook giả lập. Lần chạy với notebook Kaggle thật còn chờ Chrome kết nối với bridge.
+
 ### F.4 Đo chất lượng nội dung do AI sinh
 
 Sau khi soạn nội dung cho paper bằng bridge đang chạy, dùng `pnpm ainb reader eval <arxiv…>` để xem số liệu. Mặc định lệnh tra năm paper mốc Attention, LoRA, DDPM, ResNet và ViT. Thêm `--paper-quiz` để chạy một phiên ACP mới chỉ nhận bài học đã soạn và checkpoint đã qua người kiểm. Khi cần so prompt, chuẩn bị hai bộ nội dung ở hai hồ sơ `AINB_HOME` riêng để các lần đo dùng dữ liệu tương ứng.
@@ -536,6 +538,18 @@ Sau khi soạn nội dung cho paper bằng bridge đang chạy, dùng `pnpm ainb
 - widget qua tự kiểm sau ≤ 3 vòng;
 - kiểu **PaperQuiz** (Paper2Web, Paper2Poster): một phiên agent mới chỉ được đọc bản đồ paper và các giải thích/widget đã sinh, rồi làm một bộ câu hỏi về paper do phiên khác soạn từ chính paper; điểm thấp nghĩa là nội dung sinh ra không chuyển được paper;
 - khi dùng thật: tỉ lệ Báo câu sai, tỉ lệ "chắc mà sai" theo khái niệm, và tỉ lệ nhớ ở lần ôn thẻ đầu tiên.
+
+PaperQuiz ngày 24/11/2026 dùng các checkpoint qua kiểm mù từ tối đa hai đơn vị học đầu tiên của mỗi paper.
+
+| Paper | Câu đúng / tổng số |
+|-------|-------------------:|
+| Attention Is All You Need | 10/10 |
+| LoRA | 10/10 |
+| DDPM | 11/11 |
+| ResNet | 8/8 |
+| ViT | 7/7 |
+
+Agent trả lời đủ 46 câu. Hai widget DDPM qua tự kiểm trong tổng cộng ba lượt kiểm.
 
 ---
 

@@ -9,7 +9,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChatSnapshot, MessagePatch, ReaderGuide, ReaderLibraryItem, ReaderView } from "@ainb/protocol";
 import { itemId, rightChoice, type ItemInput } from "../src/reader/items.js";
 import { Bridge } from "../src/server.js";
@@ -90,6 +90,40 @@ describe("easy-read through the bridge", () => {
     const noted = await editor.request<ReaderView>("reader.note", { paperId, note: { kind: "question", text: "Vì sao chia cho √d_k?", anchor: { id: "page-2", page: 2 } } });
     expect(noted.notes).toEqual([expect.objectContaining({ kind: "question", text: "Vì sao chia cho √d_k?" })]);
     expect((await editor.request<ReaderView>("reader.get", { paperId })).notes).toHaveLength(1);
+  });
+
+  it("reuses the reader's saved paper and progress when opening its workshop", async () => {
+    const tabId = 301;
+    const key = "kaggle:/code/me/easy-read";
+    const notebook = new FakeNotebook([]);
+    notebook.platform = "kaggle";
+    const browser = new FakeExtension(notebook, tabId);
+    await browser.connect(port, TOKEN, "chrome-extension://abcdef");
+    try {
+      browser.rpc.emit("notebook.attached", { tabId, info: { ...notebook.info(), key, url: "https://www.kaggle.com/code/me/easy-read/edit" } });
+      await vi.waitFor(async () => {
+        const { notebooks } = await editor.request<{ notebooks: { tabId: number }[] }>("browser.notebooks", {});
+        expect(notebooks.some((n) => n.tabId === tabId)).toBe(true);
+      }, { timeout: 5000 });
+
+      const source = join(home, "mentor", "papers", paperId, "source.md");
+      const saved = readFileSync(source, "utf8");
+      rmSync(join(home, "Attention_Is_All_You_Need.pdf"));
+      expect(await editor.request("mentor.paper.open", { paperId, tabId })).toEqual({ paperId, tabId });
+      expect(notebook.cells[0]?.source).toContain(`<!-- mentor: paper ${paperId} -->`);
+      expect(readFileSync(source, "utf8")).toBe(saved);
+
+      const snap = await editor.request<ChatSnapshot>("chat.open", {
+        tabId: -tabId, browserTab: tabId, agentId: "fake", platform: "kaggle", notebookKey: key,
+        settings: { scope: "auto", review: false, targetCellIds: [] },
+      });
+      expect(snap.workshop).toMatchObject({ paperId, status: "reading" });
+      const text = await turn(snap.chatId, "ECHO_PROMPT");
+      expect(text).toContain("Easy Read progress: pass 1; 2/2 sections read.");
+      await editor.request("chat.close", { chatId: snap.chatId });
+    } finally {
+      browser.close();
+    }
   });
 
   it("says what is wrong with a request it cannot do", async () => {
