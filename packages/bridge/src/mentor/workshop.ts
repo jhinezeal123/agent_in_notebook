@@ -47,6 +47,7 @@ export interface WorkshopHost {
   /** The workshop (or the shelf) changed. */
   changed(paperId: string): void;
   log(message: string): void;
+  readerProgress?(paperId: string): string;
 }
 
 type Progress = NonNullable<MentorWorkshop["authoring"]>;
@@ -70,6 +71,10 @@ export class WorkshopHub {
   private readonly listeners = new Set<(paperId: string) => void>();
 
   constructor(readonly mentor: Mentor, private readonly host: WorkshopHost) {}
+
+  readerProgress(paperId: string): string | undefined {
+    return this.host.readerProgress?.(paperId);
+  }
 
   get shelf(): PaperShelf {
     return this.mentor.shelf;
@@ -110,7 +115,8 @@ export class WorkshopHub {
     return {
       paperId,
       title: info.title,
-      status: info.status,
+      // A shelved paper's workshop starts at reading it.
+      status: info.status === "shelved" ? "reading" : info.status,
       ...(info.plan ? { plan: info.plan } : {}),
       approved: info.approved,
       ...(info.approved ? { authoring: progress ?? { ...this.counts(paperId), running: false } } : {}),
@@ -531,6 +537,8 @@ export class WorkshopSession {
       const stars = starStates(st, m.catalog);
       const learnt = [...stars.entries()].filter(([, v]) => v === "mastered").map(([id]) => id);
       lines.push(`The learner: overall rating ${overall ?? "none yet"}; stars learnt: ${learnt.join(", ") || "none"}.`);
+      const reading = this.hub.readerProgress(this.paperId);
+      if (reading) lines.push(reading);
     }
     return `<workshop-state>\n${lines.join("\n")}\n</workshop-state>`;
   }

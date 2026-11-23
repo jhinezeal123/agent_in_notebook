@@ -5,6 +5,7 @@
 import type { ChatImageMime } from "./chat-image.js";
 import type { MentorAttemptDetail, MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
+import type { ReaderAnchor, ReaderAnswerResult, ReaderAskKind, ReaderCardGrade, ReaderCardView, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderView, ReaderWriteKind } from "./reader.js";
 import type { AppliedChange, CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
@@ -175,6 +176,8 @@ export interface ChatSnapshot {
   mentor?: MentorChat;
   /** A paper's workshop chat. */
   workshop?: MentorWorkshop;
+  /** The tutor of a paper being read (easy-read). */
+  reader?: ReaderChat;
 }
 
 /**
@@ -356,7 +359,7 @@ export interface BridgeMethods {
      * notebook in that Chrome tab: the chat stays with the editor, its
      * notebook operations go to the browser extension.
      */
-    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string; browserTab?: number; projectId?: string };
+    params: { tabId: number; agentId: string; settings: ChatSettings; platform: Platform; notebookKey?: string; browserTab?: number; projectId?: string; reader?: { paperId: string } };
     result: ChatSnapshot;
   };
   /** Move a notebook (and its chat) to another OpenResearch project; takes effect from its next turn. */
@@ -468,6 +471,50 @@ export interface BridgeMethods {
   "mentor.export": { params: { format?: "markdown" | "json"; includeMistakes?: boolean }; result: { content: string; filename: string } };
   /** Mentor: import a previously exported JSON backup into events.jsonl (C6). */
   "mentor.import": { params: { data: string }; result: { importedEvents: number } };
+  /** Easy-read: open a paper to read (fetched and converted the first time). */
+  "reader.open": { params: { source: { arxiv: string } | { pdfPath: string } | { paperId: string } }; result: ReaderView };
+  "reader.get": { params: { paperId: string }; result: ReaderView };
+  "reader.session": { params: { paperId: string; action: "start" | "end" }; result: ReaderView };
+  /** The papers read so far, latest first. */
+  "reader.list": { params: Record<string, never>; result: { papers: ReaderLibraryItem[] } };
+  /** Time spent in a section (the tab sends it in slices); the section is where the reader is now. */
+  "reader.progress": { params: { paperId: string; section: string; ms: number; agentId?: string }; result: { ok: true } };
+  /** The reader marks a section read, or not. */
+  "reader.mark": { params: { paperId: string; section: string; read: boolean }; result: ReaderView };
+  /** Add or change a note or one of "my questions" (`id` given: that one); `remove`: delete it. */
+  "reader.note": { params: { paperId: string; note?: { id?: string; kind: ReaderNote["kind"]; text: string; anchor?: ReaderAnchor; done?: boolean }; remove?: string }; result: ReaderView };
+  /** A PDF's text, page by page, as the tab's pdf.js took it out. */
+  "reader.pdfText": { params: { paperId: string; pages: string[]; title?: string }; result: ReaderView };
+  /** What `reader.render` asked for, drawn by the tab as a JPEG (base64); `error` when it could not be. */
+  "reader.rendered": { params: { paperId: string; page?: number; asset?: string; jpeg?: string; error?: string }; result: { ok: true } };
+  /** A selected passage to the paper's tutor: "Giải thích", "Ví dụ cụ thể", "Ký hiệu", "Vì sao?". */
+  "reader.ask": { params: { chatId: string; kind: ReaderAskKind; anchor: ReaderAnchor; quote: string }; result: { accepted: true } };
+  /** The passes (ER-2): the paper's map, units and checkpoints, what the reader wrote and answered. */
+  "reader.guide": { params: { paperId: string; agentId?: string }; result: ReaderGuide };
+  "reader.appeal": { params: { paperId: string; chatId: string; write: string; reason: string }; result: ReaderGuide };
+  "reader.cards.due": { params: Record<string, never>; result: ReaderCardView[] };
+  "reader.cards.keep": { params: { paperId: string; card?: string; edit?: { front?: string; back?: string; evidence?: { anchor: string; quote: string } } }; result: ReaderGuide };
+  "reader.cards.drop": { params: { paperId: string; card: string }; result: ReaderGuide };
+  "reader.cards.review": { params: { paperId: string; card: string; grade: ReaderCardGrade }; result: ReaderGuide };
+  "reader.peer": { params: { paperId: string; note: string; persona: import("./reader.js").ReaderPeerReply["persona"]; agentId?: string }; result: { accepted: true } };
+  "reader.related": { params: { paperId: string }; result: import("./reader.js").ReaderRelated };
+  "reader.lab.open": { params: { paperId: string; widget: string; tabId: number }; result: { tabId: number; added: number } };
+  "reader.widget.request": { params: { paperId: string; anchor: ReaderAnchor; goal: string; agentId?: string }; result: ReaderGuide };
+  "reader.widget.answer": { params: { paperId: string; id: string; choice: number }; result: ReaderGuide };
+  /** Why the reader reads it: the author starts on the paper's map (with `agentId`, the reader's agent, when no tutor chat is open). */
+  "reader.goal": { params: { paperId: string; goal: ReaderGoal; agentId?: string }; result: ReaderGuide };
+  /** Go to a pass (pass 2 has the author write the first units' checkpoints); `done`: finish it and stop there. */
+  "reader.pass": { params: { paperId: string; pass: ReaderPass; done?: boolean; agentId?: string }; result: ReaderGuide };
+  /** Answer a checkpoint question (with how sure, 1–3), or guess a pretest one (`pretest`, no confidence). */
+  "reader.answer": { params: { paperId: string; item: string; choice: ReaderChoice & { text?: string }; confidence?: 1 | 2 | 3; pretest?: boolean }; result: { result?: ReaderAnswerResult; guide: ReaderGuide } };
+  /** Something the reader wrote: graded by the tutor in `chatId` (5C, recall, explain, QALMRI, summary), or kept (figure, predict). */
+  "reader.write": { params: { paperId: string; chatId?: string; kind: ReaderWriteKind; unit?: string; key?: string; text?: string; fields?: Record<string, string> }; result: { id: string; graded: boolean; guide: ReaderGuide } };
+  /** "Cho xem luôn": a pending task's answer shown; it does not count. `task`: "5c", "summary", "pretest:<id>", "item:<id>", "<unit>:recall|explain|qalmri". */
+  "reader.skip": { params: { paperId: string; task: string }; result: ReaderGuide };
+  /** "Báo câu sai": the question is withdrawn. */
+  "reader.report": { params: { paperId: string; item: string; reason: string }; result: ReaderGuide };
+  /** The hidden author: stop it, or try a failed task again. */
+  "reader.author": { params: { paperId: string; action: "stop" | "retry"; agentId?: string }; result: ReaderGuide };
 }
 
 /**
@@ -570,6 +617,10 @@ export interface BridgeEvents {
   "chat.workshop": { chatId: string; tabId: number; workshop: MentorWorkshop };
   /** Mentor progress changed (an attempt, a verdict, a rating): the home page reloads. */
   "mentor.updated": Record<string, never>;
+  /** A paper's reading changed (progress, notes, its text). */
+  "reader.updated": { paperId: string; view: ReaderView };
+  /** The tutor wants to look at a PDF page, or a figure the agent cannot read as it is (SVG): the paper's tab draws it and sends `reader.rendered`. */
+  "reader.render": { paperId: string; page?: number; asset?: string };
   ping: { t: number };
 }
 

@@ -36,6 +36,7 @@ import {
   type NotebookOp,
   type ParamsOf,
   type ResearchRun,
+  readerChatKey,
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
@@ -60,6 +61,12 @@ import { fetchArxiv, paperIdFor, parseArxivId, pdfChunkCode, pdfExtractCode, pdf
 import { authorChatKey } from "./mentor/place.js";
 import { WorkshopHub, WorkshopSession, type AuthorChat } from "./mentor/workshop.js";
 import { slugOf } from "./mentor/papers.js";
+import { ReaderHub } from "./reader/index.js";
+import { readerLab } from "./reader/lab.js";
+import { qualityStats, runPaperQuiz } from "./reader/eval.js";
+import { ReaderChat, readerOf } from "./reader/chat.js";
+import { paperEventId } from "./mentor/model.js";
+import type { ChatRole } from "./chat-role.js";
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
@@ -153,6 +160,8 @@ export class Bridge {
   readonly mentorPlaces: MentorPlaces;
   /** Paper workshops: plans, and the exercises being written. */
   readonly workshops: WorkshopHub;
+  /** Easy-read: papers being read, beside their tutor's chat. */
+  readonly reader: ReaderHub;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
@@ -175,6 +184,11 @@ export class Bridge {
     this.quota.start();
     this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.emitMentorUpdated(), log: (m) => this.log(m) });
     this.workshops = new WorkshopHub(this.mentor, {
+      readerProgress: (paperId) => {
+        const p = this.reader.passes.summary(paperId);
+        if (!p) return "";
+        return `Easy Read progress: pass ${p.pass}; ${p.done}/${p.total} sections read.${p.mastery !== undefined ? ` Delayed checkpoint mastery: ${Math.round(100 * p.mastery)}%.` : ""}${p.weak.length ? ` Concepts flagged for review: ${JSON.stringify(p.weak)}.` : ""} Use this to tailor the reproduction plan.`;
+      },
       authorChat: (paperId, tabId) => this.authorChat(paperId, tabId),
       exec: async (tabId, code, waitMs) => {
         const target: Target = { kind: "browser", tabId };
@@ -185,6 +199,34 @@ export class Bridge {
       say: (paperId, text) => [...this.chats.values()].find((c) => workshopOf(c)?.paperId === paperId && workshopOf(c)!.role === "plan")?.notice(text),
       changed: () => this.toEditor("mentor.updated", {}),
       log: (m) => this.log(m),
+    });
+    this.reader = new ReaderHub({
+      root: this.mentor.shelf.root,
+      shelf: {
+        paperFor: (arxiv) => this.mentor.papers().find((p) => {
+          const id = this.mentor.paperPackage(p.id)?.info.arxiv ?? (p.url ? parseArxivId(p.url) : null);
+          return !!id && paperIdFor(id) === paperIdFor(arxiv);
+        })?.id,
+        arxivOf: (paperId) => {
+          const info = this.mentor.paperPackage(paperId)?.info;
+          return info?.arxiv ?? (info?.url ? parseArxivId(info.url) ?? undefined : undefined);
+        },
+        shelve: (p) => {
+          if (this.mentor.paperPackage(p.id) || this.mentor.shelf.has(p.id)) return;
+          this.mentor.shelf.create({ ...p, status: "shelved" });
+          this.mentor.reloadPapers();
+          this.emitMentorUpdated();
+        },
+      },
+      emit: (event, params) => this.toEditor(event, params),
+      log: (m) => this.log(m),
+      // The hidden author and checker of a paper (ER-2), shown nowhere.
+      author: () => ({ chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind), log: (m) => this.log(m) }),
+      // A misconception about a paper goes into Mentor's book too (asked again in two days).
+      misconception: ({ paperId, title, concept, note }) => this.mentor.record({ t: "misconception", attemptId: paperEventId(paperId), tag: `paper:${paperId}:${concept}`.slice(0, 80), note, title: title.slice(0, 200) }),
+      learning: (paperId) => {
+        if (!this.mentor.status().activeToday) this.mentor.record({ t: "paper", attemptId: paperEventId(paperId), paperId, what: "read" });
+      },
     });
     this.mentorPlaces = new MentorPlaces(this.mentor, {
       notebooks: () => this.browserNotebooks,
@@ -442,8 +484,11 @@ export class Bridge {
       guard<"chat.open">(async (p) => {
         const spec = findAgent(p.agentId);
         if (!spec) throw new Error(`Unknown agent ${p.agentId}`);
-        const key = typeof p.notebookKey === "string" && p.notebookKey ? p.notebookKey.slice(0, 2000) : undefined;
-        const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
+        // A paper's tutor (easy-read): its chat follows the paper, beside the paper's tab.
+        const readerId = typeof p.reader?.paperId === "string" && p.reader.paperId ? p.reader.paperId : undefined;
+        if (readerId && !this.reader.has(readerId)) throw new Error(`Không có paper ${readerId} để đọc.`);
+        const key = readerId ? readerChatKey(readerId) : typeof p.notebookKey === "string" && p.notebookKey ? p.notebookKey.slice(0, 2000) : undefined;
+        const target: Target = !readerId && Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
         const existing = this.chats.get(p.tabId);
         const sameTarget = !!existing && sameAs(this.targets.get(existing), target);
         const override = typeof p.projectId === "string" && p.projectId ? p.projectId : undefined;
@@ -472,12 +517,12 @@ export class Bridge {
         }
         const info = target.kind === "browser" ? this.browserNotebooks.get(target.tabId) : undefined;
         // A Mentor exercise's notebook: the agent coaches; it belongs to no project.
-        const mentor = this.mentorSession(target, key);
-        const workshop = mentor ? undefined : this.workshopSession(target, key);
-        const tutor = !!mentor || !!workshop;
+        const mentor = readerId ? undefined : this.mentorSession(target, key);
+        const workshop = mentor || readerId ? undefined : this.workshopSession(target, key);
+        const tutor = !!mentor || !!workshop || !!readerId;
         // The bridge decides the notebook's project (its meta file); the editor only overrides it.
         const project = key && !tutor ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, role: mentor ? new MentorChat(mentor) : workshop ? new WorkshopChat(workshop) : undefined });
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, role: mentor ? new MentorChat(mentor) : workshop ? new WorkshopChat(workshop) : readerId ? new ReaderChat(this.reader, readerId) : undefined });
         this.chats.set(p.tabId, chat);
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
@@ -660,6 +705,146 @@ export class Bridge {
       includeMistakes: p?.includeMistakes !== false,
     })));
     rpc.handle("mentor.import", guard<"mentor.import">((p) => this.mentor.importProfile(String(p?.data ?? ""))));
+
+    // ---------------------------------------------------------------- easy-read
+    rpc.handle("reader.open", guard<"reader.open">((p) => {
+      const src = p?.source as Record<string, unknown> | undefined;
+      if (typeof src?.arxiv === "string") return this.reader.open({ arxiv: src.arxiv });
+      if (typeof src?.pdfPath === "string") return this.reader.open({ pdfPath: src.pdfPath });
+      if (typeof src?.paperId === "string") return this.reader.open({ paperId: src.paperId });
+      throw new Error("Cần link arXiv, file PDF, hoặc một paper đã đọc.");
+    }));
+    rpc.handle("reader.get", guard<"reader.get">((p) => this.reader.view(String(p.paperId))));
+    rpc.handle("reader.session", guard<"reader.session">((p) => {
+      if (p.action !== "start" && p.action !== "end") throw new Error("Chọn bắt đầu hoặc kết thúc buổi đọc.");
+      return this.reader.studySession(String(p.paperId), p.action);
+    }));
+    rpc.handle("reader.list", guard<"reader.list">(() => ({ papers: this.reader.list() })));
+    rpc.handle("reader.related", guard<"reader.related">((p) => this.reader.related.get(String(p.paperId))));
+    rpc.handle("reader.lab.open", guard<"reader.lab.open">((p) => {
+      const paperId = String(p.paperId);
+      const widget = String(p.widget);
+      return this.mentorPlaces.appendReaderLab(p.tabId, `reader: lab ${paperId} ${widget}`, readerLab(this.reader, paperId, widget));
+    }));
+    rpc.handle("reader.progress", guard<"reader.progress">((p) => {
+      this.readerAgent(String(p.paperId), p.agentId);
+      this.reader.progress(String(p.paperId), String(p.section), Number(p.ms));
+      return { ok: true as const };
+    }));
+    rpc.handle("reader.mark", guard<"reader.mark">((p) => this.reader.mark(String(p.paperId), String(p.section), !!p.read)));
+    rpc.handle("reader.note", guard<"reader.note">((p) => this.reader.note(String(p.paperId), { ...(p.note ? { note: p.note } : {}), ...(typeof p.remove === "string" ? { remove: p.remove } : {}) })));
+    rpc.handle("reader.pdfText", guard<"reader.pdfText">((p) => this.reader.pdfText(String(p.paperId), p.pages, p.title)));
+    rpc.handle("reader.rendered", guard<"reader.rendered">((p) => {
+      this.reader.rendered(String(p.paperId), p);
+      return { ok: true as const };
+    }));
+    rpc.handle("reader.ask", guard<"reader.ask">((p) => {
+      const tutor = readerOf(this.chatById(p.chatId));
+      if (!tutor) throw new Error("Chat này không phải gia sư của một paper.");
+      tutor.ask(p.kind, p.anchor ?? {}, String(p.quote ?? ""));
+      return { accepted: true as const };
+    }));
+    // Passes 1–2 (ER-2): the goal, the passes, answers, the reader's writing graded by the tutor.
+    rpc.handle("reader.guide", guard<"reader.guide">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      this.readerAgent(paperId, p.agentId);
+      this.reader.passes.prepareLater(paperId);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.appeal", guard<"reader.appeal">((p) => {
+      const paperId = String(p.paperId);
+      const tutor = readerOf(this.chatById(p.chatId));
+      if (!tutor || tutor.paperId !== paperId) throw new Error("Mở chat gia sư của paper này trước.");
+      this.reader.passes.appeal(paperId, String(p.write), p.reason, tutor.tutorPort());
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.cards.due", guard<"reader.cards.due">(() => this.reader.cards.due()));
+    rpc.handle("reader.cards.keep", guard<"reader.cards.keep">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.cards.keep(paperId, p.card, p.edit);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.cards.drop", guard<"reader.cards.drop">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.cards.drop(paperId, String(p.card));
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.cards.review", guard<"reader.cards.review">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.cards.review(paperId, String(p.card), p.grade);
+      this.emitMentorUpdated();
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.widget.request", guard<"reader.widget.request">((p) => {
+      const paperId = String(p.paperId);
+      this.readerAgent(paperId, p.agentId);
+      this.reader.widgets.request(paperId, p.anchor, p.goal);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.peer", guard<"reader.peer">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      this.readerAgent(paperId, p.agentId);
+      this.reader.peers.start(paperId, String(p.note), p.persona, (role) => this.readerHiddenChat(paperId, role, `peer:${p.persona}`));
+      return { accepted: true };
+    }));
+    rpc.handle("reader.widget.answer", guard<"reader.widget.answer">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.requireStudySession(paperId);
+      this.reader.widgets.answer(paperId, String(p.id), p.choice);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.goal", guard<"reader.goal">((p) => {
+      this.reader.requireStudySession(String(p.paperId));
+      this.readerAgent(String(p.paperId), p.agentId);
+      return this.reader.passes.goal(String(p.paperId), p.goal);
+    }));
+    rpc.handle("reader.pass", guard<"reader.pass">((p) => {
+      this.reader.requireStudySession(String(p.paperId));
+      this.readerAgent(String(p.paperId), p.agentId);
+      return this.reader.passes.pass(String(p.paperId), Number(p.pass) as 1 | 2 | 3 | 4, !!p.done);
+    }));
+    rpc.handle("reader.answer", guard<"reader.answer">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.requireStudySession(paperId);
+      const choice = p.choice ?? {};
+      if (p.pretest) {
+        this.reader.passes.pretest(paperId, String(p.item), { ...(choice.options?.length ? { option: choice.options[0] } : {}), ...(typeof choice.text === "string" ? { text: choice.text } : {}) });
+        return { guide: this.reader.passes.guide(paperId) };
+      }
+      const result = this.reader.passes.answer(paperId, String(p.item), choice, Number(p.confidence) as 1 | 2 | 3);
+      return { result, guide: this.reader.passes.guide(paperId) };
+    }));
+    rpc.handle("reader.write", guard<"reader.write">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.requireStudySession(paperId);
+      // The paper's tutor grades: the chat given, else any open chat of the paper.
+      const given = typeof p.chatId === "string" ? [...this.chats.values()].find((c) => c.id === p.chatId) : undefined;
+      const chat = given && readerOf(given)?.paperId === paperId ? given : [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
+      const tutor = chat ? readerOf(chat) : undefined;
+      let port;
+      try {
+        port = tutor?.tutorPort();
+      } catch {
+        port = undefined;
+      }
+      const { id, graded } = this.reader.passes.write(paperId, { kind: p.kind, ...(p.unit ? { unit: String(p.unit) } : {}), ...(p.key ? { key: String(p.key) } : {}), ...(typeof p.text === "string" ? { text: p.text } : {}), ...(p.fields ? { fields: p.fields } : {}) }, port);
+      return { id, graded, guide: this.reader.passes.guide(paperId) };
+    }));
+    rpc.handle("reader.skip", guard<"reader.skip">((p) => {
+      this.reader.requireStudySession(String(p.paperId));
+      return this.reader.passes.skip(String(p.paperId), String(p.task));
+    }));
+    rpc.handle("reader.report", guard<"reader.report">((p) => this.reader.passes.report(String(p.paperId), String(p.item), String(p.reason ?? ""))));
+    rpc.handle("reader.author", guard<"reader.author">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      this.readerAgent(paperId, p.agentId);
+      if (p.action === "stop") this.reader.author.stop(paperId);
+      else this.reader.author.retry(paperId);
+      return this.reader.passes.guide(paperId);
+    }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
       if (p?.orxPath !== undefined) {
@@ -757,7 +942,7 @@ export class Bridge {
       const tabId = key ? this.mentorPlaces.tabOf(key) : undefined;
       return t && tabId !== undefined ? { ...t, place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : t;
     };
-    return { ...home, today: placed(home.today), warmup: placed(home.warmup), papers: home.papers.map((p) => this.placedPaper(p)) };
+    return { ...home, today: placed(home.today), warmup: placed(home.warmup), readerCards: this.reader.cards.due(), papers: home.papers.map((p) => this.placedPaper(p)) };
   }
 
   /** A paper with the Chrome tab of its workshop, when it is open. */
@@ -765,7 +950,8 @@ export class Bridge {
     const key = this.mentor.workshopOf(p.id);
     const tabId = key ? this.mentorPlaces.tabOf(key) : undefined;
     const running = this.workshops.running(p.id);
-    const out = { ...p, ...(tabId !== undefined ? { place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : {}) };
+    const reader = this.reader.passes.summary(p.id);
+    const out = { ...p, ...(reader ? { reader } : {}), ...(tabId !== undefined ? { place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : {}) };
     return running ? { ...out, components: out.components.map((c) => (c.status === "planned" ? { ...c, status: "authoring" as const } : c)) } : out;
   }
 
@@ -917,6 +1103,53 @@ export class Bridge {
     return {
       send: (text, context) => chat.send(text, { context }),
       whenIdle: async (signal) => {
+        await new Promise((r) => setTimeout(r, 200));
+        await chat.whenIdle(signal);
+        if (signal.aborted) await chat.cancel().catch(() => false);
+      },
+      close: () => {
+        chat.close();
+        this.byToken.delete(chat.mcpToken);
+      },
+    };
+  }
+
+  private readerSeq = 0;
+  /** The agent the reader uses, per paper (the editor says), for hidden chats when no tutor chat is open. */
+  private readonly readerAgents = new Map<string, string>();
+
+  private readerAgent(paperId: string, agentId: unknown): void {
+    if (typeof agentId === "string" && findAgent(agentId)) this.readerAgents.set(paperId, agentId);
+  }
+
+  /**
+   * A hidden chat of easy-read (the author or the checker of a paper): the
+   * same agent as the paper's tutor, on no notebook, its events to no one.
+   */
+  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "peer:experimentalist" | "peer:theorist"): AuthorChat {
+    const tutor = [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
+    const spec = tutor?.spec ?? findAgent(this.readerAgents.get(paperId) ?? "claude") ?? findAgent("claude");
+    if (!spec) throw new Error("No agent to prepare the paper.");
+    const key = kind.startsWith("peer:") ? `reader-peer:${paperId}:${kind.slice(5)}` : `reader-${kind}:${paperId}`;
+    const target: Target = { kind: "vscode", tabId: -2_000_000_000 - ++this.readerSeq };
+    const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
+    const chat = new Chat(target.tabId, spec, DEFAULT_SETTINGS, host, { notebookKey: key, role });
+    this.byToken.set(chat.mcpToken, chat);
+    const inheritedModel = tutor?.options().find((option) => option.category === "model")?.value;
+    const model = kind === "checker" ? process.env.AINB_READER_CHECKER_MODEL || inheritedModel : inheritedModel;
+    let ready = Promise.resolve();
+    if (typeof model === "string" && model) {
+      ready = chat.ensureStarted().then(async () => {
+        const option = chat.options().find((o) => o.category === "model" && o.kind === "select");
+        if (option?.choices?.some((choice) => choice.value === model) && option.value !== model) await chat.setOption(option.id, model);
+      }).catch((e: Error) => this.log(`Reader: cannot select the ${kind} model: ${e.message}`));
+    }
+    return {
+      send: (text, context) => {
+        ready = ready.then(() => { if (chat.status !== "closed") chat.send(text, context ? { context } : {}); });
+      },
+      whenIdle: async (signal) => {
+        await ready;
         await new Promise((r) => setTimeout(r, 200));
         await chat.whenIdle(signal);
         if (signal.aborted) await chat.cancel().catch(() => false);
@@ -1126,10 +1359,34 @@ export class Bridge {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, version: BRIDGE_VERSION, extension: !!(this.clients.browser.connection || this.clients.vscode.connection) });
     }
-    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || url.pathname === "/shutdown" || url.pathname === "/mentor/verify" || url.pathname === "/mentor/reload")) return json(res, 404, { error: "not found" });
+    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || ["/shutdown", "/mentor/verify", "/mentor/reload", "/reader/eval"].includes(url.pathname))) return json(res, 404, { error: "not found" });
     // Browsers attach Origin to cross-site requests; the relay is for local processes only.
     if (req.headers.origin) return json(res, 403, { error: "forbidden" });
     const auth = req.headers.authorization ?? "";
+    if (url.pathname === "/reader/eval") {
+      if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });
+      try {
+        const input = JSON.parse(await readBody(req)) as { paper?: unknown; quiz?: boolean; agent?: unknown };
+        const wanted = String(input.paper ?? "");
+        const arxiv = parseArxivId(wanted);
+        const paperId = this.reader.has(wanted) ? wanted : arxiv ? this.reader.store.ids().find((id) => {
+          try {
+            const known = this.reader.meta(id).arxiv;
+            return known && paperIdFor(known) === paperIdFor(arxiv);
+          } catch { return false; }
+        }) : undefined;
+        if (!paperId) return json(res, 404, { error: "Mở paper và soạn nội dung trong Easy Read trước khi đo." });
+        this.readerAgent(paperId, input.agent);
+        const items = this.reader.passes.items(paperId);
+        const stats = qualityStats(this.reader.store.state(paperId), items);
+        const quiz = input.quiz === true
+          ? await runPaperQuiz(this.reader, paperId, items, (role) => this.readerHiddenChat(paperId, role, "checker"))
+          : undefined;
+        return json(res, 200, { paperId, title: this.reader.meta(paperId).title, ...stats, ...(quiz ? { quiz } : {}) });
+      } catch (e) {
+        return json(res, 400, { error: (e as Error).message });
+      }
+    }
     if (url.pathname === "/shutdown") {
       // `ainb stop`, for a bridge running in the background with no console to Ctrl+C.
       if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });

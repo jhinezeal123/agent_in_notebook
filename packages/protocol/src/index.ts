@@ -11,3 +11,4 @@ export * from "./adapter.js";
 export * from "./run-watcher.js";
 export * from "./chat-image.js";
 export * from "./mentor.js";
+export * from "./reader.js";

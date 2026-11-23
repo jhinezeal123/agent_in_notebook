@@ -70,11 +70,18 @@ const app = agent({ name: "fake-agent" })
     s.cancelled = false;
     s.turns++;
     const text = params.prompt.map((b) => (b.type === "text" ? b.text : "")).join("");
-    const say = (t) =>
+    if (text.includes("<reader>\n")) s.reader = true;
+    let said = false;
+    const emitText = (t) =>
       client.notify("session/update", {
         sessionId: params.sessionId,
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } },
       });
+    const say = (t) => {
+      const framed = s.reader ? (said ? "" : "Hướng dẫn: ") + t.replace(/\n[\t ]*\n/g, "\n\nHướng dẫn: ") : t;
+      said = true;
+      return emitText(framed);
+    };
     if (text.includes("<agent-in-notebook>")) await say("[saw playbook]");
     if (text.includes("<earlier-conversation>")) await say("[saw recap]");
     if (text.includes("<undo-note>")) await say("[saw undo note]");
@@ -82,6 +89,14 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<mentor>\n")) await say("[saw mentor playbook]");
     if (text.includes("<mentor-paper>\n")) await say("[saw paper playbook]");
     if (text.includes("<mentor-author>\n")) await say("[saw author playbook]");
+    if (text.includes("<reader>\n")) await say("[saw reader playbook]");
+    if (text.includes("<reader-author>\n")) await say("[saw reader-author playbook]");
+    if (text.includes("<reader-checker>\n")) await say("[saw reader-checker playbook]");
+    const grading = text.match(/<reader-grade write="[^"]+" kind="([^"]+)"/);
+    if (grading) await say(`[saw reader-grade ${grading[1]}]`);
+    if (text.includes("ECHO_PROMPT")) await say(`[prompt]${s.reader ? text.replaceAll("[[", "［［") : text}[/prompt]`);
+    const selection = text.match(/<reader-selection kind="[^>]*>/);
+    if (selection) await say(`[saw ${selection[0]}]`);
     if (text.includes("<hint-request level=")) await say(`[saw hint ${text.match(/<hint-request level="(\d)"/)?.[1]}${text.includes("Reference solution:") ? " with solution" : ""}]`);
     if (text.includes("<mentor-verdict>\n")) await say("[saw verdict]");
     if (text.includes("<code-review-request>\n")) await say(`[saw code review${text.includes("```python") ? " with reference" : ""}]`);
@@ -106,11 +121,22 @@ const app = agent({ name: "fake-agent" })
       const again = /<author-task [^>]*kind="rewrite"/.test(text);
       steps = (again && scripts[`${task[1]}:rewrite`]) || scripts[task[1] ?? "given"] || [{ say: "no script" }];
     }
+    // Easy-read's author and checker: scripted per task in the same file (reader:map, reader:checkpoint:<unit>, reader:fix:<unit>, reader:check).
+    const readerTask = text.match(/<reader-task kind="(map|checkpoint|fix)"(?: unit="([^"]+)")?/);
+    if ((readerTask || text.includes("<reader-check>")) && process.env.FAKE_AUTHOR) {
+      const scripts = JSON.parse(readFileSync(process.env.FAKE_AUTHOR, "utf8"));
+      const name = readerTask ? `reader:${readerTask[1]}${readerTask[2] ? `:${readerTask[2]}` : ""}` : "reader:check";
+      steps = scripts[name] ?? [{ say: `no script for ${name}` }];
+    }
     let n = 0;
     // What the learner said about the exercise, for a script to use as {{reported}}.
     const vars = { reported: text.match(/reported it as wrong:\n"""\n([\s\S]*?)\n"""/)?.[1] ?? "" };
     for (const step of steps) {
       if (s.cancelled) return { stopReason: "cancelled" };
+      if (step.readerReply !== undefined) {
+        await emitText("\n\n");
+        for (const chunk of step.readerReply) await emitText(chunk);
+      }
       if (step.say) await say(step.say);
       if (step.image) {
         await client.notify("session/update", {
@@ -161,7 +187,8 @@ const app = agent({ name: "fake-agent" })
           update: { sessionUpdate: "tool_call_update", toolCallId: id, status: r.isError ? "failed" : "completed" },
         });
         // `quiet` calls say nothing, so several calls in a row sit next to each other like a real agent's.
-        if (!step.quiet) await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${out}\n`);
+        const diagnostic = s.reader ? out.replace(/\[\[(p\d+: "exact words")\]\]/g, "[$1]") : out;
+        if (!step.quiet) await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${diagnostic}\n`);
       }
     }
     return { stopReason: "end_turn" };

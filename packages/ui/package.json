@@ -12,6 +12,7 @@
     "dompurify": "3.4.17",
     "katex": "0.19.1",
     "marked": "16.4.1",
+    "pdfjs-dist": "6.5.438",
     "preact": "10.27.2"
   },
   "devDependencies": {

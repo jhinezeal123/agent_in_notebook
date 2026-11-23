@@ -4,8 +4,9 @@
 // editor's theme.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { diffLines, MENTOR_SKILL_LABEL, mentorRank, type MentorAttemptDetail, type MentorHome, type MentorKind, type MentorMistake, type MentorPaper, type MentorSkill, type MentorStarView, type MentorToday } from "@ainb/protocol";
+import { diffLines, MENTOR_SKILL_LABEL, mentorRank, READER_PASS_LABEL, type MentorAttemptDetail, type MentorHome, type MentorKind, type MentorMistake, type MentorPaper, type MentorSkill, type MentorStarView, type MentorToday } from "@ainb/protocol";
 import { heatWeeks, layout, MAP_H, MAP_W, ratingShare, topicHeight, type MapLayout, type MapStar } from "./constellation.js";
+import { ReviewCard } from "../reader/cards.js";
 
 export interface MentorHomeHost {
   request<T>(method: string, params?: unknown): Promise<T>;
@@ -25,6 +26,7 @@ const REASON: Record<MentorToday["reason"], string> = {
 };
 
 const PAPER_STATUS: Record<MentorPaper["status"], string> = {
+  shelved: "Trên tủ",
   reading: "Đang đọc paper",
   planning: "Đang lập kế hoạch",
   authoring: "Đang soạn bài",
@@ -127,6 +129,7 @@ export function MentorHomeApp({ host }: { host: MentorHomeHost }) {
 
       <div class="mh-grid">
         {home.warmup && <WarmupCard home={home} warmup={home.warmup} starting={starting} onStart={(id) => start(id, "review")} onShow={(id) => setSelected(id)} />}
+        {!!home.readerCards?.length && <ReaderWarmup cards={home.readerCards} host={host} />}
         <TodayCard home={home} starting={starting} onStart={start} onShow={(id) => setSelected(id)} onKaggle={() => void host.request("mentor.openKaggle").catch(() => {})} />
         <SkillsCard home={home} />
         <StreakCard home={home} />
@@ -344,6 +347,21 @@ function StarCard({ star, starting, onStart, onClose }: { star: MentorStarView; 
   );
 }
 
+function ReaderWarmup({ cards, host }: { cards: NonNullable<MentorHome["readerCards"]>; host: MentorHomeHost }) {
+  const [reviewed, setReviewed] = useState<string[]>([]);
+  const remaining = cards.filter((c) => !reviewed.includes(`${c.paperId}:${c.id}`));
+  const card = remaining.find((c) => c.paperId !== reviewed.at(-1)?.split(":")[0]) ?? remaining[0];
+  if (!card || reviewed.length >= 10) return null;
+  return <section class="mh-card mh-warmup">
+    <h3>Khởi động · Thẻ ôn paper</h3>
+    <p class="mh-muted">{card.title} · {Math.min(remaining.length, 10 - reviewed.length)} thẻ đến hạn</p>
+    <ReviewCard key={card.id} card={card} buttonClass="mh-btn" grade={async (grade) => {
+      await host.request("reader.cards.review", { paperId: card.paperId, card: card.id, grade });
+      setReviewed((before) => [...before, `${card.paperId}:${card.id}`]);
+    }} />
+  </section>;
+}
+
 function WarmupCard({ home, warmup, starting, onStart, onShow }: { home: MentorHome; warmup: MentorToday; starting: string | null; onStart: (id: string) => void; onShow: (star: string) => void }) {
   const more = home.reviews.due - (warmup.reason === "review" ? 1 : 0);
   return (
@@ -530,6 +548,7 @@ function ShelfCard({ home, host, starting, onStart, onError }: { home: MentorHom
             onStart={onStart}
             onFocus={() => toggleFocus("paper", p.id)}
             onWorkshop={() => ask("mentor.openWorkshop", { paperId: p.id })}
+            onRead={() => ask("mentor.read", { paperId: p.id })}
             onNotes={(notes) => ask("mentor.paperNotes", { paperId: p.id, notes })}
             onArchive={() => ask("mentor.paperArchive", { paperId: p.id, archived: p.status !== "archived" })}
           />
@@ -564,7 +583,7 @@ export function nextComponent(p: MentorPaper): MentorPaper["components"][number]
 
 function PaperItem(props: {
   paper: MentorPaper; home: MentorHome; expanded: boolean; focused: boolean; starting: string | null;
-  onToggle: () => void; onStart: (id: string) => void; onFocus: () => void; onWorkshop: () => void; onNotes: (notes: string) => void; onArchive: () => void;
+  onToggle: () => void; onStart: (id: string) => void; onFocus: () => void; onWorkshop: () => void; onRead: () => void; onNotes: (notes: string) => void; onArchive: () => void;
 }) {
   const { paper: p, expanded } = props;
   const built = p.components.filter((c) => c.mode === "build");
@@ -584,6 +603,13 @@ function PaperItem(props: {
         {p.place && ` · xưởng mở trong “${p.place.title || "notebook"}”`}
       </div>
       <PaperMap home={props.home} paper={p} />
+      {p.reader && <div class="mh-muted">
+        Đọc · {READER_PASS_LABEL[p.reader.pass]} · {p.reader.done}/{p.reader.total} mục
+        {p.reader.mastery !== undefined && ` · vững ${Math.round(p.reader.mastery * 100)}%`}
+        {p.reader.due > 0 && ` · ${p.reader.due} thẻ đến hạn`}
+        {p.reader.deep && " · Đã hiểu sâu"}
+        {!!p.reader.weak.length && <div>Khái niệm cần ôn · {p.reader.weak.join(" · ")}</div>}
+      </div>}
       <div class="mh-row mh-paper-actions">
         {next && (
           <button class="mh-btn small" disabled={!!props.starting} onClick={() => props.onStart(next.exerciseId!)}>
@@ -591,10 +617,13 @@ function PaperItem(props: {
           </button>
         )}
         {workshop && <button class="mh-btn small ghost" onClick={props.onWorkshop}>Mở xưởng</button>}
+        {/* Easy-read: a paper opened there, or on arXiv, reads in its own tab with a tutor. */}
+        {(p.reader || p.status === "shelved" || /arxiv\.org/.test(p.url ?? "")) && <button class="mh-btn small ghost" title="Đọc paper trong tab đọc, có gia sư bên cạnh" onClick={props.onRead}>📖 {p.reader ? "Đọc tiếp" : "Đọc"}</button>}
         {p.status !== "archived" && <button class={`mh-chip small${props.focused ? " mastered" : ""}`} onClick={props.onFocus}>{props.focused ? "◉ trọng tâm" : "○ trọng tâm"}</button>}
       </div>
       {expanded && (
         <div class="mh-paper-detail">
+          {p.reader?.synthesis && <div><b>Ghi chú 5 câu</b><p style={{ whiteSpace: "pre-wrap" }}>{p.reader.synthesis}</p></div>}
           {p.goal && <p>{p.goal}</p>}
           <ol class="mh-components">
             {p.components.map((c) => (

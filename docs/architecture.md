@@ -187,6 +187,30 @@ Code riêng của Mentor (`bridge/src/mentor/`, `ui/src/mentor/`, `vscode/src/me
 - **OpenResearch**: Mentor chỉ gọi nó ở một chỗ, và chỗ đó tùy chọn: khi arXiv không có mã LaTeX thì thử `orx paper --full` (`mentor/fetch.ts: fetchArxiv`, gọi từ `server.ts`). Hỏng thì người học được bảo thêm paper bằng PDF. Chat Mentor không có project, không khởi động `orx up` (`mentor-chat.test.ts`: "never looks for OpenResearch").
 - **Dữ liệu** của Mentor ở `~/.agent-in-notebook/mentor/`, lõi không dọn thư mục này.
 
+## Easy-read: đọc paper với gia sư
+
+Thiết kế: `docs/easy-read.md`. Lệnh **Easy Read: Mở paper…** (link arXiv, file PDF, paper đã đọc hay trên tủ Mentor) mở một tab đọc cho mỗi paper; khung chat bên phải là **gia sư của paper đó**, không cần notebook.
+
+```
+VS Code                                         bridge (bridge/src/reader)
+ tab "Đọc: <paper>" (ui/src/reader, reader.js)   ReaderHub: nạp paper (ingest.ts), kho (store.ts), tiến độ, ghi chú
+   HTML arXiv (KaTeX từ alttext) / PDF (pdf.js)    doc.ts: HTML LaTeXML → trang để xem + chữ cho agent (cùng id)
+   thanh chọn chữ, câu hỏi & ghi chú  ─reader.*─►  ReaderChat (ChatRole): playbook <reader>, tool paper_*, reader_grade/misconception
+   khung "Các lượt" (guide.tsx, quiz.tsx)          ReaderPasses (passes.ts): mục tiêu, lượt, trả lời, bài viết, Sổ lỗi sai
+ vscode/src/reader-host.ts (ReaderHost)          ReaderAuthor (author.ts) ─chat ẩn─► người soạn (map, checkpoint)
+ khung chat (ui/src/app.tsx), chip [[S4.SS1]]                                └─chat ẩn─► người kiểm (checker.ts, giải mù)
+   ─chat.open { reader }─► Chat với vai ReaderChat   items.ts (định dạng, xáo phương án, chấm) · lint.ts (kiểm E.6) · model.ts (gập nhật ký)
+```
+
+- **Kho**: thư mục của paper trên tủ Mentor, `mentor/papers/<paperId>/reader/` (`reader.json`, `doc.json`, `doc.html` hoặc `paper.pdf`, `assets/`, `pages/`, `source.tex`, `events.jsonl` riêng của paper; ER-2 thêm `map.json` và `items/<unit>.json` do người soạn viết). Paper mở bằng easy-read lên tủ Mentor với trạng thái `shelved` (chưa có xưởng).
+- **Lượt 1–2 (ER-2)**: mọi thứ người đọc làm là sự kiện trong `events.jsonl` (`r.goal`, `r.pass`, `r.answer`, `r.pre`, `r.write`, `r.grade`, `r.skip`, `r.report`, `r.miss`), gập bằng `model.ts`. `reader.guide` trả `ReaderGuide` cho khung "Các lượt"; `ReaderView.guideRev` tăng mỗi khi guide đổi, tab hỏi lại. Đáp án **không** đi ra trước lượt của người đọc: tab chỉ thấy phương án đã xáo (`items.ts: itemView`), bridge chấm (`reader.answer`); gia sư thấy câu đang chờ nhưng không thấy đáp án, và chỉ nhận bản tham chiếu kèm bài viết của người đọc (`<reader-grade>`), rồi ghi điểm bằng `reader_grade`.
+- **Người soạn và người kiểm**: chat ẩn (`server.ts: readerHiddenChat`, tab id âm từ −2·10⁹, khóa `reader-author:<id>` / `reader-checker:<id>`, `emit` câm nên editor không thấy), cùng agent với gia sư (hoặc agent tab đọc báo qua `agentId`). Hàng việc tuần tự, độc lập với gia sư: `map` khi chọn mục tiêu, checkpoint một mục khi người đọc tới mục trước. Câu hỏi qua zod + `lint.ts` (luật viết câu, câu trích có thật, trùng ý), rồi một người kiểm mới giải mù; lệch thì trả người soạn tối đa hai lần, sau đó bỏ câu. Hiểu sai (trả lời sai mà chắc ≥ 2, hoặc gia sư ghi) vào Sổ lỗi sai của paper và của Mentor (`misconception` với `attemptId "paper:<id>"`, `mentor/model.ts` nhận nó không cần bài).
+- **Mạng**: chỉ bridge lấy từ arXiv (HTML, ảnh, PDF, mã nguồn), lần lượt cách nhau 1 giây (3 giây với API), user-agent chung, lưu đĩa để chỉ lấy một lần. Tab đọc không ra mạng (CSP: ảnh và file chỉ từ thư mục của paper).
+- **Đích của chat**: tab đọc có id riêng từ `READER_TAB_BASE` (10⁹, `panel-core.ts`), không trùng notebook của VS Code (đếm từ 1) hay tab Chrome (số âm). Tab đọc lên trước thì `PanelCore` theo nó; `chat.open` của tab đọc gửi `reader: { paperId }` thay cho notebook. Chat gia sư là "tutor" như chat Mentor: không project, không MCP "project", không theo dõi máy.
+- **Ảnh cho gia sư**: tool `paper_page`/`paper_figure` (hình SVG) cần ảnh mà chỉ tab vẽ được: bridge phát `reader.render`, tab vẽ JPEG rồi gửi `reader.rendered` (bridge kiểm là JPEG, ≤ 4 MB, tên file chỉ trong `assets/` hay `pages/`).
+- **Chỗ đan vào lõi** (sửa thì chạy `pnpm --filter @ainb/bridge test mentor` và `pnpm --filter @ainb/bridge test reader`): `server.ts` (`chat.open` nhận `reader`, handler `reader.*`), `chat.ts` (`isNotebookTool` nhận `paper_*`/`reader_*`, không import `reader/`), `protocol/src/reader.ts` + `wire.ts`, `panel-core.ts`, `extension.ts`, `bridge.ts`, `ui/src/app.tsx` + `markdown.ts` + `parts.tsx` (chip trích dẫn). Thứ reader dựa vào theo tên được ghim trong `bridge/test/reader-contract.test.ts`.
+- **Test**: `reader-doc`, `reader-hub`, `reader-tutor`, `reader-items` (luật E.6, câu trích, chấm), `reader-model` (gập nhật ký, điểm theo độ chắc), `reader-passes` (người soạn/người kiểm theo kịch bản, đáp án không lộ), `reader-bridge` (đầu-cuối qua relay MCP thật với agent giả, cả chat ẩn), `reader-contract`, `reader-er0` (bridge); `reader.test.ts` (protocol); `panel-core.test.ts` (vscode); `reader-anchors.test.ts` và, với `E2E_MARKDOWN=1`, `reader-tab.test.ts` (cả khung các lượt) + chip trong `chat-markdown.test.ts` chạy trên Chromium (ui).
+
 ## Luồng một tool call
 
 ```

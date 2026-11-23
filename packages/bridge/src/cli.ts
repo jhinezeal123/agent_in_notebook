@@ -29,6 +29,8 @@ Usage:
                                      notebook open in Chrome; passing ones go to verified.json
   ainb mentor reload                 Have the running Mentor read its exercises again
   ainb mentor stats                  Print learning analytics & difficulty calibration suggestions
+  ainb reader eval [ARXIV…] [--paper-quiz] [--agent=ID]
+                                     Measure checks and recall for prepared Easy Read papers
 
 Data directory: ${process.env.AINB_HOME ?? "~/.agent-in-notebook"}  (set AINB_HOME to change)
 Custom ACP agents: add them to agents.json in the data directory.`;
@@ -162,6 +164,13 @@ async function main() {
     case "native-host":
       await (await native()).runNativeHost(self);
       return;
+    case "reader": {
+      if (rest[0] !== "eval") {
+        console.error("Usage: ainb reader eval [ARXIV…] [--paper-quiz] [--agent=ID]");
+        process.exit(2);
+      }
+      process.exit(await (await import("./reader/eval-cli.js")).readerEval(rest.slice(1)));
+    }
     case "-h":
     case "--help":
     case "help":

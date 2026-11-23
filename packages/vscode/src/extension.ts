@@ -15,6 +15,7 @@ import { Studio } from "./studio-host.js";
 import { ARTIFACTS, CODE, FolderTree } from "./folder-tree.js";
 import { registerChangeProviders } from "./changes.js";
 import { MentorHost } from "./mentor-host.js";
+import { ReaderHost } from "./reader-host.js";
 import { zoomNotebook } from "./notebook-zoom.js";
 
 const secret = "bridge.config";
@@ -49,6 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("ainb.stopBridge", () => panel.stopBridge()),
     vscode.commands.registerCommand("ainb.attachCell", (arg?: unknown) => panel.attachCells(arg)),
     vscode.commands.registerCommand("ainb.mentor.open", () => panel.mentor.open()),
+    vscode.commands.registerCommand("ainb.reader.open", () => panel.reader.open()),
   );
 }
 
@@ -111,6 +113,8 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly seenNotebooks = new Set<string>();
   /** Mentor: its home page and status bar item. */
   readonly mentor: MentorHost;
+  /** Easy-read: a reading tab per paper, its tutor in this panel's chat. */
+  readonly reader: ReaderHost;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.bridge = new BridgeLink(context.extension.packageJSON.version, (event) => {
@@ -130,6 +134,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       }
       this.core.connectionChanged(connected);
       if (connected) this.mentor.connected();
+      if (connected) this.reader.connected();
       if (!connected) this.studio.setResearchStatus({ state: "off" });
     }, ({ tabId, op }) => this.runOp(tabId, op), (event) => {
       this.core.onBrowser(event);
@@ -160,7 +165,22 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       linkNotebook: (key, projectId, info) => this.bridge.request("notebook.link", { notebookKey: key, projectId, ...info }) as Promise<{ project: ChatProject }>,
       stopBridge: () => this.bridge.stop(),
     });
-    this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event), (tab, info) => this.mirrors.open(tab, info));
+    this.reader = new ReaderHost(context, {
+      request: async (method, params) => {
+        await this.ensureBridge(false);
+        return this.bridge.request(method, params);
+      },
+      connected: () => this.bridge.snapshot().conn === "connected",
+      prefs: () => ({ ...DEFAULT_PREFS, ...this.context.globalState.get<Prefs>("prefs") }),
+      follow: (tabId) => {
+        this.core.follow(tabId);
+        this.leaveResearch(tabId);
+      },
+      changed: () => this.core.readersChanged(),
+      reproduce: (paperId) => this.mentor.openWorkshop(paperId),
+      lab: (paperId, widget) => this.mentor.openReaderLab(paperId, widget),
+    });
+    this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event), (tab, info) => this.mirrors.open(tab, info), this.reader);
     this.mentor = new MentorHost(context, {
       request: async (method, params) => {
         await this.ensureBridge(false);
@@ -168,6 +188,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
       },
       connected: () => this.bridge.snapshot().conn === "connected",
       openMirror: (chromeTabId) => this.openMentorMirror(chromeTabId),
+      read: (paperId) => this.reader.openPaper({ paperId }),
     });
     this.subscriptions = [
       vscode.window.onDidChangeActiveNotebookEditor(() => this.activeChanged()),
@@ -391,11 +412,16 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private post(event: PanelEvent): void {
+    // Render requests go only to the reading tab; progress also updates the tutor and Mentor.
+    if (event.event === "bridge" && event.params.method.startsWith("reader.")) {
+      this.reader.onBridge(event.params.method, event.params.params);
+      if (event.params.method !== "reader.updated") return;
+    }
     void this.view?.webview.postMessage(event);
     if (event.event === "bridge" && event.params.method === "chat.snapshot") this.followProject(event.params.params as ChatSnapshot);
     if (event.event === "bridge" && event.params.method === "chat.run") void this.notifyRun(event.params.params as BridgeEvents["chat.run"]);
     if (event.event === "bridge" && event.params.method === "chat.machineReplaced") void this.machineReplaced(event.params.params as BridgeEvents["chat.machineReplaced"]);
-    if (event.event === "bridge" && event.params.method === "mentor.updated") this.mentor.updated();
+    if (event.event === "bridge" && ["mentor.updated", "reader.updated"].includes(event.params.method)) this.mentor.updated();
     if (event.event === "notebooks") this.studio.broadcast("notebooks", event.params);
     // The chat follows the notebook in front, unless a research chat is shown.
     else if (event.event === "activeTab" && this.selected?.kind !== "research") {
@@ -705,6 +731,7 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   dispose(): void {
     this.mentor.dispose();
+    this.reader.dispose();
     this.setupLog?.dispose();
     this.mirrors.dispose();
     this.bridge.dispose();

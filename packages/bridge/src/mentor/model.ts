@@ -38,14 +38,15 @@ export type MentorEvent =
   | (Base & { t: "judge"; ok: boolean; passed: number; total: number; error?: string; metrics?: { name: string; value: number }[] })
   | (Base & { t: "hint"; level: number })
   | (Base & { t: "probe"; grade: 0 | 1 | 2; question: string; tag?: string })
-  | (Base & { t: "misconception"; tag: string; note: string })
+  /** `title`: a paper's, when it showed while reading the paper (easy-read, attemptId "paper:<id>"). */
+  | (Base & { t: "misconception"; tag: string; note: string; title?: string })
   /** A misconception from the book, asked again at the start of a session. */
   | (Base & { t: "recall"; tag: string; grade: 0 | 1 | 2 })
   | (Base & { t: "done" })
   /** The learner reported the exercise as wrong: the attempt does not count (no rating, no review). */
   | (Base & { t: "void"; reason: string })
   /** A paper's milestones (attemptId "paper:<id>"): its plan approved, or the paper reproduced. Each is a learning day. */
-  | (Base & { t: "paper"; paperId: string; what: "planned" | "done" })
+  | (Base & { t: "paper"; paperId: string; what: "planned" | "done" | "read" })
   /** The notebook (its key) became the paper's workshop (attemptId "paper:<id>"). */
   | (Base & { t: "workshop"; paperId: string; notebook: string });
 
@@ -118,7 +119,10 @@ export interface ReviewState {
 export interface MistakeState {
   tag: string;
   note: string;
+  /** The exercise it showed in; "paper:<id>" for one shown while reading a paper. */
   exerciseId: string;
+  /** A paper's title, for one shown while reading it. */
+  title?: string;
   firstAt: number;
   seen: number;
   streak: number;
@@ -246,6 +250,11 @@ export function applyEvent(state: MentorState, e: MentorEvent, catalog: Pick<Cat
     if (before) state.attempts.get(before)!.notebook = undefined;
     state.places.set(e.notebook, a.attemptId);
     a.notebook = e.notebook;
+    return;
+  }
+  // A misconception shown while reading a paper (easy-read): into the book, with no attempt.
+  if (!a && e.t === "misconception" && e.attemptId.startsWith("paper:")) {
+    noteMistake(state, { attemptId: e.attemptId, exerciseId: e.attemptId }, e.tag, e.note, e.at, e.day, e.title);
     return;
   }
   if (!a || a.doneAt) return;
@@ -417,11 +426,11 @@ function mistakeKey(tag: string): string {
 }
 
 /** A misconception showed: in the book, asked again in two days (and it is no longer solid). */
-function noteMistake(state: MentorState, a: AttemptState, tag: string, note: string, at: number, day: string): void {
+function noteMistake(state: MentorState, a: Pick<AttemptState, "attemptId" | "exerciseId">, tag: string, note: string, at: number, day: string, title?: string): void {
   const key = mistakeKey(tag);
   const m = state.mistakes.get(key);
   if (!m) {
-    state.mistakes.set(key, { tag: tag.trim(), note, exerciseId: a.exerciseId, firstAt: at, seen: 1, streak: 0, due: addDays(day, MISTAKE_AGAIN_DAYS), attempts: new Set([a.attemptId]) });
+    state.mistakes.set(key, { tag: tag.trim(), note, exerciseId: a.exerciseId, ...(title ? { title } : {}), firstAt: at, seen: 1, streak: 0, due: addDays(day, MISTAKE_AGAIN_DAYS), attempts: new Set([a.attemptId]) });
     return;
   }
   m.note = note;
@@ -464,7 +473,7 @@ export function mistakeBook(state: MentorState, catalog: Pick<Catalog, "exercise
     .map((m): MentorMistake => {
       const status = m.due === null ? "solid" : m.due <= today ? "due" : "waiting";
       return {
-        tag: m.tag, note: m.note, exerciseId: m.exerciseId, title: catalog.exercise(m.exerciseId)?.title ?? m.exerciseId,
+        tag: m.tag, note: m.note, exerciseId: m.exerciseId, title: catalog.exercise(m.exerciseId)?.title ?? m.title ?? m.exerciseId,
         seen: m.seen, streak: m.streak, status, ...(m.due ? { due: m.due } : {}),
       };
     })

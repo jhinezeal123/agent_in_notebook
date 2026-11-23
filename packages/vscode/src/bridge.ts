@@ -96,7 +96,7 @@ export class BridgeLink {
     rpc.on("research.run", (run: BridgeEvents["research.run"]) => {
       if (this.rpc === rpc) this.onResearch({ run });
     });
-    for (const method of ["chat.snapshot", "chat.patch", "chat.meta", "chat.status", "chat.usage", "chat.run", "chat.machine", "chat.machineReplaced", "chat.mentor", "chat.workshop", "mentor.updated", "research.quota"]) {
+    for (const method of ["chat.snapshot", "chat.patch", "chat.meta", "chat.status", "chat.usage", "chat.run", "chat.machine", "chat.machineReplaced", "chat.mentor", "chat.workshop", "mentor.updated", "research.quota", "reader.updated", "reader.render"]) {
       rpc.on(method, (params: unknown) => {
         if (this.rpc === rpc) this.publish({ event: "bridge", params: { method, params } });
       });

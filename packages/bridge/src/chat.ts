@@ -171,7 +171,7 @@ export class Chat {
   /** Recap to hand a session that joins mid-conversation. */
   private pendingRecap = "";
   private current: ChatMessage | null = null;
-  private turn: { controller: AbortController; prompting: boolean; project: ProjectCache | null; code: CodePlace | null } | null = null;
+  private turn: { controller: AbortController; prompting: boolean; project: ProjectCache | null; code: CodePlace | null; reviewText: string } | null = null;
   private queue: { input: TurnInput; messageId: string }[] = [];
   private turnTargets: string[] = [];
   private reviews = new Map<string, ReviewState>();
@@ -531,7 +531,7 @@ export class Chat {
     this.current = reply;
     this.lastActiveAt = Date.now();
     this.watchdogFired = false;
-    const turn: NonNullable<Chat["turn"]> = { controller: new AbortController(), prompting: false, project: null, code: null };
+    const turn: NonNullable<Chat["turn"]> = { controller: new AbortController(), prompting: false, project: null, code: null, reviewText: "" };
     this.turn = turn;
     this.setStatus("running");
     try {
@@ -545,6 +545,9 @@ export class Chat {
       if (this.closed) return;
       this.sessionFresh = false;
       this.pendingRecap = "";
+      if (this.role?.reviewReply && res.stopReason !== "cancelled" && res.stopReason !== "refusal" && !turn.controller.signal.aborted) {
+        this.addPart(reply, { type: "text", text: this.role.reviewReply(turn.reviewText) });
+      }
       if (res.stopReason === "cancelled" || turn.controller.signal.aborted) this.addPart(reply, { type: "notice", level: "info", text: "Stopped." });
       else if (res.stopReason === "refusal") this.addPart(reply, { type: "notice", level: "error", text: "The agent refused this request." });
       else if (res.stopReason === "max_tokens" || res.stopReason === "max_turn_requests") {
@@ -1224,6 +1227,12 @@ ${st.place.branch}`);
     switch (u.sessionUpdate) {
       case "agent_message_chunk":
       case "agent_thought_chunk": {
+        if (this.role?.reviewReply) {
+          if (this.turn?.prompting && u.sessionUpdate === "agent_message_chunk" && u.content.type === "text") {
+            this.turn.reviewText += u.content.text.slice(0, Math.max(0, 64_000 - this.turn.reviewText.length));
+          }
+          return;
+        }
         if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "image") {
           const { mimeType, data } = u.content;
           this.addImage(msg, mimeType, data, "Image from agent");
@@ -2165,7 +2174,7 @@ function findTool(msg: ChatMessage, id: string) {
 /** Our MCP servers are registered as "notebook" and "project"; agents spell the tool name differently. */
 export function isNotebookTool(title: string | undefined, meta: unknown): boolean {
   const t = title ?? "";
-  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|kernel_state|await_review|artifact_\w+|mentor_\w+|paper_\w+|save_notebook)\b/i.test(t)) return true;
+  if (/mcp__(notebook|project)__|notebook[_./:]|\bnotebook\b.*\(|\bproject[./:]|^(read_output|run_cells|run_all|shell_wait|shell_input|shell_interrupt|run_code|wait_for_code|wait_for_cells|interrupt_kernel|notebook_info|kernel_state|await_review|artifact_\w+|mentor_\w+|paper_\w+|reader_\w+|save_notebook)\b/i.test(t)) return true;
   const toolName = (meta as any)?.claudeCode?.toolName ?? (meta as any)?.toolName;
   return typeof toolName === "string" && (toolName.includes("notebook") || toolName.startsWith("mcp__project__"));
 }

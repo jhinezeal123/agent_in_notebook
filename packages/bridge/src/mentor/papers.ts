@@ -98,7 +98,8 @@ const PaperFile = z.object({
   /** A landmark paper: the map constellation it closes. */
   closes: z.string().optional(),
   goal: z.string().optional(),
-  status: z.enum(["reading", "planning", "authoring", "ready"]).default("ready"),
+  /** shelved: on the shelf (opened to read, easy-read), no workshop yet; reading: the workshop's first step. */
+  status: z.enum(["shelved", "reading", "planning", "authoring", "ready"]).default("ready"),
   plan: PlanSchema.optional(),
   approved: z.boolean().default(false),
   /** The learner approved a plan at least once (a changed plan waits for their approval again). */
@@ -243,7 +244,7 @@ export class PaperShelf {
   }
 
   /** A new paper, with its text; returns its id. */
-  create(p: { id?: string; title: string; authors?: string; year?: number; url?: string; arxiv?: string; source: string; kind: "latex" | "alphaxiv" | "pdf" }): string {
+  create(p: { id?: string; title: string; authors?: string; year?: number; url?: string; arxiv?: string; source: string; kind: "latex" | "alphaxiv" | "pdf"; status?: "shelved" | "reading" }): string {
     let id = p.id ?? `p-${randomBytes(3).toString("hex")}`;
     while (this.has(id)) id = `${id}-${randomBytes(2).toString("hex")}`;
     const dir = this.dir(id);
@@ -252,7 +253,7 @@ export class PaperShelf {
     this.write(id, {
       id, title: p.title, ...(p.authors ? { authors: p.authors } : {}), ...(p.year ? { year: p.year } : {}),
       ...(p.url ? { url: p.url } : {}), ...(p.arxiv ? { arxiv: p.arxiv } : {}),
-      status: "reading", approved: false, failed: {}, archived: false, source: { kind: p.kind, chars: p.source.length }, addedAt: Date.now(),
+      status: p.status ?? "reading", approved: false, failed: {}, archived: false, source: { kind: p.kind, chars: p.source.length }, addedAt: Date.now(),
     });
     return id;
   }

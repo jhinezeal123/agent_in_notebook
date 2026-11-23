@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AttachedCell, NotebookInfo } from "@ainb/protocol";
 import type { PanelEvent } from "../../ui/src/panel-messages.js";
-import { NO_LOCAL_NOTEBOOKS, PanelCore } from "../src/panel-core.js";
+import { isReaderTab, NO_LOCAL_NOTEBOOKS, PanelCore, READER_TAB_BASE, type ReaderTabs } from "../src/panel-core.js";
 
 const info: NotebookInfo = {
   platform: "colab", title: "train.ipynb", url: "https://colab.research.google.com/drive/x", cellCount: 2,
@@ -75,5 +75,61 @@ describe("attached cells", () => {
     const kept = await c.handle("attachments.get", { tabId: 3 }) as AttachedCell[];
     expect(kept).toHaveLength(20);
     expect(kept[0]!.cellId).toBe("c5");
+  });
+});
+
+describe("reading tabs (easy-read)", () => {
+  const TAB = READER_TAB_BASE + 1;
+  function withReader() {
+    const requests: [string, unknown][] = [];
+    const revealed: [number, unknown][] = [];
+    const events: PanelEvent[] = [];
+    const open = new Map([[TAB, { paperId: "arxiv-2106-09685", title: "LoRA" }]]);
+    const readers: ReaderTabs = {
+      has: (tabId) => open.has(tabId),
+      info: (tabId) => open.get(tabId) ?? null,
+      reveal: async (tabId, anchor) => { revealed.push([tabId, anchor]); },
+    };
+    const bridge = {
+      request: async (method: string, params: unknown) => { requests.push([method, params]); return { chatId: "c1" }; },
+      snapshot: () => ({ conn: "connected" }) as never,
+    };
+    const c = new PanelCore(bridge, NO_LOCAL_NOTEBOOKS, (e) => events.push(e), undefined, readers);
+    return { c, requests, revealed, events, open };
+  }
+
+  it("has ids of their own, apart from the editor's notebooks and Chrome tabs", () => {
+    expect(isReaderTab(TAB)).toBe(true);
+    expect(isReaderTab(1)).toBe(false);
+    expect(isReaderTab(-7)).toBe(false);
+  });
+
+  it("follows the reading tab in front and opens its tutor, with no notebook", async () => {
+    const { c, requests } = withReader();
+    c.follow(TAB);
+    expect(c.activeTab).toBe(TAB);
+    expect(await c.handle("tab.reader", { tabId: TAB })).toEqual({ paperId: "arxiv-2106-09685", title: "LoRA" });
+    expect(await c.handle("tab.notebook", { tabId: TAB })).toBeNull();
+    expect(await c.handle("tab.reader", { tabId: 3 })).toBeNull();
+    await c.handle("chat.open", { tabId: TAB, agentId: "claude", settings: {}, platform: "vscode", notebookKey: "x" });
+    expect(requests).toEqual([["chat.open", { tabId: TAB, agentId: "claude", settings: {}, reader: { paperId: "arxiv-2106-09685" } }]]);
+  });
+
+  it("brings the paper to a cited place, and says so when its tab is closed", async () => {
+    const { c, revealed, open } = withReader();
+    await c.handle("reader.reveal", { tabId: TAB, anchor: { id: "S4.SS1" } });
+    expect(revealed).toEqual([[TAB, { id: "S4.SS1" }]]);
+    open.clear();
+    await expect(c.handle("reader.reveal", { tabId: TAB, anchor: { id: "S4" } })).rejects.toThrow(/đã đóng/);
+    await expect(c.handle("chat.open", { tabId: TAB, agentId: "claude" })).rejects.toThrow(/đã đóng/);
+  });
+
+  it("leaves a paper whose tab closed", () => {
+    const { c, open, events } = withReader();
+    c.follow(TAB);
+    open.clear();
+    c.readersChanged();
+    expect(c.activeTab).toBeNull();
+    expect(events.filter((e) => e.event === "activeTab").map((e) => e.params)).toEqual([TAB, null]);
   });
 });

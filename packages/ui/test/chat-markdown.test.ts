@@ -30,7 +30,7 @@ it("keeps display math with blank lines together while streaming", () => {
 });
 
 declare global {
-  interface Window { renderChatMarkdown: (source: string, localLinks?: boolean) => string }
+  interface Window { renderChatMarkdown: (source: string, localLinks?: boolean, cites?: boolean) => string }
 }
 
 // Install the browser with `pnpm --filter @ainb/ui exec playwright install chromium --only-shell`.
@@ -52,9 +52,22 @@ describe.skipIf(!process.env.E2E_MARKDOWN)("chat renderer in Chromium", () => {
   });
   afterAll(async () => { await browser?.close(); });
 
-  const render = (source: string, localLinks = false) => page.evaluate(({ source, localLinks }) => {
-    document.body.innerHTML = window.renderChatMarkdown(source, localLinks);
-  }, { source, localLinks });
+  const render = (source: string, localLinks = false, cites = false) => page.evaluate(({ source, localLinks, cites }) => {
+    document.body.innerHTML = window.renderChatMarkdown(source, localLinks, cites);
+  }, { source, localLinks, cites });
+
+  it("turns a paper tutor's citations into chips, only in a tutor's chat (easy-read)", async () => {
+    const text = 'LoRA freezes $W_0$ [[S4.SS1]], see [[S2.E1]] and [[p4: "scaled dot-product"]]; not [[Figure 1]].';
+    await render(text, true, true);
+    const chips = page.locator("button.cite-chip");
+    expect(await chips.allTextContents()).toEqual(["§4.1", "Eq. 1", "tr. 4: “scaled dot-product”"]);
+    expect(JSON.parse((await chips.nth(0).getAttribute("data-cite"))!)).toEqual({ id: "S4.SS1" });
+    expect(await page.locator(".katex").count()).toBe(1);
+    expect(await page.locator("body").innerText()).toContain("not [[Figure 1]].");
+    await render(text, true);
+    expect(await page.locator("button.cite-chip").count()).toBe(0);
+    expect(await page.locator("body").innerText()).toContain("[[S4.SS1]]");
+  });
 
   it("renders all four delimiters, leaves code and prices intact, and falls back on malformed TeX", async () => {
     await render([

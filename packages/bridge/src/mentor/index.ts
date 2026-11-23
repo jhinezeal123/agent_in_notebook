@@ -387,7 +387,7 @@ export class Mentor {
     return dueMistakes(this.state(), attemptId, dayOf(this.now())).map((m) => {
       const ex = this.catalog.exercise(m.exerciseId);
       const probe = ex?.probeBank.find((p) => p.tag.toLowerCase() === m.tag.toLowerCase());
-      return { tag: m.tag, note: m.note, exercise: ex?.title ?? m.exerciseId, ...(probe ? { question: probe.q, answer: probe.answer } : {}) };
+      return { tag: m.tag, note: m.note, exercise: ex?.title ?? m.title ?? m.exerciseId, ...(probe ? { question: probe.q, answer: probe.answer } : {}) };
     });
   }
 
