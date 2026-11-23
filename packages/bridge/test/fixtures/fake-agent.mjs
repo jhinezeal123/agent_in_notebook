@@ -187,7 +187,8 @@ const app = agent({ name: "fake-agent" })
           update: { sessionUpdate: "tool_call_update", toolCallId: id, status: r.isError ? "failed" : "completed" },
         });
         // `quiet` calls say nothing, so several calls in a row sit next to each other like a real agent's.
-        if (!step.quiet) await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${out}\n`);
+        const diagnostic = s.reader ? out.replace(/\[\[(p\d+: "exact words")\]\]/g, "[$1]") : out;
+        if (!step.quiet) await say(`RESULT ${step.tool}${r.isError ? " (error)" : ""}: ${diagnostic}\n`);
       }
     }
     return { stopReason: "end_turn" };

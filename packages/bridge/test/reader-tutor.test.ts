@@ -232,7 +232,7 @@ describe("the tutor's role", () => {
     const { hub, paperId, tutor } = await pdfPaper();
     const before = await tutor.prompt({ text: "?", rules: true, recap: "" } as never);
     expect(before).toContain("paper_page to look at a PDF page");
-    expect(before).toContain("[[p4: \"exact words\"]]");
+    expect(before).toContain("[[p4: \"exact words from that page\"]]");
     expect(before).toContain("The PDF's text is not taken out yet");
     hub.pdfText(paperId, ["Some title page"]);
     const after = await tutor.prompt({ text: "?", rules: false, recap: "<recap/>" } as never);
