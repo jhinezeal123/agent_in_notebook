@@ -528,7 +528,9 @@ Workflow `test` trên GitHub chạy `pnpm typecheck`, `pnpm build` và `pnpm tes
 4. Lượt 3–4: câu đào sâu được chấm theo rubric, phản đối được một lần; thẻ ôn giữ lại hiện ở Khởi động sau 5 ngày (kiểm nhanh bằng ngày giả trong test, như các test lịch ôn của Mentor).
 5. Bấm Reproduce: xưởng mở với đúng paper, không lấy lại nội dung.
 
-Đợt nghiệm thu ngày 24/11/2026 dùng VS Code 1.147 và Claude ACP. Tab LoRA đã nhận trích dẫn đã kiểm từ gia sư. PDF cục bộ đã gửi ảnh trang cho gia sư qua `paper_page`. Trên DDPM, lượt thử đã nộp 5C, một checkpoint và tóm tắt, mở khóa hai widget sau câu dự đoán, chấm bài Đào sâu theo rubric, chấm lại một lần và đưa thẻ đã giữ vào Khởi động. CI giả lập ngày thứ năm để kiểm lịch ôn. Luồng Reproduce đã có kiểm thử qua bridge với notebook giả lập. Lần chạy với notebook Kaggle thật còn chờ Chrome kết nối với bridge.
+Đợt nghiệm thu ngày 24/11/2026 dùng VS Code 1.147 và Claude ACP. Tab LoRA đã nhận trích dẫn đã kiểm từ gia sư. PDF cục bộ đã gửi ảnh trang cho gia sư qua `paper_page`. Trên DDPM, lượt thử đã nộp 5C, một checkpoint và tóm tắt, mở khóa hai widget sau câu dự đoán, chấm bài Đào sâu theo rubric, chấm lại một lần và đưa thẻ đã giữ vào Khởi động. CI giả lập ngày thứ năm để kiểm lịch ôn.
+
+Đã bấm **Reproduce** trong lượt Đào sâu của LoRA trên VS Code. Xưởng LoRA xuất hiện trong bản sao của notebook Kaggle thử nghiệm và bridge ghi nhận đúng cặp paper–notebook. Nội dung HTML của paper được dùng lại từ bản đã lưu. Bridge lưu bản sao cell mẫu của Kaggle trước khi chép xưởng.
 
 ### F.4 Đo chất lượng nội dung do AI sinh
 
