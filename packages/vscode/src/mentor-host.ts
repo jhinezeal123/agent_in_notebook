@@ -15,6 +15,8 @@ export interface MentorDeps {
   connected(): boolean;
   /** Open VS Code's copy of the notebook in a Chrome tab, with its chat beside it. */
   openMirror(chromeTabId: number): Promise<void>;
+  /** Easy-read: a shelf paper in its reading tab. */
+  read(paperId: string): Promise<void>;
 }
 
 export class MentorHost implements vscode.Disposable {
@@ -99,6 +101,8 @@ export class MentorHost implements vscode.Disposable {
         return vscode.env.openExternal(vscode.Uri.parse(NEW_KAGGLE_NOTEBOOK));
       case "mentor.addPaper":
         return this.addPaper();
+      case "mentor.read":
+        return this.deps.read(String((params as { paperId?: unknown })?.paperId ?? ""));
       case "mentor.openWorkshop":
         return this.openWorkshop(String((params as { paperId?: unknown })?.paperId ?? ""));
       case "mentor.focus":

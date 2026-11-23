@@ -110,7 +110,8 @@ export class WorkshopHub {
     return {
       paperId,
       title: info.title,
-      status: info.status,
+      // A shelved paper's workshop starts at reading it.
+      status: info.status === "shelved" ? "reading" : info.status,
       ...(info.plan ? { plan: info.plan } : {}),
       approved: info.approved,
       ...(info.approved ? { authoring: progress ?? { ...this.counts(paperId), running: false } } : {}),

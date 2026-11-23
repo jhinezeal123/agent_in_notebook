@@ -1,0 +1,10 @@
+{
+  "name": "ainb-reader-webview-probe",
+  "displayName": "ainb reader webview probe (ER-0)",
+  "publisher": "ainb-debug",
+  "version": "0.0.0",
+  "private": true,
+  "engines": { "vscode": "^1.100.0" },
+  "main": "./ext.cjs",
+  "activationEvents": []
+}

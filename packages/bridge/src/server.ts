@@ -36,6 +36,7 @@ import {
   type NotebookOp,
   type ParamsOf,
   type ResearchRun,
+  readerChatKey,
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
@@ -60,6 +61,10 @@ import { fetchArxiv, paperIdFor, parseArxivId, pdfChunkCode, pdfExtractCode, pdf
 import { authorChatKey } from "./mentor/place.js";
 import { WorkshopHub, WorkshopSession, type AuthorChat } from "./mentor/workshop.js";
 import { slugOf } from "./mentor/papers.js";
+import { ReaderHub } from "./reader/index.js";
+import { ReaderChat, readerOf } from "./reader/chat.js";
+import { paperEventId } from "./mentor/model.js";
+import type { ChatRole } from "./chat-role.js";
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
@@ -153,6 +158,8 @@ export class Bridge {
   readonly mentorPlaces: MentorPlaces;
   /** Paper workshops: plans, and the exercises being written. */
   readonly workshops: WorkshopHub;
+  /** Easy-read: papers being read, beside their tutor's chat. */
+  readonly reader: ReaderHub;
   port = 0;
 
   constructor(private readonly opts: BridgeOptions) {
@@ -185,6 +192,31 @@ export class Bridge {
       say: (paperId, text) => [...this.chats.values()].find((c) => workshopOf(c)?.paperId === paperId && workshopOf(c)!.role === "plan")?.notice(text),
       changed: () => this.toEditor("mentor.updated", {}),
       log: (m) => this.log(m),
+    });
+    this.reader = new ReaderHub({
+      root: this.mentor.shelf.root,
+      shelf: {
+        paperFor: (arxiv) => this.mentor.papers().find((p) => {
+          const id = this.mentor.paperPackage(p.id)?.info.arxiv ?? (p.url ? parseArxivId(p.url) : null);
+          return !!id && paperIdFor(id) === paperIdFor(arxiv);
+        })?.id,
+        arxivOf: (paperId) => {
+          const info = this.mentor.paperPackage(paperId)?.info;
+          return info?.arxiv ?? (info?.url ? parseArxivId(info.url) ?? undefined : undefined);
+        },
+        shelve: (p) => {
+          if (this.mentor.paperPackage(p.id) || this.mentor.shelf.has(p.id)) return;
+          this.mentor.shelf.create({ ...p, status: "shelved" });
+          this.mentor.reloadPapers();
+          this.emitMentorUpdated();
+        },
+      },
+      emit: (event, params) => this.toEditor(event, params),
+      log: (m) => this.log(m),
+      // The hidden author and checker of a paper (ER-2), shown nowhere.
+      author: () => ({ chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind), log: (m) => this.log(m) }),
+      // A misconception about a paper goes into Mentor's book too (asked again in two days).
+      misconception: ({ paperId, title, concept, note }) => this.mentor.record({ t: "misconception", attemptId: paperEventId(paperId), tag: `paper:${paperId}:${concept}`.slice(0, 80), note, title: title.slice(0, 200) }),
     });
     this.mentorPlaces = new MentorPlaces(this.mentor, {
       notebooks: () => this.browserNotebooks,
@@ -442,8 +474,11 @@ export class Bridge {
       guard<"chat.open">(async (p) => {
         const spec = findAgent(p.agentId);
         if (!spec) throw new Error(`Unknown agent ${p.agentId}`);
-        const key = typeof p.notebookKey === "string" && p.notebookKey ? p.notebookKey.slice(0, 2000) : undefined;
-        const target: Target = Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
+        // A paper's tutor (easy-read): its chat follows the paper, beside the paper's tab.
+        const readerId = typeof p.reader?.paperId === "string" && p.reader.paperId ? p.reader.paperId : undefined;
+        if (readerId && !this.reader.has(readerId)) throw new Error(`Không có paper ${readerId} để đọc.`);
+        const key = readerId ? readerChatKey(readerId) : typeof p.notebookKey === "string" && p.notebookKey ? p.notebookKey.slice(0, 2000) : undefined;
+        const target: Target = !readerId && Number.isSafeInteger(p.browserTab) ? { kind: "browser", tabId: p.browserTab! } : { kind: "vscode", tabId: p.tabId };
         const existing = this.chats.get(p.tabId);
         const sameTarget = !!existing && sameAs(this.targets.get(existing), target);
         const override = typeof p.projectId === "string" && p.projectId ? p.projectId : undefined;
@@ -472,12 +507,12 @@ export class Bridge {
         }
         const info = target.kind === "browser" ? this.browserNotebooks.get(target.tabId) : undefined;
         // A Mentor exercise's notebook: the agent coaches; it belongs to no project.
-        const mentor = this.mentorSession(target, key);
-        const workshop = mentor ? undefined : this.workshopSession(target, key);
-        const tutor = !!mentor || !!workshop;
+        const mentor = readerId ? undefined : this.mentorSession(target, key);
+        const workshop = mentor || readerId ? undefined : this.workshopSession(target, key);
+        const tutor = !!mentor || !!workshop || !!readerId;
         // The bridge decides the notebook's project (its meta file); the editor only overrides it.
         const project = key && !tutor ? this.links.initial(key, { projectId: override, title: info?.title, url: info?.url, platform: p.platform, agentId: p.agentId }) : undefined;
-        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, role: mentor ? new MentorChat(mentor) : workshop ? new WorkshopChat(workshop) : undefined });
+        const chat = new Chat(p.tabId, spec, sanitizeSettings(p.settings), this.chatHost(target, key, tutor), { notebookKey: key, carried, note, journal, project, role: mentor ? new MentorChat(mentor) : workshop ? new WorkshopChat(workshop) : readerId ? new ReaderChat(this.reader, readerId) : undefined });
         this.chats.set(p.tabId, chat);
         this.targets.set(chat, target);
         if (target.kind === "browser") chat.notebook = this.browserNotebooks.get(target.tabId) ?? null;
@@ -660,6 +695,80 @@ export class Bridge {
       includeMistakes: p?.includeMistakes !== false,
     })));
     rpc.handle("mentor.import", guard<"mentor.import">((p) => this.mentor.importProfile(String(p?.data ?? ""))));
+
+    // ---------------------------------------------------------------- easy-read
+    rpc.handle("reader.open", guard<"reader.open">((p) => {
+      const src = p?.source as Record<string, unknown> | undefined;
+      if (typeof src?.arxiv === "string") return this.reader.open({ arxiv: src.arxiv });
+      if (typeof src?.pdfPath === "string") return this.reader.open({ pdfPath: src.pdfPath });
+      if (typeof src?.paperId === "string") return this.reader.open({ paperId: src.paperId });
+      throw new Error("Cần link arXiv, file PDF, hoặc một paper đã đọc.");
+    }));
+    rpc.handle("reader.get", guard<"reader.get">((p) => this.reader.view(String(p.paperId))));
+    rpc.handle("reader.list", guard<"reader.list">(() => ({ papers: this.reader.list() })));
+    rpc.handle("reader.progress", guard<"reader.progress">((p) => {
+      this.readerAgent(String(p.paperId), p.agentId);
+      this.reader.progress(String(p.paperId), String(p.section), Number(p.ms));
+      return { ok: true as const };
+    }));
+    rpc.handle("reader.mark", guard<"reader.mark">((p) => this.reader.mark(String(p.paperId), String(p.section), !!p.read)));
+    rpc.handle("reader.note", guard<"reader.note">((p) => this.reader.note(String(p.paperId), { ...(p.note ? { note: p.note } : {}), ...(typeof p.remove === "string" ? { remove: p.remove } : {}) })));
+    rpc.handle("reader.pdfText", guard<"reader.pdfText">((p) => this.reader.pdfText(String(p.paperId), p.pages, p.title)));
+    rpc.handle("reader.rendered", guard<"reader.rendered">((p) => {
+      this.reader.rendered(String(p.paperId), p);
+      return { ok: true as const };
+    }));
+    rpc.handle("reader.ask", guard<"reader.ask">((p) => {
+      const tutor = readerOf(this.chatById(p.chatId));
+      if (!tutor) throw new Error("Chat này không phải gia sư của một paper.");
+      tutor.ask(p.kind, p.anchor ?? {}, String(p.quote ?? ""));
+      return { accepted: true as const };
+    }));
+    // Passes 1–2 (ER-2): the goal, the passes, answers, the reader's writing graded by the tutor.
+    rpc.handle("reader.guide", guard<"reader.guide">((p) => this.reader.passes.guide(String(p.paperId))));
+    rpc.handle("reader.goal", guard<"reader.goal">((p) => {
+      this.readerAgent(String(p.paperId), p.agentId);
+      return this.reader.passes.goal(String(p.paperId), p.goal);
+    }));
+    rpc.handle("reader.pass", guard<"reader.pass">((p) => {
+      this.readerAgent(String(p.paperId), p.agentId);
+      return this.reader.passes.pass(String(p.paperId), Number(p.pass) as 1 | 2 | 3 | 4, !!p.done);
+    }));
+    rpc.handle("reader.answer", guard<"reader.answer">((p) => {
+      const paperId = String(p.paperId);
+      const choice = p.choice ?? {};
+      if (p.pretest) {
+        this.reader.passes.pretest(paperId, String(p.item), { ...(choice.options?.length ? { option: choice.options[0] } : {}), ...(typeof choice.text === "string" ? { text: choice.text } : {}) });
+        return { guide: this.reader.passes.guide(paperId) };
+      }
+      const result = this.reader.passes.answer(paperId, String(p.item), choice, Number(p.confidence) as 1 | 2 | 3);
+      return { result, guide: this.reader.passes.guide(paperId) };
+    }));
+    rpc.handle("reader.write", guard<"reader.write">((p) => {
+      const paperId = String(p.paperId);
+      // The paper's tutor grades: the chat given, else any open chat of the paper.
+      const given = typeof p.chatId === "string" ? [...this.chats.values()].find((c) => c.id === p.chatId) : undefined;
+      const chat = given && readerOf(given)?.paperId === paperId ? given : [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
+      const tutor = chat ? readerOf(chat) : undefined;
+      let port;
+      try {
+        port = tutor?.tutorPort();
+      } catch {
+        port = undefined;
+      }
+      const { id, graded } = this.reader.passes.write(paperId, { kind: p.kind, ...(p.unit ? { unit: String(p.unit) } : {}), ...(p.key ? { key: String(p.key) } : {}), ...(typeof p.text === "string" ? { text: p.text } : {}), ...(p.fields ? { fields: p.fields } : {}) }, port);
+      return { id, graded, guide: this.reader.passes.guide(paperId) };
+    }));
+    rpc.handle("reader.skip", guard<"reader.skip">((p) => this.reader.passes.skip(String(p.paperId), String(p.task))));
+    rpc.handle("reader.report", guard<"reader.report">((p) => this.reader.passes.report(String(p.paperId), String(p.item), String(p.reason ?? ""))));
+    rpc.handle("reader.author", guard<"reader.author">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      this.readerAgent(paperId, p.agentId);
+      if (p.action === "stop") this.reader.author.stop(paperId);
+      else this.reader.author.retry(paperId);
+      return this.reader.passes.guide(paperId);
+    }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
       if (p?.orxPath !== undefined) {
@@ -916,6 +1025,41 @@ export class Bridge {
     this.byToken.set(chat.mcpToken, chat);
     return {
       send: (text, context) => chat.send(text, { context }),
+      whenIdle: async (signal) => {
+        await new Promise((r) => setTimeout(r, 200));
+        await chat.whenIdle(signal);
+        if (signal.aborted) await chat.cancel().catch(() => false);
+      },
+      close: () => {
+        chat.close();
+        this.byToken.delete(chat.mcpToken);
+      },
+    };
+  }
+
+  private readerSeq = 0;
+  /** The agent the reader uses, per paper (the editor says), for hidden chats when no tutor chat is open. */
+  private readonly readerAgents = new Map<string, string>();
+
+  private readerAgent(paperId: string, agentId: unknown): void {
+    if (typeof agentId === "string" && findAgent(agentId)) this.readerAgents.set(paperId, agentId);
+  }
+
+  /**
+   * A hidden chat of easy-read (the author or the checker of a paper): the
+   * same agent as the paper's tutor, on no notebook, its events to no one.
+   */
+  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker"): AuthorChat {
+    const tutor = [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
+    const spec = tutor?.spec ?? findAgent(this.readerAgents.get(paperId) ?? "claude") ?? findAgent("claude");
+    if (!spec) throw new Error("No agent to prepare the paper.");
+    const key = `reader-${kind}:${paperId}`;
+    const target: Target = { kind: "vscode", tabId: -2_000_000_000 - ++this.readerSeq };
+    const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
+    const chat = new Chat(target.tabId, spec, DEFAULT_SETTINGS, host, { notebookKey: key, role });
+    this.byToken.set(chat.mcpToken, chat);
+    return {
+      send: (text, context) => chat.send(text, context ? { context } : {}),
       whenIdle: async (signal) => {
         await new Promise((r) => setTimeout(r, 200));
         await chat.whenIdle(signal);

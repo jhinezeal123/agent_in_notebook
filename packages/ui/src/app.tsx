@@ -1,6 +1,6 @@
 import { Fragment, type ComponentChildren } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, diffLines, diffStats, type AgentOption, type AppliedChange, type ChatCode, type ChatProject, type ChatSearchHit, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type ReviewInfo, type Scope } from "@ainb/protocol";
+import { SCOPE_HINT, SCOPE_LABEL, applyMessagePatch, diffLines, diffStats, readerChatKey, type AgentOption, type AppliedChange, type ChatCode, type ChatProject, type ChatSearchHit, type ChatSettings, type ChatSnapshot, type ChatUsage, type MachineStats, type MessagePatch, type NotebookInfo, type Part, type ReaderAnchor, type ReviewInfo, type Scope } from "@ainb/protocol";
 import { DEFAULT_PREFS, type AttachedCell, type BridgeState, type NotebookChoice, type Prefs } from "./panel-messages.js";
 import { usePanelHost } from "./host.js";
 import { AttachedChip, Message, PendingPrompt, type PartActions } from "./parts.js";
@@ -21,6 +21,8 @@ export function App() {
   const [tabId, setTabId] = useState<number | null>(null);
   useEffect(() => client.watchTab(setTabId), [client]);
   const [notebook, setNotebook] = useState<NotebookInfo | null>(null);
+  /** Easy-read: the paper whose reading tab is in front; the chat is its tutor. */
+  const [reader, setReader] = useState<{ paperId: string; title: string } | null>(null);
   const [choices, setChoices] = useState<NotebookChoice[]>([]);
   const [chat, setChat] = useState<ChatSnapshot | null>(null);
   const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS);
@@ -120,12 +122,14 @@ export function App() {
     let stale = false;
     setChat(null);
     setNotebook(null);
+    setReader(null);
     setLoadedTab(null);
     setAttached([]);
     editedCells.current = [];
     setDismissedError(null);
     if (tabId === null) return;
     void client.request<NotebookInfo | null>("tab.notebook", { tabId }).then((info) => tabRef.current === tabId && setNotebook(info), () => {});
+    void client.request<{ paperId: string; title: string } | null>("tab.reader", { tabId }).then((paper) => tabRef.current === tabId && setReader(paper), () => {});
     void client.request<AttachedCell[]>("attachments.get", { tabId }).then((cells) => tabRef.current === tabId && setAttached(cells), () => {});
     if (connected) void client.request<ChatSnapshot | null>("chat.get", { tabId }).then((c) => {
       if (!stale) { setChat(c); setLoadedTab(tabId); }
@@ -150,21 +154,27 @@ export function App() {
     }
   }, []);
 
+  // What the chat is about: a notebook, or (easy-read) a paper in its reading tab.
+  const subjectKey = notebook?.key ?? (reader ? readerChatKey(reader.paperId) : undefined);
   // During a tab or document switch, ignore snapshots from the previous notebook.
-  const live = chat && chat.tabId === tabId && chat.status !== "closed" && (!chat.notebookKey || chat.notebookKey === notebook?.key) ? chat : null;
+  const live = chat && chat.tabId === tabId && chat.status !== "closed" && (!chat.notebookKey || chat.notebookKey === subjectKey) ? chat : null;
   const settings: ChatSettings =
     live?.agentId === prefs.agentId ? live.settings : { scope: prefs.scope, review: prefs.review, targetCellIds: [], notebookOnly: prefs.notebookOnly };
+  /** chat.open's parameters for this tab: its notebook, or the paper its tutor reads. */
+  const openParams = (agentId: string) => reader
+    ? { tabId, agentId, settings, reader: { paperId: reader.paperId } }
+    : { tabId, agentId, settings, platform: notebook?.platform, notebookKey: notebook?.key };
 
   // ACP exposes model choices when the session opens, before any prompt.
   useEffect(() => {
-    if (!connected || !prefsReady || tabId === null || loadedTab !== tabId || !notebook || live?.agentId === prefs.agentId) return;
+    if (!connected || !prefsReady || tabId === null || loadedTab !== tabId || (!notebook && !reader) || live?.agentId === prefs.agentId) return;
     if (!bridge?.agents.some((a) => a.id === prefs.agentId && a.available)) return;
     let stale = false;
-    void client.request<ChatSnapshot>("chat.open", { tabId, agentId: prefs.agentId, settings, platform: notebook.platform, notebookKey: notebook.key }).then((snap) => {
+    void client.request<ChatSnapshot>("chat.open", openParams(prefs.agentId)).then((snap) => {
       if (!stale && tabRef.current === tabId && agentRef.current === snap.agentId) adopt(snap);
     }, (e) => { if (!stale) setError((e as Error).message); });
     return () => { stale = true; };
-  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, notebook?.key, prefs.agentId, live?.agentId, bridge?.agents]);
+  }, [connected, prefsReady, loadedTab, tabId, notebook?.platform, notebook?.key, reader?.paperId, prefs.agentId, live?.agentId, bridge?.agents]);
 
   const updateSettings = (s: ChatSettings) => {
     setPrefs({ scope: s.scope, review: s.review, notebookOnly: s.notebookOnly });
@@ -187,8 +197,8 @@ export function App() {
   };
 
   const openChat = async (agentId: string): Promise<ChatSnapshot | undefined> => {
-    if (tabId === null || !notebook) return undefined;
-    const snap = await run(client.request<ChatSnapshot>("chat.open", { tabId, agentId, settings, platform: notebook.platform, notebookKey: notebook.key }));
+    if (tabId === null || (!notebook && !reader)) return undefined;
+    const snap = await run(client.request<ChatSnapshot>("chat.open", openParams(agentId)));
     if (snap && tabRef.current === tabId && agentRef.current === agentId) adopt(snap);
     return snap;
   };
@@ -237,7 +247,7 @@ export function App() {
   exportRef.current = () => {
     if (!live) return;
     const md = exportChatMarkdown(live, notebook);
-    const name = notebook?.title || live.notebookKey || "notebook-chat";
+    const name = notebook?.title || reader?.title || live.notebookKey || "notebook-chat";
     void run(client.request("chat.export", { filename: name, content: md }));
   };
 
@@ -318,8 +328,10 @@ export function App() {
       review: (reviewId, accept) => live && void run(client.request("chat.review", { chatId: live.chatId, reviewId, accept })),
       cardAction: (cardId, actionId) => live && void run(client.request("chat.cardAction", { chatId: live.chatId, cardId, actionId })),
       focusCell: (cellId) => tabId !== null && void run(client.request("notebook.focus", { tabId, cellId })),
-      // In a Mentor exercise the learner types every line themself.
-      insertCell: (source, cellType) => tabId !== null && !live?.mentor && void run(client.request("notebook.insert", { tabId, source, cellType })),
+      // In a Mentor exercise the learner types every line themself; a paper's tutor has no notebook.
+      insertCell: (source, cellType) => tabId !== null && !live?.mentor && !reader && void run(client.request("notebook.insert", { tabId, source, cellType })),
+      // A citation in a paper tutor's answer: its reading tab goes there.
+      ...(reader ? { cite: (anchor: ReaderAnchor) => tabId !== null && void run(client.request("reader.reveal", { tabId, anchor })) } : {}),
       // The transcript shows the outcome (a notice on the message); errors show in the banner.
       undo: async (messageId) => {
         if (live) await run(client.request("chat.undo", { chatId: live.chatId, messageId }));
@@ -349,10 +361,12 @@ export function App() {
       },
       resend: (text, cells) => void sendRef.current(text, cells),
     }),
-    [live?.chatId, tabId, !!live?.mentor],
+    [live?.chatId, tabId, !!live?.mentor, reader?.paperId],
   );
 
   const mentor = live?.mentor;
+  /** A tutor's chat (Mentor's or a paper's): its mode is fixed, the notebook toggles do not apply. */
+  const tutor = !!mentor || !!reader;
   const mentorCall = (method: string, extra: Record<string, unknown> = {}) => live && void run(client.request(method, { chatId: live.chatId, ...extra }));
 
   if (!bridge) return <div class="center muted">{error ?? "Loading…"}</div>;
@@ -431,8 +445,24 @@ export function App() {
   };
 
   return (
-    <div class={mentor ? "app mentor-chat" : "app"}>
+    <div class={mentor ? "app mentor-chat" : reader ? "app reader-chat" : "app"}>
       <div class="sr-only" aria-live="polite">{liveAnnounce}</div>
+      {reader && (
+        <header class="notebook-header">
+          <div class="notebook-header-body chat-width">
+            <div class="notebook-details">
+              <div class="notebook-title" title={reader.title}>{reader.title}</div>
+              <div class="notebook-meta">
+                <span>Gia sư của paper · chọn một đoạn trong tab đọc để hỏi về nó</span>
+              </div>
+            </div>
+            {live?.messages.length ? (
+              <button class="ctx-btn" title={t("header.search", lang)} aria-label={t("header.search", lang)} onClick={() => setSearchOpen((v) => !v)}><Icon name="search" /></button>
+            ) : null}
+            <button class="ctx-btn" title="Về tab đọc của paper" aria-label="Về tab đọc của paper" onClick={() => tabId !== null && void run(client.request("reader.reveal", { tabId }))}><Icon name="notebook" /></button>
+          </div>
+        </header>
+      )}
       {notebook && (
         <NotebookHeader
           notebook={notebook}
@@ -521,19 +551,20 @@ export function App() {
           onHome={() => void run(client.request("mentor.open"))}
         />
       )}
-      {!notebook ? (
+      {!notebook && !reader ? (
         <Welcome mark>
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>
           <ConnectionChecklist bridge={bridge} notebook={null} agentReady={agentReady} agentName={agentName} onManageAgents={manageAgents} lang={lang} />
         </Welcome>
       ) : (
         <Transcript
-          key={live?.chatId ?? notebook.key ?? tabId}
+          key={live?.chatId ?? notebook?.key ?? reader?.paperId ?? tabId}
           chat={live}
           notebook={notebook}
           hasAttached={attached.length > 0}
           actions={actions}
           onSuggest={(text) => setDraft({ text })}
+          paper={!!reader}
           mentor={!!mentor || !!live?.workshop}
           review={mentor?.kind === "review"}
           searchHits={new Set(matchedMsgIds)}
@@ -563,7 +594,7 @@ export function App() {
         </div>
       )}
 
-      {notebook && (
+      {(notebook || reader) && (
         <footer class="bottom chat-width">
           {pendingPrompts[0] && <PendingPrompt part={pendingPrompts[0]} more={pendingPrompts.length - 1} actions={actions} />}
           {pendingReviews.length > 0 && (
@@ -589,13 +620,13 @@ export function App() {
             queued={queuedCount}
             draft={draft}
             focusAt={attachedAt}
-            placeholder={mentor ? "Trao đổi với mentor…" : attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}… (type / for commands)`}
+            placeholder={mentor ? "Trao đổi với mentor…" : reader ? "Hỏi gia sư về paper…" : attached.length ? `Ask ${agentName} about ${attached.length === 1 ? "this cell" : "these cells"}…` : `Ask ${agentName}… (type / for commands)`}
             disabled={composerDisabled}
             customSlash={prefs.slashTemplates}
             onSlash={handleSlashCommand}
             onSend={send}
             onStop={() => live && void run(client.request("chat.cancel", { chatId: live.chatId }))}
-            context={
+            context={notebook &&
               <ComposerContext
                 notebook={notebook}
                 settings={settings}
@@ -614,7 +645,7 @@ export function App() {
             }
             tools={
               <>
-                {!mentor && <Picker
+                {!tutor && <Picker
                   label="Access"
                   class={`scope scope-${settings.scope}`}
                   value={settings.scope}
@@ -669,7 +700,7 @@ export function App() {
             }
           />
           <div class="input-status">
-            {!mentor && <>
+            {!tutor && <>
             <label class="toggle" title="Each change waits as a diff to apply or reject, and with Write + run each run or command waits for your OK. Off: the agent goes ahead without asking.">
               <input type="checkbox" class="switch" checked={settings.review} onChange={(e) => updateSettings({ ...settings, review: e.currentTarget.checked })} />
               Ask before changes
@@ -966,6 +997,14 @@ const REVIEW_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
   { icon: "sparkle", label: "Bắt đầu ôn", text: "Chào mentor, mình bắt đầu ôn bài này từ cell trống." },
 ];
 
+/** A paper's tutor, before the first question (easy-read). */
+const PAPER_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
+  { icon: "sparkle", label: "Paper này giải quyết vấn đề gì?", text: "Paper này giải quyết vấn đề gì, và đóng góp chính là gì? Chỉ chỗ trong paper." },
+  { icon: "notebook", label: "Nên đọc theo thứ tự nào?", text: "Mình nên đọc paper này theo thứ tự nào để nắm ý nhanh nhất, và mục nào có thể lướt qua?" },
+  { icon: "flask", label: "Kiến thức nền cần có", text: "Để hiểu paper này mình cần biết trước những kiến thức nền nào? Mỗi thứ nói ngắn gọn vì sao cần." },
+  { icon: "check", label: "Hỏi tôi một câu", text: "Hỏi mình một câu về phần mình vừa đọc để mình tự kiểm tra. Đừng nói đáp án trước khi mình trả lời." },
+];
+
 const MENTOR_SUGGESTIONS: { icon: IconName; label: string; text: string }[] = [
   { icon: "sparkle", label: "Bắt đầu buổi học", text: "Chào mentor, mình bắt đầu bài này. Mình đã chạy các cell Phòng công thức." },
   { icon: "notebook", label: "Kể lại công thức", text: "Mình hiểu công thức này như sau: " },
@@ -977,6 +1016,7 @@ function Transcript({
   hasAttached = false,
   actions,
   onSuggest,
+  paper = false,
   mentor = false,
   review = false,
   searchHits,
@@ -987,6 +1027,8 @@ function Transcript({
   hasAttached?: boolean;
   actions: PartActions;
   onSuggest: (text: string) => void;
+  /** A paper's tutor (easy-read). */
+  paper?: boolean;
   mentor?: boolean;
   review?: boolean;
   searchHits?: Set<string>;
@@ -1014,6 +1056,22 @@ function Transcript({
     return () => observer.disconnect();
   }, [hasMessages]);
 
+  if (paper && (!chat || !hasMessages)) {
+    return (
+      <Welcome
+        title="Đọc cùng gia sư"
+        text={<p>Chọn một đoạn trong paper rồi bấm <b>Giải thích</b>, <b>Ví dụ cụ thể</b>, <b>Ký hiệu</b> hay <b>Vì sao?</b>, hoặc hỏi bất cứ điều gì. Gia sư đọc paper trước khi trả lời; bấm vào chỗ trích (như <b>§4.1</b>, <b>Eq. 3</b>) để tới đó trong paper.</p>}
+      >
+        <div class="suggestions">
+          {PAPER_SUGGESTIONS.map((s) => (
+            <button key={s.text} class="suggestion" onClick={() => onSuggest(s.text)}>
+              <Icon name={s.icon} /><span>{s.label}</span><Icon name="chev-r" />
+            </button>
+          ))}
+        </div>
+      </Welcome>
+    );
+  }
   if (mentor && (!chat || !hasMessages)) {
     return (
       <Welcome

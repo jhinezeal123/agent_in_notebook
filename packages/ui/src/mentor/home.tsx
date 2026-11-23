@@ -25,6 +25,7 @@ const REASON: Record<MentorToday["reason"], string> = {
 };
 
 const PAPER_STATUS: Record<MentorPaper["status"], string> = {
+  shelved: "Trên tủ",
   reading: "Đang đọc paper",
   planning: "Đang lập kế hoạch",
   authoring: "Đang soạn bài",
@@ -530,6 +531,7 @@ function ShelfCard({ home, host, starting, onStart, onError }: { home: MentorHom
             onStart={onStart}
             onFocus={() => toggleFocus("paper", p.id)}
             onWorkshop={() => ask("mentor.openWorkshop", { paperId: p.id })}
+            onRead={() => ask("mentor.read", { paperId: p.id })}
             onNotes={(notes) => ask("mentor.paperNotes", { paperId: p.id, notes })}
             onArchive={() => ask("mentor.paperArchive", { paperId: p.id, archived: p.status !== "archived" })}
           />
@@ -564,7 +566,7 @@ export function nextComponent(p: MentorPaper): MentorPaper["components"][number]
 
 function PaperItem(props: {
   paper: MentorPaper; home: MentorHome; expanded: boolean; focused: boolean; starting: string | null;
-  onToggle: () => void; onStart: (id: string) => void; onFocus: () => void; onWorkshop: () => void; onNotes: (notes: string) => void; onArchive: () => void;
+  onToggle: () => void; onStart: (id: string) => void; onFocus: () => void; onWorkshop: () => void; onRead: () => void; onNotes: (notes: string) => void; onArchive: () => void;
 }) {
   const { paper: p, expanded } = props;
   const built = p.components.filter((c) => c.mode === "build");
@@ -591,6 +593,8 @@ function PaperItem(props: {
           </button>
         )}
         {workshop && <button class="mh-btn small ghost" onClick={props.onWorkshop}>Mở xưởng</button>}
+        {/* Easy-read: a paper opened there, or on arXiv, reads in its own tab with a tutor. */}
+        {(p.status === "shelved" || /arxiv\.org/.test(p.url ?? "")) && <button class="mh-btn small ghost" title="Đọc paper trong tab đọc, có gia sư bên cạnh" onClick={props.onRead}>📖 Đọc</button>}
         {p.status !== "archived" && <button class={`mh-chip small${props.focused ? " mastered" : ""}`} onClick={props.onFocus}>{props.focused ? "◉ trọng tâm" : "○ trọng tâm"}</button>}
       </div>
       {expanded && (

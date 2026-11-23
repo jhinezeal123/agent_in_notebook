@@ -82,6 +82,14 @@ const app = agent({ name: "fake-agent" })
     if (text.includes("<mentor>\n")) await say("[saw mentor playbook]");
     if (text.includes("<mentor-paper>\n")) await say("[saw paper playbook]");
     if (text.includes("<mentor-author>\n")) await say("[saw author playbook]");
+    if (text.includes("<reader>\n")) await say("[saw reader playbook]");
+    if (text.includes("<reader-author>\n")) await say("[saw reader-author playbook]");
+    if (text.includes("<reader-checker>\n")) await say("[saw reader-checker playbook]");
+    const grading = text.match(/<reader-grade write="[^"]+" kind="([^"]+)"/);
+    if (grading) await say(`[saw reader-grade ${grading[1]}]`);
+    if (text.includes("ECHO_PROMPT")) await say(`[prompt]${text}[/prompt]`);
+    const selection = text.match(/<reader-selection kind="[^>]*>/);
+    if (selection) await say(`[saw ${selection[0]}]`);
     if (text.includes("<hint-request level=")) await say(`[saw hint ${text.match(/<hint-request level="(\d)"/)?.[1]}${text.includes("Reference solution:") ? " with solution" : ""}]`);
     if (text.includes("<mentor-verdict>\n")) await say("[saw verdict]");
     if (text.includes("<code-review-request>\n")) await say(`[saw code review${text.includes("```python") ? " with reference" : ""}]`);
@@ -105,6 +113,13 @@ const app = agent({ name: "fake-agent" })
       const scripts = JSON.parse(readFileSync(process.env.FAKE_AUTHOR, "utf8"));
       const again = /<author-task [^>]*kind="rewrite"/.test(text);
       steps = (again && scripts[`${task[1]}:rewrite`]) || scripts[task[1] ?? "given"] || [{ say: "no script" }];
+    }
+    // Easy-read's author and checker: scripted per task in the same file (reader:map, reader:checkpoint:<unit>, reader:fix:<unit>, reader:check).
+    const readerTask = text.match(/<reader-task kind="(map|checkpoint|fix)"(?: unit="([^"]+)")?/);
+    if ((readerTask || text.includes("<reader-check>")) && process.env.FAKE_AUTHOR) {
+      const scripts = JSON.parse(readFileSync(process.env.FAKE_AUTHOR, "utf8"));
+      const name = readerTask ? `reader:${readerTask[1]}${readerTask[2] ? `:${readerTask[2]}` : ""}` : "reader:check";
+      steps = scripts[name] ?? [{ say: `no script for ${name}` }];
     }
     let n = 0;
     // What the learner said about the exercise, for a script to use as {{reported}}.

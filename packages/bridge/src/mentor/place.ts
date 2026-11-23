@@ -195,6 +195,11 @@ export class MentorPlaces {
       if (this.host.chats.hasTranscript(workshopChatKey(paperId))) this.host.chats.move(workshopChatKey(paperId), key);
       await this.rewrite(tabId, cells, workshopCells(pkg.info).map((c, index) => ({ ...c, id: `mentor-paper-${index}`, index, executionCount: null, outputs: [] })));
       this.mentor.record({ t: "workshop", attemptId: paperEventId(paperId), paperId, notebook: key });
+      // A paper put on the shelf by easy-read: its workshop starts now, at reading it.
+      if (pkg.info.origin === "yours" && pkg.info.status === "shelved") {
+        this.mentor.shelf.write(paperId, { status: "reading" });
+        this.mentor.reloadPapers();
+      }
       this.host.closeChats(tabId);
       return { paperId, tabId };
     })();

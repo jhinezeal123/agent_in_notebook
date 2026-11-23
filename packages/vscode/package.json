@@ -384,6 +384,12 @@
         "icon": "$(star-empty)"
       },
       {
+        "command": "ainb.reader.open",
+        "title": "Easy Read: Mở paper…",
+        "category": "Agent in Notebook",
+        "icon": "$(book)"
+      },
+      {
         "command": "ainb.notebookZoomIn",
         "title": "Notebook: Zoom In (code and markdown)",
         "category": "Agent in Notebook"
@@ -535,6 +541,11 @@
         },
         {
           "command": "ainb.mentor.open",
+          "when": "view == ainb.research || view == ainb.chat",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ainb.reader.open",
           "when": "view == ainb.research || view == ainb.chat",
           "group": "navigation@0"
         }

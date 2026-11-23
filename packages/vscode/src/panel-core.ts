@@ -4,7 +4,7 @@
 // supplies its own notebooks through `LocalNotebooks`; the browser tests run
 // this with none.
 
-import { ATTACHED_CELLS_MAX, type AttachedCell, type BridgeEvents, type BrowserNotebook, type BrowserOp, type NotebookInfo } from "@ainb/protocol";
+import { ATTACHED_CELLS_MAX, type AttachedCell, type BridgeEvents, type BrowserNotebook, type BrowserOp, type NotebookInfo, type ReaderAnchor } from "@ainb/protocol";
 import type { BridgeState, NotebookChoice, PanelEvent } from "../../ui/src/panel-messages.js";
 
 export interface PanelBridge {
@@ -25,6 +25,25 @@ export interface LocalNotebooks {
   /** The notebook the editor shows in front, if any. */
   front(): number | null;
 }
+
+/** Easy-read: papers open in their reading tabs, each with a tab id of its own (READER_TAB_BASE and up). */
+export interface ReaderTabs {
+  has(tabId: number): boolean;
+  /** The paper a reading tab shows. */
+  info(tabId: number): { paperId: string; title: string } | null;
+  /** Bring the reading tab to the front, at a place the tutor cited. */
+  reveal(tabId: number, anchor?: ReaderAnchor): Promise<void>;
+}
+
+export const NO_READER_TABS: ReaderTabs = {
+  has: () => false,
+  info: () => null,
+  reveal: async () => {},
+};
+
+/** Reading tabs' ids: far above the editor's notebooks (counted from 1), and positive unlike Chrome tabs. */
+export const READER_TAB_BASE = 1_000_000_000;
+export const isReaderTab = (tabId: number) => tabId >= READER_TAB_BASE;
 
 export const NO_LOCAL_NOTEBOOKS: LocalNotebooks = {
   choices: () => [],
@@ -66,6 +85,8 @@ export class PanelCore {
     private readonly post: (event: PanelEvent) => void,
     /** Show a Chrome tab's notebook in the editor (VS Code's mirror); absent where there is no editor. */
     private readonly openMirror?: (chromeTabId: number, info: NotebookInfo) => Promise<void>,
+    /** Papers open in reading tabs: the chat is their tutor's while one is in front. */
+    private readonly readers: ReaderTabs = NO_READER_TABS,
   ) {}
 
   /** The bridge connected or went away. */
@@ -95,6 +116,11 @@ export class PanelCore {
     } else if (this.activeTab === null && info) this.select(-tabId);
   }
 
+  /** A reading tab opened or closed: the chat leaves a paper whose tab is gone. */
+  readersChanged(): void {
+    if (this.activeTab !== null && !this.exists(this.activeTab)) this.select(this.fallback());
+  }
+
   /** The editor's notebooks changed (one opened or closed). */
   localChanged(): void {
     this.post({ event: "notebooks", params: this.choices() });
@@ -112,6 +138,7 @@ export class PanelCore {
   }
 
   exists(tabId: number): boolean {
+    if (isReaderTab(tabId)) return this.readers.has(tabId);
     return isChrome(tabId) ? this.browser.has(chromeTab(tabId)) : this.local.has(tabId);
   }
 
@@ -173,6 +200,7 @@ export class PanelCore {
   }
 
   async info(tabId: number): Promise<NotebookInfo | null> {
+    if (isReaderTab(tabId)) return null;
     if (!isChrome(tabId)) return this.local.info(tabId);
     const known = this.browser.get(chromeTab(tabId));
     if (!known) return null;
@@ -193,10 +221,21 @@ export class PanelCore {
         const { tabId } = params as { tabId: number };
         if (!this.exists(tabId)) throw new Error("That notebook is no longer open.");
         this.select(tabId);
-        if (!isChrome(tabId)) await this.local.reveal(tabId);
+        if (isReaderTab(tabId)) await this.readers.reveal(tabId);
+        else if (!isChrome(tabId)) await this.local.reveal(tabId);
         return;
       }
       case "tab.notebook": return this.info((params as { tabId: number }).tabId);
+      case "tab.reader": {
+        const { tabId } = params as { tabId: number };
+        return isReaderTab(tabId) ? this.readers.info(tabId) : null;
+      }
+      case "reader.reveal": {
+        // A citation chip in the tutor's answer: its reading tab scrolls there.
+        const { tabId, anchor } = params as { tabId: number; anchor?: ReaderAnchor };
+        if (!isReaderTab(tabId) || !this.readers.has(tabId)) throw new Error("Tab đọc của paper này đã đóng. Mở lại paper (Easy Read: Mở paper…).");
+        return this.readers.reveal(tabId, anchor);
+      }
       case "attachments.get": return this.attached((params as { tabId: number }).tabId);
       case "attachments.remove": {
         // `cellIds` absent: all of them (the message they rode on was sent).
@@ -234,6 +273,13 @@ export class PanelCore {
       }
       case "chat.open": {
         const p = params as Record<string, unknown> & { tabId: number };
+        if (isReaderTab(p.tabId)) {
+          // A paper's tutor: no notebook, the paper names the chat.
+          const paper = this.readers.info(p.tabId);
+          if (!paper) throw new Error("Tab đọc của paper này đã đóng.");
+          const { platform: _p, notebookKey: _k, browserTab: _b, ...rest } = p;
+          return this.bridge.request(method, { ...rest, reader: { paperId: paper.paperId } });
+        }
         if (!isChrome(p.tabId)) return this.local.openChat(p.tabId, p);
         const info = this.browser.get(chromeTab(p.tabId));
         if (!info) throw new Error("That notebook is no longer open in Chrome.");

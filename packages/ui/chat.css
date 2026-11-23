@@ -549,3 +549,7 @@ input.switch:focus-visible { outline-offset: 2px; }
     outline: 2px solid Highlight;
   }
 }
+
+/* Easy-read: a paper tutor's citations ([[S4.SS1]]), as chips that bring the reading tab there. */
+.md .cite-chip { display: inline-block; padding: 0 6px; margin: 0 1px; border-radius: 9px; border: 1px solid var(--border); background: var(--accent-soft); color: var(--accent); font: inherit; font-size: 0.85em; line-height: 1.45; cursor: pointer; vertical-align: baseline; }
+.md .cite-chip:hover { text-decoration: underline; }

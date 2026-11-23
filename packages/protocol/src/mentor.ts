@@ -211,7 +211,8 @@ export interface MentorFocus {
   title: string;
 }
 
-export type MentorPaperStatus = "reading" | "planning" | "authoring" | "ready" | "learning" | "done" | "archived";
+/** shelved: put on the shelf by easy-read, no workshop opened yet. */
+export type MentorPaperStatus = "shelved" | "reading" | "planning" | "authoring" | "ready" | "learning" | "done" | "archived";
 export type MentorComponentStatus = "planned" | "authoring" | "failed" | "ready" | "learning" | "done";
 
 /** One part of a paper's reproduction plan. */

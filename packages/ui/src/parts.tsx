@@ -1,9 +1,9 @@
 import { memo } from "preact/compat";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { chatImageDataUrl, diffLines, diffStats, withContext, type AppliedChange, type AttachedCell, type ChatCard, type ChatMessage, type Part, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
+import { chatImageDataUrl, diffLines, diffStats, withContext, type AppliedChange, type AttachedCell, type ChatCard, type ChatMessage, type Part, type ReaderAnchor, type ReviewInfo, type ReviewStatus } from "@ainb/protocol";
 import { externalChatUrl } from "./chat-links.js";
 import { chatImageSource } from "./images.js";
-import { renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
+import { citeOf, renderMarkdown, splitMarkdownBlocks, thoughtLine } from "./markdown.js";
 import { groupParts, messageTime, messageTitle, summarizeTools, toolLabel, type ToolPart } from "./transcript.js";
 
 import { usePanelHost, type PanelHost } from "./host.js";
@@ -33,6 +33,8 @@ export interface PartActions {
   edit(text: string, cells: AttachedCell[]): void;
   /** Send a user message again as a new one; the old message stays in the transcript. */
   resend(text: string, cells: AttachedCell[]): void;
+  /** A paper tutor's chat (easy-read): a citation chip was clicked; the reading tab goes there. */
+  cite?(anchor: ReaderAnchor): void;
 }
 
 type PromptPart = Extract<Part, { type: "prompt" }>;
@@ -87,6 +89,12 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
       onErrorCapture={(event) => { if (event.target instanceof HTMLImageElement) showImageFallback(event.target); }}
       onAuxClick={(event) => { if (event.button === 1) openLink(event); }}
       onClick={(e) => {
+        const cite = actions?.cite && citeOf(e.target as Element);
+        if (cite) {
+          e.preventDefault();
+          actions!.cite!(cite);
+          return;
+        }
         const act = (e.target as Element).closest<HTMLElement>("[data-code-act]");
         if (!act) return openLink(e);
         const box = act.closest<HTMLElement>(".code");
@@ -97,7 +105,7 @@ export function Markdown({ text, actions }: { text: string; actions?: PartAction
     >
       {blocks.map((b, i) => (
         // An unchanged block keeps the same HTML string, so Preact leaves its DOM alone.
-        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b, true) }} />
+        <div key={i} class="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(b, true, !!actions?.cite) }} />
       ))}
     </div>
   );
