@@ -295,7 +295,9 @@ describe("the tutor in a chat", () => {
 
   it("offers the paper's tools only, names the paper, and asks with the selection", async () => {
     const { chat, tutor } = await tutorChat();
-    expect(chat.tools().map((t) => t.name)).toEqual(["paper_read", "paper_find", "paper_figure", "paper_page", "reader_grade", "reader_misconception"]);
+    expect(chat.tools().map((t) => t.name)).toEqual([
+      "paper_read", "paper_find", "paper_figure", "paper_page", "reader_grade", "reader_misconception", "reader_widget_request",
+    ]);
     expect(chat.snapshot().reader).toEqual({ paperId: LORA_ID, title: "LoRA: Low-Rank Adaptation of Large Language Models" });
     expect(readerOf(chat)).toBe(tutor);
     tutor.ask("explain", { id: "S4.SS1.p2" }, "zero for B");
@@ -307,5 +309,9 @@ describe("the tutor in a chat", () => {
     expect(sent.endsWith("Giải thích: “zero for B”")).toBe(true);
     const found = await chat.runTool("paper_find", { query: "zero for B" });
     expect(found.text).toContain("[S4.SS1.p2]");
+    const offer = await chat.runTool("reader_widget_request", { anchor: "S4.SS1.p2", goal: "Minh họa ma trận B lúc khởi tạo" });
+    expect(offer.isError).toBeFalsy();
+    expect(tutor.hub.widgets.requests(LORA_ID)).toMatchObject([{ offered: true, anchor: { id: "S4.SS1.p2" } }]);
+    expect(tutor.hub.author.status(LORA_ID)).toMatchObject({ state: "idle", queued: 0 });
   });
 });
