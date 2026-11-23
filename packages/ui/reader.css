@@ -302,3 +302,11 @@ button { font: inherit; color: inherit; }
 .er-hidden-result table { filter: blur(7px); user-select: none; pointer-events: none; }
 .er-hidden-result::after { content: "Số liệu đang bị che: đoán trước ở khung Các lượt rồi mở"; position: absolute; left: 50%; top: 40%; transform: translateX(-50%); padding: 4px 10px; border-radius: 6px; background: var(--er-widget); border: 1px solid var(--er-line); font-size: 0.85em; white-space: nowrap; }
 .er-covered { filter: blur(9px); user-select: none; pointer-events: none; }
+.er-widget { margin: 12px 0; padding: 12px; color: var(--vscode-editor-foreground); border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
+.er-widget summary { cursor: pointer; font-weight: 600; }
+.er-widget label { display: block; margin: 8px 0; }
+.er-widget input[type=range] { display: block; width: 100%; }
+.er-widget output { margin-inline-start: 8px; }
+.er-widget-plot { margin: 8px 0; color: var(--vscode-textLink-foreground); }
+.er-widget-plot svg { width: 100%; max-width: 520px; display: block; }
+.er-notation-tip { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - 16px)); padding: 6px 9px; pointer-events: none; color: var(--vscode-editorHoverWidget-foreground); background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-editorHoverWidget-border); border-radius: 4px; }

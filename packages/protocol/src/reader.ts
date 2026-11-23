@@ -54,6 +54,8 @@ export interface ReaderNote {
   at: number;
   /** A question the reader closed. */
   done?: boolean;
+  replies?: ReaderPeerReply[];
+  peerStatus?: Partial<Record<ReaderPeerReply["persona"], { pending?: boolean; error?: string }>>;
 }
 
 export interface ReaderView {
@@ -192,7 +194,7 @@ export type ReaderGoal = "gist" | "use" | "deep";
 
 export const READER_GOALS: { id: ReaderGoal; label: string; detail: string }[] = [
   { id: "gist", label: "Nắm ý", detail: "Biết paper làm gì, có đáng đọc kỹ không · lượt 1 · 10–15 phút" },
-  { id: "use", label: "Hiểu để dùng", detail: "Áp dụng vào việc của mình · lượt 1–2 · 1–2 buổi" },
+  { id: "use", label: "Hiểu để dùng", detail: "Áp dụng vào việc của mình · đọc, xem giả định và hạn chế, giữ thẻ ôn" },
   { id: "deep", label: "Hiểu sâu", detail: "Dẫn lại được, phản biện được, có thể reproduce · đủ 4 lượt · 3–5 buổi" },
 ];
 
@@ -202,7 +204,7 @@ export const READER_PASS_LABEL: Record<ReaderPass, string> = { 1: "Định hư�
 
 /** The last pass a goal asks for. */
 export function readerLastPass(goal: ReaderGoal | undefined): ReaderPass {
-  return goal === "gist" ? 1 : goal === "use" ? 2 : 4;
+  return goal === "gist" ? 1 : 4;
 }
 
 /** What a paragraph does in the paper (Scim's facets), lit up when skimming in pass 1. */
@@ -340,7 +342,8 @@ export interface ReaderPretestView {
   answer?: { right?: number; text: string; explain: string; evidence: { anchor: string; quote: string }[] };
 }
 
-export type ReaderWriteKind = "5c" | "recall" | "explain" | "qalmri" | "summary" | "figure" | "predict";
+export type ReaderWriteKind = "5c" | "recall" | "explain" | "qalmri" | "summary" | "figure" | "predict"
+  | "deep" | "derive" | "find-flaws" | "review" | "outline" | "feynman" | "synthesis";
 
 export type ReaderGrade = 0 | 1 | 2;
 
@@ -362,6 +365,7 @@ export interface ReaderWriteView {
   feedback?: string;
   /** Sent to the tutor; its grade has not come yet. */
   grading?: true;
+  appealed?: boolean;
 }
 
 export interface ReaderScore {
@@ -461,6 +465,95 @@ export interface ReaderGuide {
   score: ReaderScore;
   /** Pending tasks of passes 1–2 skipped ("5c", "summary", "pretest"). */
   skipped: string[];
+  widgets?: ReaderWidgetView[];
+  widgetRequests?: ReaderWidgetRequest[];
+  exercises?: ReaderExerciseView[];
+  cards?: ReaderCardView[];
+  deepUnderstood?: boolean;
+  canFinish?: boolean;
+  nextQuestion?: string;
+}
+
+export interface ReaderWidgetRequest { id: string; anchor: ReaderAnchor; goal: string; offered?: boolean }
+
+/** A bounded expression evaluated by the trusted widget kit. */
+export type ReaderExpr = number | string | [string, ...unknown[]];
+export interface ReaderWidgetModel {
+  params: { name: string; label: string; min: number; max: number; step: number; init: number; options?: { label: string; value: number }[]; toggle?: boolean }[];
+  outputs: { label: string; expression: ReaderExpr }[];
+  series?: { axis: string; min: number; max: number; count: number; style?: "line" | "points" };
+  matrix?: { rows: number; columns: number; heatmap?: boolean };
+  steps?: boolean;
+}
+export interface ReaderWidgetView extends ReaderWidgetRequest {
+  title: string;
+  explanation?: string;
+  tryThis: string[];
+  evidence?: { anchor: string; quote: string }[];
+  prediction?: { question: string; choices: string[] };
+  model?: ReaderWidgetModel;
+  result?: { choice: number; correct: boolean; right?: number };
+  skipped?: boolean;
+  right?: number;
+}
+
+export function readerCompute(expression: ReaderExpr, inputs: Readonly<Record<string, number>>): number {
+  if (typeof expression === "number") return expression;
+  if (typeof expression === "string") return Object.hasOwn(inputs, expression) ? inputs[expression]! : NaN;
+  const [op, ...args] = expression;
+  const [a = NaN, b = NaN] = args.map((arg) => readerCompute(arg as ReaderExpr, inputs));
+  switch (op) {
+    case "+": return a + b;
+    case "-": return a - b;
+    case "*": return a * b;
+    case "/": return a / b;
+    case "pow": return a ** b;
+    case "sqrt": return Math.sqrt(a);
+    case "exp": return Math.exp(a);
+    case "log": return Math.log(a);
+    case "abs": return Math.abs(a);
+    case "min": return Math.min(a, b);
+    case "max": return Math.max(a, b);
+    default: return NaN;
+  }
+}
+
+export type ReaderExerciseKind = Extract<ReaderWriteKind, "deep" | "derive" | "find-flaws" | "review" | "outline" | "feynman" | "synthesis">;
+export interface ReaderExerciseView {
+  id: string;
+  kind: ReaderExerciseKind;
+  bloom?: ReaderBloom;
+  prompt: string;
+  anchors: { anchor: string; quote: string }[];
+  reference?: string;
+  rubric?: string[];
+  write?: ReaderWriteView;
+  skipped?: boolean;
+}
+
+export type ReaderCardGrade = "again" | "hard" | "good";
+export interface ReaderCardView {
+  id: string;
+  paperId: string;
+  title: string;
+  front: string;
+  back: string;
+  anchor: ReaderAnchor;
+  due?: number;
+  kept: boolean;
+  reviewed: number;
+}
+
+export interface ReaderPeerReply {
+  persona: "experimentalist" | "theorist";
+  text: string;
+  evidence: { anchor: string; quote: string }[];
+}
+
+export interface ReaderRelated {
+  references: { id: string; text: string; arxiv?: string; doi?: string; role?: string }[];
+  citations: { title: string; arxiv?: string; url: string }[];
+  notice?: string;
 }
 
 export type ReaderMapPart = "roles" | "fivec" | "concepts" | "notation" | "background" | "pretest" | "units";

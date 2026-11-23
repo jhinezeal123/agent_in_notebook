@@ -67,9 +67,11 @@ export function verdictOf(item: ReaderItem, a: CheckAnswer | undefined): CheckVe
 }
 
 /** A batch for the checker: each question as the reader would see it, with the passages of its evidence (never which option is right). */
-export function checkerTask(hub: ReaderHub, paperId: string, items: ReaderItem[]): string {
-  const doc = hub.doc(paperId);
-  const out = ["<reader-check>", "Solve each question blind, from its passages (paper_read or paper_find if a symbol needs its definition). Then write all your answers in one reader_check_write call.", ""];
+export function checkerTask(hub: ReaderHub, paperId: string, items: ReaderItem[], withPassages = true): string {
+  const doc = withPassages ? hub.doc(paperId) : null;
+  const out = ["<reader-check>", withPassages
+    ? "Solve each question blind, from its passages (paper_read or paper_find if a symbol needs its definition). Then write all your answers in one reader_check_write call."
+    : "Study the provided lesson. Solve each question from the lesson alone; write your answers in one reader_check_write call.", ""];
   for (const item of items) {
     const v = itemView(item);
     out.push(`## ${item.id} (${item.kind})`, v.stem);
@@ -84,9 +86,11 @@ export function checkerTask(hub: ReaderHub, paperId: string, items: ReaderItem[]
       v.rights!.forEach((r, i) => out.push(`${LETTERS[i]}. ${r}`));
     }
     if (v.measure) out.push(`(answer in ${v.measure})`);
-    const blocks = [...new Set(item.evidence.map((e) => e.anchor))].map((id) => doc.blocks.find((b) => b.id === id) ?? doc.blocks.find((b) => b.id === doc.equations.find((q) => q.id === id)?.block)).filter((b) => !!b);
-    out.push("Passages:");
-    for (const b of blocks) out.push(`[${b!.id}] ${b!.text.length > PASSAGE_MAX ? `${b!.text.slice(0, PASSAGE_MAX)}…` : b!.text}`);
+    if (doc) {
+      const blocks = [...new Set(item.evidence.map((e) => e.anchor))].map((id) => doc.blocks.find((b) => b.id === id) ?? doc.blocks.find((b) => b.id === doc.equations.find((q) => q.id === id)?.block)).filter((b) => !!b);
+      out.push("Passages:");
+      for (const b of blocks) out.push(`[${b!.id}] ${b!.text.length > PASSAGE_MAX ? `${b!.text.slice(0, PASSAGE_MAX)}…` : b!.text}`);
+    }
     out.push("");
   }
   out.push("</reader-check>");
@@ -144,7 +148,7 @@ export class ReaderCheckerRole implements ChatRole, CheckerHost {
   readonly settings = READER_SETTINGS;
   readonly answers = new Map<string, CheckAnswer>();
 
-  constructor(readonly hub: ReaderHub, readonly paperId: string, readonly batch: ReaderItem[]) {}
+  constructor(readonly hub: ReaderHub, readonly paperId: string, readonly batch: ReaderItem[], private readonly lessonOnly = false) {}
 
   attach(_port: ChatPort): () => void {
     return () => {};
@@ -155,15 +159,16 @@ export class ReaderCheckerRole implements ChatRole, CheckerHost {
   }
 
   async prompt(turn: RoleTurn): Promise<string> {
+    if (this.lessonOnly) return ["Answer only from the lesson. Use reader_check_write with the displayed option letters, reason letter, number, order, or matches. Do not use outside knowledge.", turn.context, turn.text].filter(Boolean).join("\n\n");
     return [turn.rules ? checkerPlaybook(this.hub.meta(this.paperId).title) : "", turn.recap, turn.context ?? "", turn.text].filter(Boolean).join("\n\n");
   }
 
   tools(): readonly ToolDef<any, any>[] {
-    return CHECKER_TOOLS;
+    return this.lessonOnly ? [checkWrite] : CHECKER_TOOLS;
   }
 
   runTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
-    return callTool(Object.assign(ctx, { reader: this as CheckerHost }), name, args, CHECKER_TOOLS);
+    return callTool(Object.assign(ctx, { reader: this as CheckerHost }), name, args, this.tools());
   }
 
   record(answers: CheckAnswer[]): void {

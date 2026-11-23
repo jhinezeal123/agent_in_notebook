@@ -47,8 +47,18 @@ const readerMisconception = tool({
   },
 });
 
+const offerWidget = tool({
+  name: "reader_widget_request",
+  description: "Suggest a small interactive numeric example at an exact paper anchor. The author starts once the reader accepts in the reading tab.",
+  schema: z.object({ anchor: z.string().trim().min(1).max(120), goal: z.string().trim().min(8).max(200) }),
+  async run(ctx: ReaderToolContext, args): Promise<ToolResult> {
+    ctx.reader.hub.widgets.request(ctx.reader.paperId, { id: args.anchor }, args.goal, true);
+    return { text: "Suggestion added to the reading tab. Invite the reader to accept it there." };
+  },
+});
+
 /** The tutor's tools: reading the paper, grading the reader's writing, the misconception book. */
-export const TUTOR_TOOLS: readonly ToolDef<any, any>[] = [...READER_TOOLS, readerGrade, readerMisconception];
+export const TUTOR_TOOLS: readonly ToolDef<any, any>[] = [...READER_TOOLS, readerGrade, readerMisconception, offerWidget];
 
 export class ReaderChat implements ChatRole, ReaderToolHost {
   readonly settings = READER_SETTINGS;

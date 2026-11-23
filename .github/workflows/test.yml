@@ -9,6 +9,11 @@ on:
     branches: [main, mentor]
   pull_request:
   workflow_dispatch:
+    inputs:
+      reader_e2e:
+        description: Run the Easy Read browser tests in Chromium
+        type: boolean
+        default: false
 
 concurrency:
   group: test-${{ github.ref }}
@@ -48,3 +53,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - name: Install Chromium for Easy Read
+        if: inputs.reader_e2e
+        run: pnpm --filter @ainb/ui exec playwright install --with-deps chromium
+      - name: Test Easy Read in Chromium
+        if: inputs.reader_e2e
+        env:
+          E2E_READER: "1"
+        run: pnpm --filter @ainb/ui exec vitest run test/reader-tab.test.ts

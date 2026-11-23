@@ -5,7 +5,7 @@
 import type { ChatImageMime } from "./chat-image.js";
 import type { MentorAttemptDetail, MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
-import type { ReaderAnchor, ReaderAnswerResult, ReaderAskKind, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderView, ReaderWriteKind } from "./reader.js";
+import type { ReaderAnchor, ReaderAnswerResult, ReaderAskKind, ReaderCardGrade, ReaderCardView, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderView, ReaderWriteKind } from "./reader.js";
 import type { AppliedChange, CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
@@ -489,7 +489,17 @@ export interface BridgeMethods {
   /** A selected passage to the paper's tutor: "Giải thích", "Ví dụ cụ thể", "Ký hiệu", "Vì sao?". */
   "reader.ask": { params: { chatId: string; kind: ReaderAskKind; anchor: ReaderAnchor; quote: string }; result: { accepted: true } };
   /** The passes (ER-2): the paper's map, units and checkpoints, what the reader wrote and answered. */
-  "reader.guide": { params: { paperId: string }; result: ReaderGuide };
+  "reader.guide": { params: { paperId: string; agentId?: string }; result: ReaderGuide };
+  "reader.appeal": { params: { paperId: string; chatId: string; write: string; reason: string }; result: ReaderGuide };
+  "reader.cards.due": { params: Record<string, never>; result: ReaderCardView[] };
+  "reader.cards.keep": { params: { paperId: string; card?: string; edit?: { front?: string; back?: string; evidence?: { anchor: string; quote: string } } }; result: ReaderGuide };
+  "reader.cards.drop": { params: { paperId: string; card: string }; result: ReaderGuide };
+  "reader.cards.review": { params: { paperId: string; card: string; grade: ReaderCardGrade }; result: ReaderGuide };
+  "reader.peer": { params: { paperId: string; note: string; persona: import("./reader.js").ReaderPeerReply["persona"]; agentId?: string }; result: { accepted: true } };
+  "reader.related": { params: { paperId: string }; result: import("./reader.js").ReaderRelated };
+  "reader.lab.open": { params: { paperId: string; widget: string; tabId: number }; result: { tabId: number; added: number } };
+  "reader.widget.request": { params: { paperId: string; anchor: ReaderAnchor; goal: string; agentId?: string }; result: ReaderGuide };
+  "reader.widget.answer": { params: { paperId: string; id: string; choice: number }; result: ReaderGuide };
   /** Why the reader reads it: the author starts on the paper's map (with `agentId`, the reader's agent, when no tutor chat is open). */
   "reader.goal": { params: { paperId: string; goal: ReaderGoal; agentId?: string }; result: ReaderGuide };
   /** Go to a pass (pass 2 has the author write the first units' checkpoints); `done`: finish it and stop there. */

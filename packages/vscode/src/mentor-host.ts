@@ -103,6 +103,8 @@ export class MentorHost implements vscode.Disposable {
         return this.addPaper();
       case "mentor.read":
         return this.deps.read(String((params as { paperId?: unknown })?.paperId ?? ""));
+      case "reader.cards.review":
+        return this.deps.request(method, params);
       case "mentor.openWorkshop":
         return this.openWorkshop(String((params as { paperId?: unknown })?.paperId ?? ""));
       case "mentor.focus":
@@ -198,7 +200,7 @@ export class MentorHost implements vscode.Disposable {
   }
 
   /** A paper's workshop: where it is open now, else in a notebook the learner picks. */
-  private async openWorkshop(paperId: string): Promise<unknown> {
+  async openWorkshop(paperId: string): Promise<unknown> {
     if (!paperId) throw new Error("Không rõ paper nào.");
     const places = await this.deps.request("mentor.places", {}) as MentorPlace[];
     const here = places.find((p) => p.workshop?.paperId === paperId);
@@ -210,6 +212,20 @@ export class MentorHost implements vscode.Disposable {
     ) as { tabId: number };
     await this.deps.openMirror(opened.tabId);
     return opened;
+  }
+
+  async openReaderLab(paperId: string, widget: string): Promise<unknown> {
+    const places = (await this.deps.request("mentor.places", {}) as MentorPlace[]).filter((p) => p.platform === "kaggle");
+    if (!places.length) {
+      const open = await vscode.window.showWarningMessage("Mở một notebook Kaggle trong Chrome để chép lab Python.", "Mở Kaggle");
+      if (open) await vscode.env.openExternal(vscode.Uri.parse(NEW_KAGGLE_NOTEBOOK));
+      return null;
+    }
+    const place = await this.pickPlace(places, "Thêm lab Python vào notebook nào?", "Lab được thêm vào notebook bạn chọn.");
+    if (!place) return null;
+    const result = await this.deps.request("reader.lab.open", { paperId, widget, tabId: place.tabId });
+    await this.deps.openMirror(place.tabId);
+    return result;
   }
 
   /** A notebook open in Chrome, picked by the learner (with a yes before their own cells are replaced). */

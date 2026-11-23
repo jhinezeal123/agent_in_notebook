@@ -177,6 +177,8 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
         this.leaveResearch(tabId);
       },
       changed: () => this.core.readersChanged(),
+      reproduce: (paperId) => this.mentor.openWorkshop(paperId),
+      lab: (paperId, widget) => this.mentor.openReaderLab(paperId, widget),
     });
     this.core = new PanelCore(this.bridge, this.localNotebooks(), (event) => this.post(event), (tab, info) => this.mirrors.open(tab, info), this.reader);
     this.mentor = new MentorHost(context, {
@@ -410,16 +412,16 @@ class NotebookPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private post(event: PanelEvent): void {
-    // A paper's reading and the pages its tutor wants drawn: for the reading tabs, not the chat.
+    // Render requests go only to the reading tab; progress also updates the tutor and Mentor.
     if (event.event === "bridge" && event.params.method.startsWith("reader.")) {
       this.reader.onBridge(event.params.method, event.params.params);
-      return;
+      if (event.params.method !== "reader.updated") return;
     }
     void this.view?.webview.postMessage(event);
     if (event.event === "bridge" && event.params.method === "chat.snapshot") this.followProject(event.params.params as ChatSnapshot);
     if (event.event === "bridge" && event.params.method === "chat.run") void this.notifyRun(event.params.params as BridgeEvents["chat.run"]);
     if (event.event === "bridge" && event.params.method === "chat.machineReplaced") void this.machineReplaced(event.params.params as BridgeEvents["chat.machineReplaced"]);
-    if (event.event === "bridge" && event.params.method === "mentor.updated") this.mentor.updated();
+    if (event.event === "bridge" && ["mentor.updated", "reader.updated"].includes(event.params.method)) this.mentor.updated();
     if (event.event === "notebooks") this.studio.broadcast("notebooks", event.params);
     // The chat follows the notebook in front, unless a research chat is shown.
     else if (event.event === "activeTab" && this.selected?.kind !== "research") {

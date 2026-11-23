@@ -6,12 +6,14 @@ import { usePanelHost } from "./host.js";
 import { AttachedChip, Message, PendingPrompt, type PartActions } from "./parts.js";
 import { Icon, type IconName } from "./icons.js";
 import { MentorBar, WorkshopBar } from "./mentor-bar.js";
+import { ReaderBar } from "./reader-bar.js";
 import { dateSeparators, lastUserMessage, queuedMessageIds } from "./transcript.js";
 import { kernelHint, loginHintFrom } from "./chat-hints.js";
 import { exportChatMarkdown } from "./export-chat.js";
 import { contextualSuggestions, matchSlashCommands, type SlashCommand } from "./slash-commands.js";
 import { resolveLang, t, type LangPref, type UiLang } from "./i18n.js";
 import type { MentorStage } from "@ainb/protocol";
+import type { ReaderGuide } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -23,6 +25,10 @@ export function App() {
   const [notebook, setNotebook] = useState<NotebookInfo | null>(null);
   /** Easy-read: the paper whose reading tab is in front; the chat is its tutor. */
   const [reader, setReader] = useState<{ paperId: string; title: string } | null>(null);
+  const [readerGuide, setReaderGuide] = useState<ReaderGuide | null>(null);
+  const [readerRevision, setReaderRevision] = useState(0);
+  const readerRef = useRef(reader);
+  readerRef.current = reader;
   const [choices, setChoices] = useState<NotebookChoice[]>([]);
   const [chat, setChat] = useState<ChatSnapshot | null>(null);
   const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS);
@@ -76,6 +82,7 @@ export function App() {
         if (e.params.tabId === tabRef.current) setNotebook(e.params.info);
       } else if (e.event === "bridge") {
         const { method, params } = e.params as { method: string; params: any };
+        if (method === "reader.updated" && readerRef.current?.paperId === params.paperId) setReaderRevision((n) => n + 1);
         if (params?.tabId !== tabRef.current) return;
         if (method === "chat.snapshot" && params.agentId === agentRef.current) setChat(params as ChatSnapshot);
         else if (method === "chat.patch") {
@@ -116,6 +123,13 @@ export function App() {
   }, []);
 
   const connected = bridge?.conn === "connected";
+  useEffect(() => {
+    let stale = false;
+    if (reader && connected) void client.request<ReaderGuide | null>("reader.guide", { tabId }).then((guide) => {
+      if (!stale) setReaderGuide(guide);
+    }, () => {});
+    return () => { stale = true; };
+  }, [reader?.paperId, tabId, connected, readerRevision]);
 
   // Load the tab's notebook and chat whenever the tab or the connection changes.
   useEffect(() => {
@@ -551,6 +565,8 @@ export function App() {
           onHome={() => void run(client.request("mentor.open"))}
         />
       )}
+      {readerGuide && readerGuide.paperId === reader?.paperId && <ReaderBar guide={readerGuide}
+        quiz={() => void run(client.request("reader.reveal", { tabId, action: "quiz" }))} />}
       {!notebook && !reader ? (
         <Welcome mark>
           <p>Open a notebook on Colab or Kaggle in Chrome, or an <code>.ipynb</code> file in VS Code, to chat with an agent about it.</p>

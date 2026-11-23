@@ -184,6 +184,7 @@ describe("the reader's answers", () => {
     expect(view.result).toBeUndefined();
     const right = view.options!.indexOf("Ma trận 0");
     const wrong = view.options!.indexOf("Một ma trận ngẫu nhiên");
+    r.hub.mark(LORA_ID, "S4.SS1", true);
     const first = r.passes.answer(LORA_ID, ZERO_ID, { options: [wrong] }, 3);
     expect(first).toMatchObject({ correct: false, points: -6, right: { options: [right] } });
     expect(first.why![wrong]).toBe("Nghĩ A ngẫu nhiên thì BA cũng ngẫu nhiên");
@@ -198,7 +199,15 @@ describe("the reader's answers", () => {
     g = r.passes.guide(LORA_ID);
     expect(g.again).toEqual([NUMERIC_ID]);
     expect(g.units[2]!.score).toEqual({ answered: 2, total: 3, firstRight: 0, points: -6 + 0 + 2, max: 9, sureWrong: 1, luckyRight: 0 });
-    expect(g.map.concepts.find((c) => c.id === "zero-init")).toMatchObject({ mastery: 1, answers: 2 });
+    expect(g.map.concepts.find((c) => c.id === "zero-init")).toMatchObject({ answers: 0 });
+    expect(g.map.concepts.find((c) => c.id === "zero-init")?.mastery).toBeUndefined();
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 86_400_100);
+    try {
+      r.passes.answer(LORA_ID, ZERO_ID, { options: [right] }, 2);
+      expect(r.passes.guide(LORA_ID).map.concepts.find((c) => c.id === "zero-init")).toMatchObject({ mastery: 1, answers: 1 });
+    } finally {
+      now.mockRestore();
+    }
     expect(() => r.passes.answer(LORA_ID, ZERO_ID, { options: [9] }, 2)).toThrow("Chọn một phương án.");
   });
 
@@ -296,12 +305,12 @@ describe("what the tab and the tutor see", () => {
 });
 
 describe("the passes' rules", () => {
-  it("need a goal first; passes 3–4 come later; a finished pass is kept", async () => {
+  it("needs a goal first, gates deeper passes, and keeps a finished pass", async () => {
     const r = await reading();
     expect(() => r.passes.pass(LORA_ID, 2)).toThrow("Chọn mục tiêu đọc trước đã.");
     r.passes.goal(LORA_ID, "gist");
     await r.idle();
-    expect(() => r.passes.pass(LORA_ID, 3)).toThrow("bước sau");
+    expect(() => r.passes.pass(LORA_ID, 3)).toThrow("Kết thúc lượt trước");
     expect(r.passes.pass(LORA_ID, 1, true).passed).toEqual([1]);
     expect(() => r.passes.goal(LORA_ID, "all" as never)).toThrow("Không rõ mục tiêu");
   });

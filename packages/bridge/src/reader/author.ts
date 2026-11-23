@@ -8,7 +8,7 @@
 // answers otherwise go back to the author, twice at most, then are dropped.
 
 import { z } from "zod";
-import type { ReaderAuthorView } from "@ainb/protocol";
+import type { ReaderAuthorView, ReaderWidgetRequest } from "@ainb/protocol";
 import type { ChatPort, ChatRole, RoleTurn } from "../chat-role.js";
 import type { AuthorChat } from "../mentor/workshop.js";
 import { callTool, tool, type ToolContext, type ToolDef, type ToolResult } from "../notebook/tools.js";
@@ -19,6 +19,10 @@ import { ItemSchema, itemId, MapSchema, PackSchema, pretestId, type ItemInput, t
 import { atLeastApply, lintItem, lintMapPart, lintPack, nearDuplicate } from "./lint.js";
 import { pagedDoc, type ReaderAuthorQueue, type ReaderPasses } from "./passes.js";
 import { READER_TOOLS, type ReaderToolContext, type ReaderToolHost } from "./tools.js";
+import { WidgetSchema } from "./widgets.js";
+import { DeepSchema } from "./deep.js";
+import { CardBatchSchema } from "./cards.js";
+import { measureRules } from "./eval.js";
 
 export interface ReaderAuthorHost {
   /** A hidden chat about the paper, taking this role; shown nowhere. */
@@ -26,7 +30,8 @@ export interface ReaderAuthorHost {
   log?(m: string): void;
 }
 
-type Task = { kind: "map" } | { kind: "unit"; unit: string };
+export type ReaderTask = { kind: "map" } | { kind: "unit"; unit: string } | { kind: "widget"; request: ReaderWidgetRequest } | { kind: "deep" } | { kind: "cards" };
+type Task = ReaderTask;
 
 interface Queue {
   tasks: Task[];
@@ -50,7 +55,7 @@ const TURNS = 3;
 /** Times the checker's disagreements go back to the author. */
 const FIX_ROUNDS = 2;
 
-const taskKey = (t: Task) => (t.kind === "map" ? "map" : `unit:${t.unit}`);
+const taskKey = (t: Task) => t.kind === "unit" ? `unit:${t.unit}` : t.kind === "widget" ? `widget:${t.request.id}` : t.kind;
 
 export class ReaderAuthor implements ReaderAuthorQueue {
   private readonly queues = new Map<string, Queue>();
@@ -66,6 +71,9 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     const key = taskKey(task);
     if (q.failed.has(key) || (q.current && taskKey(q.current) === key) || q.tasks.some((t) => taskKey(t) === key)) return;
     if (task.kind === "unit" && this.passes.pack(paperId, task.unit)) return;
+    if (task.kind === "widget" && this.hub.widgets.read(paperId, task.request.id)) return;
+    if (task.kind === "deep" && this.hub.deep.read(paperId)) return;
+    if (task.kind === "cards" && this.hub.cards.hasProposals(paperId)) return;
     if (!this.host()) return;
     // The map first: the checkpoints use its concepts.
     if (task.kind === "map") q.tasks.unshift(task);
@@ -76,6 +84,7 @@ export class ReaderAuthor implements ReaderAuthorQueue {
 
   stop(paperId: string): void {
     const q = this.queue(paperId);
+    for (const task of [...(q.current ? [q.current] : []), ...q.tasks]) q.failed.set(taskKey(task), { task, why: "đã dừng" });
     q.tasks = [];
     q.abort?.abort();
     this.hub.touch(paperId);
@@ -128,6 +137,9 @@ export class ReaderAuthor implements ReaderAuthorQueue {
 
   private taskLabel(paperId: string, t: Task): string {
     if (t.kind === "map") return "Bản đồ paper";
+    if (t.kind === "widget") return `Ví dụ · ${t.request.goal}`;
+    if (t.kind === "deep") return "Bài tập đào sâu";
+    if (t.kind === "cards") return "Thẻ ôn";
     const u = this.passes.units(paperId).find((x) => x.id === t.unit);
     return `Checkpoint ${u?.number ? `§${u.number}` : u?.title ?? t.unit}`;
   }
@@ -144,12 +156,17 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       while (q.tasks.length && !abort.signal.aborted) {
         const task = q.tasks.shift()!;
         q.current = task;
-        q.note = task.kind === "map" ? "đọc paper, viết bản đồ" : "đọc mục, viết câu hỏi";
+        q.note = undefined;
         this.hub.touch(paperId);
         try {
           chat ??= host.chat(paperId, new ReaderAuthorRole(this.hub, paperId, this), "author");
           if (task.kind === "map") await this.doMap(paperId, chat, abort.signal);
-          else await this.doUnit(paperId, task.unit, chat, abort.signal, host);
+          else if (task.kind === "unit") await this.doUnit(paperId, task.unit, chat, abort.signal, host);
+          else if (task.kind === "widget") await this.doWidget(paperId, task.request, chat, abort.signal);
+          else if (task.kind === "deep") await this.prepare(chat, abort.signal, () => !!this.hub.deep.read(paperId),
+            "Soạn bài đào sâu.", "Read the paper first. Use reader_deep_write for 5–8 distinct analyze/evaluate/create questions, analytic rubrics and sample answers. Include a derivation when there is an equation and a flawed passage with 2–3 planted errors, each with an exact evidence quote that disproves it. Include a question on assumptions and experimental or analytical limitations. Write in Vietnamese.");
+          else await this.prepare(chat, abort.signal, () => this.hub.cards.hasProposals(paperId),
+            "Đề xuất thẻ ôn.", "Read the paper. Use reader_card_propose with 5–20 short in-scope cards in Vietnamese. Ask one specific open question per card; give a short unambiguous answer. Cover important ideas from several angles and attribute claims to the paper by name. Attach exact evidence from the paper to each card.");
         } catch (e) {
           if (!abort.signal.aborted) q.failed.set(taskKey(task), { task, why: (e as Error).message.slice(0, 300) });
           host.log?.(`Reader: ${paperId} ${taskKey(task)}: ${(e as Error).message}`);
@@ -165,6 +182,41 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       q.state = abort.signal.aborted ? "stopped" : q.failed.size ? "failed" : "idle";
       this.hub.touch(paperId);
     }
+  }
+
+  private async prepare(chat: AuthorChat, signal: AbortSignal, ready: () => boolean, label: string, context: string): Promise<void> {
+    for (let turn = 0; turn < TURNS && !signal.aborted && !ready(); turn++) {
+      chat.send(label, context);
+      await chat.whenIdle(signal);
+    }
+    if (!signal.aborted && !ready()) throw new Error("nội dung chưa qua kiểm tra");
+  }
+
+  saveDeep(paperId: string, input: z.infer<typeof DeepSchema>): void {
+    const q = this.queues.get(paperId);
+    if (q?.current?.kind !== "deep" || q.abort?.signal.aborted) throw new Error("No active deep task.");
+    this.hub.deep.save(paperId, input);
+  }
+
+  saveCards(paperId: string, cards: z.infer<typeof CardBatchSchema>): void {
+    const q = this.queues.get(paperId);
+    if (q?.current?.kind !== "cards" || q.abort?.signal.aborted) throw new Error("No active card task.");
+    this.hub.cards.propose(paperId, cards);
+  }
+
+  private async doWidget(paperId: string, request: ReaderWidgetRequest, chat: AuthorChat, signal: AbortSignal): Promise<void> {
+    const context = `Make one interactive numeric example for ${JSON.stringify(request)}. Read the cited part. Use reader_widget_write. Express arithmetic as ["operator", arg, arg] with + - * / pow min max, or a single argument for sqrt exp log abs. A string operand names a parameter. Use a tiny worked example, state which numbers are illustrative, ask for a prediction before showing results, and give concrete comparisons to try. For a curve or points set series.axis to a parameter. Set steps to show one output at a time, or set matrix dimensions for row-major outputs. Each control is a slider by default; options or toggle can be used for discrete controls. Supply independently calculated expectations for at least two input configurations from the cited formula. Output Vietnamese.`;
+    for (let turn = 0; turn < TURNS && !signal.aborted && !this.hub.widgets.read(paperId, request.id); turn++) {
+      chat.send(turn ? "Sửa ví dụ theo kết quả tự kiểm." : "Soạn ví dụ tương tác.", context);
+      await chat.whenIdle(signal);
+    }
+    if (!signal.aborted && !this.hub.widgets.read(paperId, request.id)) throw new Error("ví dụ chưa qua tự kiểm");
+  }
+
+  writeWidget(paperId: string, input: z.infer<typeof WidgetSchema>): void {
+    const queue = this.queues.get(paperId);
+    if (queue?.current?.kind !== "widget" || queue.abort?.signal.aborted) throw new Error("No active widget task.");
+    this.hub.widgets.save(paperId, queue.current.request, input);
   }
 
   private async doMap(paperId: string, chat: AuthorChat, signal: AbortSignal): Promise<void> {
@@ -216,6 +268,10 @@ export class ReaderAuthor implements ReaderAuthorQueue {
           if (!v.ok) bad.push({ item, said: v.said });
         }
         const lowOnly = !draft.pack.light && draft.items.length > 0 && !draft.items.some((i) => atLeastApply(i.bloom));
+        this.hub.store.append(paperId, { t: "r.quality", at: Date.now(), counts: {
+          blindSeen: batch.length, blindPassed: batch.length - bad.length, bloomChanged: batch.filter((i) => i.authorBloom !== undefined).length,
+          ...(lowOnly ? { bloomRejected: 1 } : {}),
+        } });
         if (!bad.length && !lowOnly) break;
         if (round >= FIX_ROUNDS) {
           // Still not solved blind after two fixes: the question does not reach the reader.
@@ -301,6 +357,7 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     if (!unit) return { text: `No unit "${input.unit}". The units: ${this.passes.units(paperId).map((u) => u.id).join(", ")}.`, isError: true };
     const key = draftKey(paperId, unit.id);
     const issues = lintPack(input, { doc: this.hub.doc(paperId), unit, concepts: this.concepts(paperId), others: this.otherItems(paperId, unit.id) });
+    this.hub.store.append(paperId, { t: "r.quality", at: Date.now(), counts: measureRules(issues, input.items.length) });
     if (issues.length) return { text: `Not saved. Fix these and write the whole checkpoint again:\n${issues.map((i) => `- ${i}`).join("\n")}`, isError: true };
     const items = input.items.map((i) => ({ ...i, id: itemId(unit.id, i), unit: unit.id }));
     this.drafts.set(key, { pack: input, items, changed: new Set(items.map((i) => i.id)) });
@@ -410,7 +467,37 @@ const itemsFix = tool({
   },
 });
 
-const AUTHOR_TOOLS: readonly ToolDef<any, any>[] = [...READER_TOOLS, mapWrite, itemsWrite, itemsFix];
+const widgetWrite = tool({
+  name: "reader_widget_write",
+  description: "Save the interactive example for the active request. The bridge validates every evidence quote, expression, and test before saving.",
+  schema: WidgetSchema,
+  async run(ctx: ReaderToolContext & { reader: AuthorToolHost }, args): Promise<ToolResult> {
+    ctx.reader.author.writeWidget(ctx.reader.paperId, args);
+    return { text: "Saved: the widget passed its checks." };
+  },
+});
+
+const deepWrite = tool({
+  name: "reader_deep_write",
+  description: "Write the deep-reading exercise pack. All quotes are checked before it is saved.",
+  schema: DeepSchema,
+  async run(ctx: ReaderToolContext & { reader: AuthorToolHost }, args): Promise<ToolResult> {
+    ctx.reader.author.saveDeep(ctx.reader.paperId, args);
+    return { text: "Saved the deep-reading exercises." };
+  },
+});
+
+const cardsWrite = tool({
+  name: "reader_card_propose",
+  description: "Propose a batch of 5–20 review cards with verifiable paper evidence. The reader decides which to keep.",
+  schema: z.object({ cards: CardBatchSchema }),
+  async run(ctx: ReaderToolContext & { reader: AuthorToolHost }, args): Promise<ToolResult> {
+    ctx.reader.author.saveCards(ctx.reader.paperId, args.cards);
+    return { text: "Saved the card proposals." };
+  },
+});
+
+const AUTHOR_TOOLS: readonly ToolDef<any, any>[] = [...READER_TOOLS, mapWrite, itemsWrite, itemsFix, widgetWrite, deepWrite, cardsWrite];
 
 export class ReaderAuthorRole implements ChatRole, AuthorToolHost {
   readonly settings = READER_SETTINGS;

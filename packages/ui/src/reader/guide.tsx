@@ -7,7 +7,7 @@
 // misconception book. Everything the reader does goes to the bridge, which
 // answers with the guide as it now is.
 
-import { useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import {
   READER_FIGURE_QUESTIONS,
   READER_FIVE_C,
@@ -27,6 +27,8 @@ import {
 } from "@ainb/protocol";
 import { Cite, Fold, GradeBadge, Md, WriteBox } from "./bits.js";
 import { ItemCard, PretestCard } from "./quiz.js";
+import { LaterPass } from "./deep.js";
+import { Related } from "./related.js";
 
 /** What the panel asks of the tab. */
 export interface GuideActions {
@@ -89,29 +91,63 @@ export function AuthorLine({ guide, act }: { guide: ReaderGuide; act: GuideActio
   return null;
 }
 
-type Tab = "pass" | "notation" | "misses";
+type Tab = "pass" | "notation" | "misses" | "related";
 
-export function GuidePanel({ guide, view, current, actions, skim }: {
+export function GuidePanel({ guide, view, current, actions, skim, quizRequest, onQuizHandled }: {
   guide: ReaderGuide;
   view: ReaderView;
   current?: string;
   actions: GuideActions;
+  quizRequest?: number;
+  onQuizHandled?: () => void;
   skim: { on: boolean; roles: boolean; set(next: { on?: boolean; roles?: boolean }): void };
 }) {
   const [tab, setTab] = useState<Tab>("pass");
+  const [quiz, setQuiz] = useState<string | null>(null);
+  const next = guide.units.flatMap((u) => u.items).find((i) => i.id === quiz);
+  function askQuestion() {
+    setTab("pass");
+    if (guide.nextQuestion) setQuiz(guide.nextQuestion);
+    else actions.ask("Hỏi mình một câu ngắn để nhớ lại phần vừa đọc, dẫn đúng mốc và đợi mình trả lời.");
+  }
+  useEffect(() => {
+    if (!quizRequest) return;
+    askQuestion();
+    onQuizHandled?.();
+  }, [quizRequest]);
   return (
     <aside class="er-guide" aria-label="Các lượt đọc">
       <div class="er-tabs" role="tablist">
         <button role="tab" class={tab === "pass" ? "on" : ""} onClick={() => setTab("pass")}>{guide.goal ? `Lượt ${guide.pass}` : "Bắt đầu"}</button>
         <button role="tab" class={tab === "notation" ? "on" : ""} onClick={() => setTab("notation")}>Ký hiệu</button>
         <button role="tab" class={tab === "misses" ? "on" : ""} onClick={() => setTab("misses")}>Sổ lỗi sai{guide.misses.length ? ` (${guide.misses.length})` : ""}</button>
+        <button role="tab" class={tab === "related" ? "on" : ""} onClick={() => setTab("related")}>Bối cảnh</button>
       </div>
       <div class="er-guide-body">
+        {guide.goal && <div class="er-row">
+          <button class="er-btn" onClick={askQuestion}>Hỏi tôi một câu</button>
+        </div>}
+        {guide.widgetRequests?.map((r) => <div key={r.id} class="er-step">
+          <p><Cite anchor={r.anchor} sections={view.sections} onCite={actions.cite} /> {r.goal}</p>
+          {(r.offered || guide.author.state !== "running") && <button class="er-btn" onClick={() => void actions.act("reader.widget.request", r).catch(() => {})}>
+            {r.offered ? "Tạo ví dụ gia sư đề xuất" : "Tiếp tục soạn ví dụ"}
+          </button>}
+        </div>)}
+        {next && <Fold key={next.id} title="Ôn một câu" open>
+          <ItemCard key={next.id} item={next} n={1} retry={!!next.result} sections={view.sections} onCite={actions.cite}
+            onAnswer={(choice, confidence) => actions.act("reader.answer", { item: next.id, choice, confidence })}
+            onSkip={() => void actions.act("reader.skip", { task: `item:${next.id}` }).then(() => setQuiz(null), () => {})}
+            onReport={(reason) => void actions.act("reader.report", { item: next.id, reason }).then(() => setQuiz(null), () => {})} />
+          <button class="er-link" onClick={() => setQuiz(null)}>Đóng câu hỏi</button>
+        </Fold>}
         {tab === "pass" && (!guide.goal
           ? <GoalChooser actions={actions} />
-          : guide.pass === 1 ? <Pass1 guide={guide} view={view} actions={actions} skim={skim} /> : <Pass2 guide={guide} view={view} current={current} actions={actions} />)}
+          : guide.pass === 1 ? <Pass1 guide={guide} view={view} actions={actions} skim={skim} />
+            : guide.pass === 2 ? <Pass2 guide={guide} view={view} current={current} actions={actions} />
+              : <LaterPass key={guide.pass} guide={guide} view={view} actions={actions} />)}
         {tab === "notation" && <Notation guide={guide} view={view} actions={actions} />}
         {tab === "misses" && <Misses guide={guide} actions={actions} />}
+        {tab === "related" && <Related actions={actions} />}
       </div>
     </aside>
   );
@@ -252,7 +288,9 @@ function Pass2({ guide, view, current, actions }: { guide: ReaderGuide; view: Re
           </div>
         )}
         <div class="er-row">
-          <button class="er-btn primary" disabled={!guide.summary && !guide.skipped.includes("summary")} onClick={() => void actions.act("reader.pass", { pass: 2, done: true }).then(() => actions.say("Xong lượt 2. Lượt 3–4 (đào sâu, ghi nhớ) sẽ có ở bước sau của easy-read."))}>Xong lượt 2</button>
+          {guide.passed.includes(2) ? <button class="er-btn primary" onClick={() => void actions.act("reader.pass", { pass: 3 }).catch(() => {})}>
+            {guide.goal === "use" ? "Xem giả định và hạn chế" : "Sang lượt 3 · Đào sâu"}
+          </button> : <button class="er-btn primary" disabled={!guide.summary && !guide.skipped.includes("summary")} onClick={() => void actions.act("reader.pass", { pass: 2, done: true }).catch(() => {})}>Xong lượt 2</button>}
         </div>
       </Fold>
     </div>

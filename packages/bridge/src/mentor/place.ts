@@ -211,6 +211,36 @@ export class MentorPlaces {
     }
   }
 
+  /** Append a reader lab, resuming a previously interrupted append without replacing the notebook. */
+  async appendReaderLab(tabId: number, marker: string, cells: { type: "code" | "markdown"; source: string }[]): Promise<{ tabId: number; added: number }> {
+    if (this.busy.has(tabId)) throw new Error("Notebook này đang được chép, đợi một chút.");
+    if (this.host.notebooks().get(tabId)?.platform !== "kaggle") throw new Error("Chọn một notebook Kaggle đang mở.");
+    const run = (async () => {
+      const existing = (await this.host.op(tabId, { op: "get_cells" }, READ_MS)).cells;
+      const starts = existing.findIndex((c) => c.type === "markdown" && c.source.startsWith(`<!-- ${marker} -->\n`));
+      let index = starts < 0 ? existing.length : starts;
+      let added = 0;
+      for (const [offset, cell] of cells.entries()) {
+        const tag = offset === 0 ? marker : `${marker} ${offset + 1}`;
+        const heading = cell.type === "markdown" ? `<!-- ${tag} -->\n` : `# ${tag}\n`;
+        if (existing[index - added]?.source.startsWith(heading)) {
+          index++;
+          continue;
+        }
+        await this.host.op(tabId, { op: "insert_cell", index, cellType: cell.type, source: heading + cell.source, review: false, byUser: true }, EDIT_MS);
+        added++;
+        index++;
+      }
+      return { tabId, added };
+    })();
+    this.busy.set(tabId, run);
+    try {
+      return await run;
+    } finally {
+      this.busy.delete(tabId);
+    }
+  }
+
   /** Every cell out, the exercise's in, as the learner's own edits (not the agent's). */
   private async rewrite(tabId: number, old: CellInfo[], cells: CellInfo[]): Promise<void> {
     for (const c of [...old].reverse()) {

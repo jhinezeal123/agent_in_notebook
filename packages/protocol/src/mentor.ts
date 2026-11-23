@@ -237,6 +237,7 @@ export interface MentorPaperComponent {
 
 /** A paper on the shelf: a landmark that closes a constellation, or one the learner brought. */
 export interface MentorPaper {
+  reader?: { pass: import("./reader.js").ReaderPass; done: number; total: number; mastery?: number; weak: string[]; due: number; synthesis?: string; deep?: boolean };
   id: string;
   title: string;
   authors?: string;
@@ -302,6 +303,7 @@ export interface MentorWorkshop {
 }
 
 export interface MentorHome {
+  readerCards?: import("./reader.js").ReaderCardView[];
   today: MentorToday | null;
   /** A spaced review to do first (a short warm-up), when one is due. */
   warmup: MentorToday | null;

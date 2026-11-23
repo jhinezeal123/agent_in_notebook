@@ -63,7 +63,7 @@ export function WriteResult({ write, labels, onCite }: { write: ReaderWriteView;
  * QALMRI). Sent to the tutor to grade, or kept. After that, it shows what was
  * written and can be written again.
  */
-export function WriteBox({ fields, placeholder, rows = 4, write, busyLabel = "Gửi gia sư chấm", onSubmit, onSkip, skipped, onCite, hint, labels }: {
+export function WriteBox({ fields, placeholder, rows = 4, write, busyLabel = "Gửi gia sư chấm", onSubmit, onSkip, skipped, onCite, hint, labels, canRewrite = true }: {
   fields?: { key: string; label: string; prompt: string }[];
   placeholder?: string;
   rows?: number;
@@ -75,6 +75,7 @@ export function WriteBox({ fields, placeholder, rows = 4, write, busyLabel = "G�
   onCite: (a: ReaderAnchor) => void;
   hint?: string;
   labels?: Record<string, string>;
+  canRewrite?: boolean;
 }) {
   const [again, setAgain] = useState(false);
   const [text, setText] = useState("");
@@ -96,7 +97,7 @@ export function WriteBox({ fields, placeholder, rows = 4, write, busyLabel = "G�
   return (
     <div class="er-writebox">
       {write && <WriteResult write={write} labels={labels} onCite={onCite} />}
-      {write && !again && <button class="er-link small" onClick={() => setAgain(true)}>Viết lại</button>}
+      {write && !again && canRewrite && <button class="er-link small" onClick={() => { setText(write.text); setAgain(true); }}>Viết lại</button>}
       {editing && !skipped && (
         <>
           {hint && <p class="er-muted small">{hint}</p>}

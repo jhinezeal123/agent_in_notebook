@@ -82,6 +82,14 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
                   return window.guide;
                 }
                 if (method === "reader.answer") return { result: window.answer, guide: window.guide };
+                if (method === "reader.widget.answer") {
+                  const widget = window.guide.widgets[0];
+                  window.guide = { ...window.guide, widgets: [{ ...widget, result: { choice: params.choice, correct: true }, model: {
+                    params: [{ name: "r", label: "Rank", min: 1, max: 4, step: 1, init: 1 }],
+                    outputs: [{ label: "Tham số", expression: ["*", "r", 8] }],
+                  } }] };
+                  return window.guide;
+                }
                 if (method === "write") return { id: "w-1", graded: true, guide: window.guide };
                 return { ok: true };
               },
@@ -138,7 +146,7 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
     });
     const bar = page.locator(".er-selbar");
     await bar.waitFor();
-    expect(await bar.locator("button").allTextContents()).toEqual(["Giải thích", "Ví dụ cụ thể", "Ký hiệu", "Vì sao?", "+ Câu hỏi", "+ Ghi chú"]);
+    expect(await bar.locator("button").allTextContents()).toEqual(["Giải thích", "Ví dụ cụ thể", "Ký hiệu", "Vì sao?", "Tạo ví dụ tương tác", "+ Câu hỏi", "+ Ghi chú"]);
     await bar.getByText("Vì sao?").click();
     const ask = await page.waitForFunction(() => window.calls.find((c) => c[0] === "ask")?.[1]);
     const p = await ask.jsonValue() as { kind: string; anchor: { id: string; quote: string }; quote: string };
@@ -237,5 +245,24 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
     expect(await page.evaluate(() => window.calls.filter((c) => c[0] === "write").map((c) => c[1]))).toEqual([{ kind: "recall", text: "BA hạng thấp; B = 0 lúc đầu.", unit: "S4" }]);
     await page.waitForFunction(() => !document.getElementById("S4")?.classList.contains("er-covered"));
     await page.locator(".er-toast").getByText("Đã gửi gia sư chấm").waitFor();
+  });
+
+  it("reveals the inline interactive model only after a prediction", async () => {
+    await page.evaluate(() => {
+      window.guide = { ...window.guide, widgets: [{
+        id: "lora-rank", anchor: { id: "S4.E3" }, title: "Số tham số theo rank", goal: "Đổi rank để hiểu kích thước",
+        tryThis: [], prediction: { question: "Tăng rank gấp đôi thì sao?", choices: ["Tăng gấp đôi", "Giữ nguyên"] },
+      }] };
+      window.emit("updated", { ...(window as unknown as { view: ReaderView }).view, guideRev: 10 });
+    });
+    const widget = page.locator(".er-widget-slot .er-widget");
+    await widget.getByText("Số tham số theo rank").click();
+    expect(await widget.locator("input[type=range]").count()).toBe(0);
+    await widget.getByLabel("Tăng gấp đôi").check();
+    await widget.getByRole("button", { name: "Chốt dự đoán" }).click();
+    await widget.getByText("Dự đoán đúng.").waitFor();
+    await widget.locator("input[type=range]").fill("2");
+    expect(await widget.locator("tbody td").textContent()).toBe("16");
+    expect(await page.evaluate(() => window.calls.filter(([method]) => method === "reader.widget.answer").at(-1)?.[1])).toEqual({ id: "lora-rank", choice: 0 });
   });
 });

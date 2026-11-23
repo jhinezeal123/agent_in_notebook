@@ -13,6 +13,9 @@ import { HtmlDoc } from "./doc-html.js";
 import { PdfDoc } from "./doc-pdf.js";
 import { AuthorLine, GuidePanel, PassBar, type GuideActions } from "./guide.js";
 import type { DocHandle, ReaderInit, ReaderPageHost } from "./host.js";
+import { ReaderWidgets } from "./widget-host.js";
+import { Cite, Md } from "./bits.js";
+import { EquationNotation } from "./notation.js";
 
 /** How often time spent is sent to the bridge, and how long without a sign of the reader it stops counting. */
 const FLUSH_MS = 15_000;
@@ -31,6 +34,7 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
   const [aside, setAside] = useState<"guide" | "notes" | null>("guide");
   const notesOpen = aside === "notes";
   const [guide, setGuide] = useState<ReaderGuide | null>(null);
+  const [quizRequest, setQuizRequest] = useState(0);
   /** Pass 1's skim: dim what a first pass skips, light up the paragraphs' roles. */
   const [skim, setSkim] = useState({ on: true, roles: true });
   /** The sections hidden while the reader recalls them. */
@@ -62,6 +66,10 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
     return host.on((e) => {
       if (e.event === "updated") setView(e.params as ReaderView);
       else if (e.event === "connected") load();
+      else if (e.event === "quiz") {
+        setAside("guide");
+        setQuizRequest((n) => n + 1);
+      }
       else if (e.event === "reveal") {
         const anchor = e.params as ReaderAnchor;
         if (!docRef.current?.reveal(anchor)) say(`Không thấy chỗ ${readerCiteLabel(anchor)} trong paper.`);
@@ -273,8 +281,10 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
           {view.view === "html"
             ? <HtmlDoc init={init} host={host} scroller={scroller} onReady={ready} onSection={setCurrent} />
             : <PdfDoc init={init} host={host} scroller={scroller} onReady={ready} onSection={setCurrent} onTextProgress={setTextState} />}
+          <ReaderWidgets widgets={guide?.widgets ?? []} root={scrollerRef.current} version={docReady} actions={actions} />
         </main>
-        {aside === "guide" && guide && <GuidePanel guide={guide} view={view} current={current} actions={actions} skim={{ ...skim, set: (next) => setSkim({ ...skim, ...next }) }} />}
+        {aside === "guide" && guide && <GuidePanel guide={guide} view={view} current={current} actions={actions} quizRequest={quizRequest}
+          onQuizHandled={() => setQuizRequest(0)} skim={{ ...skim, set: (next) => setSkim({ ...skim, ...next }) }} />}
         {notesOpen && (
           <aside class="er-notes" aria-label="Câu hỏi của tôi và ghi chú">
             <div class="er-notes-head">
@@ -306,24 +316,32 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
             {questions.map((n) => <NoteItem key={n.id} note={n} sections={view.sections} onAction={noteAction} />)}
             <div class="er-notes-head"><b>Ghi chú</b></div>
             {!notes.length && <p class="er-muted small">Chưa có ghi chú.</p>}
-            {notes.map((n) => <NoteItem key={n.id} note={n} sections={view.sections} onAction={noteAction} />)}
+            {notes.map((n) => <NoteItem key={n.id} note={n} sections={view.sections} onAction={noteAction} peer={view.pass && view.pass >= 3 ? actions : undefined} />)}
           </aside>
         )}
       </div>
       {bar && (
         <div class="er-selbar" style={{ left: `${bar.x}px`, top: `${Math.max(8, bar.y - 44)}px` }} onMouseDown={(e) => e.preventDefault()}>
           {ASKS.map((k) => <button key={k} onClick={() => ask(k)}>{READER_ASK_LABEL[k]}</button>)}
+          <button onClick={() => {
+            const { anchor, quote } = bar;
+            setBar(null);
+            document.getSelection()?.removeAllRanges();
+            void actions.act("reader.widget.request", { anchor, goal: `Minh họa: ${clip(quote, 170)}` })
+              .then(() => say("Đã yêu cầu ví dụ tương tác."), () => {});
+          }}>Tạo ví dụ tương tác</button>
           <span class="er-sep" />
           <button onClick={() => keep("question")} title="Giữ lại điều chưa hiểu">+ Câu hỏi</button>
           <button onClick={() => keep("note")}>+ Ghi chú</button>
         </div>
       )}
       {toast && <div class="er-toast" role="status">{toast}</div>}
+      {view.view === "html" && !!guide?.map.notation.length && <EquationNotation root={scrollerRef.current} notation={guide.map.notation} />}
     </div>
   );
 }
 
-function NoteItem({ note, sections, onAction }: { note: ReaderNote; sections: ReaderSectionView[]; onAction: (n: ReaderNote, a: "done" | "remove" | "ask" | "go" | "edit") => void }) {
+function NoteItem({ note, sections, onAction, peer }: { note: ReaderNote; sections: ReaderSectionView[]; onAction: (n: ReaderNote, a: "done" | "remove" | "ask" | "go" | "edit") => void; peer?: GuideActions }) {
   const where = note.anchor && (note.anchor.id || note.anchor.page) ? readerCiteLabel(note.anchor, sections) : null;
   return (
     <div class={`er-note${note.done ? " done" : ""}`}>
@@ -336,6 +354,21 @@ function NoteItem({ note, sections, onAction }: { note: ReaderNote; sections: Re
         <button class="er-link" onClick={() => onAction(note, "edit")}>Sửa</button>
         <button class="er-link danger" onClick={() => onAction(note, "remove")}>Xóa</button>
       </div>
+      {peer && note.anchor && <div class="er-step">
+        {(["experimentalist", "theorist"] as const).map((persona) => {
+          const label = persona === "experimentalist" ? "Thực nghiệm" : "Lý thuyết";
+          const reply = note.replies?.find((r) => r.persona === persona);
+          const status = note.peerStatus?.[persona];
+          return <div key={persona}>
+            {reply ? <><b>{label}</b><Md text={reply.text} onCite={peer.cite} />
+              {reply.evidence.map(({ anchor, quote }, i) => <Cite key={i} anchor={{ id: anchor, quote }} sections={sections} onCite={peer.cite} />)}</>
+              : <button class="er-link" disabled={status?.pending} onClick={() => void peer.act("reader.peer", { note: note.id, persona }).catch(() => {})}>
+                {status?.pending ? `${label} đang đọc ghi chú…` : `Mời đồng nghiệp · ${label}`}
+              </button>}
+            {status?.error && <p role="alert">{status.error}</p>}
+          </div>;
+        })}
+      </div>}
     </div>
   );
 }

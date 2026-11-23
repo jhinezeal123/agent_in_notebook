@@ -1,6 +1,6 @@
 # Easy-read — nghiên cứu và thiết kế
 
-Trạng thái: **bản thiết kế, chưa code** (nhánh `feat/easy-read`, 23/11/2026). Phần A–D viết cho người dùng; phần E–G là thiết kế kỹ thuật, đường dẫn tính từ `packages\`. Tài liệu này nối tiếp `docs/architecture.md` (§ Mentor) và `docs/mentor-dot-3-4.md` (tủ paper, xưởng reproduce).
+Trạng thái **ER‑0 đến ER‑5 đã có code** trên nhánh `feat/easy-read`. F.1 ghi các khác biệt so với thiết kế và F.3 liệt kê các luồng cần xác nhận với VS Code, ACP và Kaggle thật. Tài liệu này nối tiếp `docs/architecture.md` (§ Mentor) và `docs/mentor-dot-3-4.md` (tủ paper, xưởng reproduce).
 
 Nghiên cứu đầy đủ kèm nguồn: [`docs/easy-read-nghien-cuu.md`](easy-read-nghien-cuu.md).
 
@@ -26,7 +26,7 @@ Nghiên cứu đầy đủ kèm nguồn: [`docs/easy-read-nghien-cuu.md`](easy-r
 
 **Đội agent**: *gia sư* (chat với bạn) · *người soạn* (chạy nền, soạn trước một bước so với bạn: bản đồ paper, câu hỏi, widget) · *người kiểm* (giải mù từng câu trắc nghiệm, không thấy đáp án) · *đồng nghiệp lề* (phản biện ở lượt 3). Tất cả chạy trên agent ACP bạn đang dùng.
 
-**Cần bạn chốt**: 7 quyết định ở G.3, mỗi cái có đề xuất.
+Bảy quyết định triển khai đã chốt ở G.3.
 
 ---
 
@@ -399,6 +399,8 @@ Thẻ ôn (`reader_card_propose`, thẻ bạn tự viết) qua `reader/cards.ts`
 
 ### E.7 Ví dụ tương tác (widget)
 
+Widget từ ER‑3 dùng biểu thức số và bộ hiển thị của tab đọc. `reader/widgets.ts` kiểm mốc trích, toán tử, độ sâu, khoảng tham số và các giá trị đối chiếu trước khi lưu `spec.json`. `ui/src/reader/widget-host.tsx` vẽ thanh trượt, lựa chọn, công tắc, bảng, ma trận, đồ thị, từng bước và so sánh từ spec đã kiểm. Bridge mở mô hình và đáp án sau dự đoán hoặc khi người đọc chọn **Cho xem luôn**. Bản khảo sát JavaScript và iframe dưới đây ghi lại thiết kế đã thử trong ER‑0.
+
 #### E.7.1 Định dạng
 
 ```
@@ -432,11 +434,11 @@ widgets/<id>/
 
 #### E.7.4 Lab Python trên notebook (tùy chọn)
 
-Ý cần PyTorch hoặc dữ liệu thật: nút **Mở thành lab trên notebook** chép vài cell theo kiểu *The Annotated Transformer* (đoạn paper → ngay sau là code cài đúng đoạn đó với kích thước đồ chơi → câu dự đoán → cell chạy) vào một notebook Kaggle bạn chọn, theo đúng luồng chọn notebook của Mentor (`MentorPlaces`), cell đầu có dấu `<!-- reader: lab <paperId> <widgetId> -->`. Lab chỉ để khám phá, không chấm; muốn tự cài đặt có chấm thì sang **Reproduce** (xưởng của Mentor).
+Nút **Mở thành lab trên notebook** dùng trình chọn notebook Kaggle của Mentor. Lab nối câu trích, lời giải thích, câu dự đoán và một cell Python chuyển từ công thức của widget. Cell đầu có dấu `<!-- reader: lab <paperId> <widgetId> -->` để tiếp tục lần chép dở. Người đọc chủ động chạy cell. Các bài cần PyTorch, dữ liệu thật hoặc chấm tự động đi qua **Reproduce**.
 
 ### E.8 Mô hình tiến độ và ôn tập
 
-Gộp thuần từ nhật ký (`reader/model.ts: foldReader`), như `mentor/model.ts`. **ER-2 đã làm**: điểm Gardner-Medwin, "chắc mà sai"/"đoán mà đúng", câu sai quay lại tới khi đúng (nút "Ôn lại câu sai"), độ vững khái niệm theo câu trả lời cuối của mỗi câu, trọng số Bloom 1 + 0,5·bậc, câu đoán đúng (độ chắc 1) tính nửa. **Chưa**: chỉ tính các lần trả lời cách lần đọc ≥ 1 ngày, chọn câu tiếp theo theo khái niệm yếu nhất, thẻ ôn, điều kiện "đã hiểu sâu" (ER-4).
+Tiến độ gộp từ nhật ký (`reader/model.ts: foldReader`). Điểm checkpoint dùng thang Gardner-Medwin. Độ vững chỉ tính câu trả lời từ một ngày sau lần đọc, lấy lần đủ điều kiện gần nhất của từng câu và tính trọng số Bloom 1 + 0,5·bậc. Câu đoán đúng tính nửa. **Hỏi tôi một câu** ưu tiên khái niệm yếu và mức Bloom kế tiếp.
 
 - **Mỗi mục**: đã đọc (thời gian ≥ 40 % ước lượng hoặc bạn đánh dấu), đã tự giải thích (grade ≥ 1), checkpoint (tỉ lệ đúng lần đầu).
 - **Mỗi khái niệm**: độ vững 0–1 = trung bình có trọng số các lần trả lời, trọng số tăng theo mức Bloom; câu tiếp theo nhắm khái niệm yếu nhất và mức Bloom cao hơn một bậc so với mức bạn đã vững.
@@ -493,11 +495,11 @@ Phần riêng (`bridge/src/reader/`, `ui/src/reader/`, `vscode/src/reader-*`) đ
 | **ER-0 Thử kỹ thuật** ✓ (23/11/2026) | — (biên bản `docs/easy-read-er0.md`: HTML arXiv trên 16 paper; `srcdoc` + sandbox + nonce và Worker blob trong webview VS Code thật; pdf.js trong webview; chat không gắn notebook) | `bridge/test/debug/reader-arxiv-probe.mjs`, `bridge/test/reader-er0.test.ts`, `vscode/test/debug/reader-webview-probe/` |
 | **ER-1 Đọc và hỏi** (code + test tự động xong 23/11/2026; chờ chạy thật F.3) | mở paper bằng link arXiv hoặc PDF; tab đọc có mục lục, công thức, hình; chọn đoạn → Giải thích / Ví dụ / Ký hiệu / Vì sao; gia sư trả lời có chip trích dẫn bấm được; câu hỏi của tôi và ghi chú; tiến độ đọc từng mục | `reader/ingest.ts`, `reader/chat.ts`, `reader/tools.ts`, `ui/src/reader/*`, `vscode/src/reader-host.ts`, `server.ts`, `panel-core.ts` |
 | **ER-2 Lượt 1–2 có dẫn đường** (code + test tự động xong 24/11/2026; chờ chạy thật F.3) | chọn mục tiêu; lượt 1 (đoán trước, lướt có tô vai trò đoạn, tự viết 5C và được chấm, kiến thức nền, bảng ký hiệu); lượt 2 (câu dẫn, đọc hình, che kết quả để đoán, checkpoint: nhớ lại → tự giải thích → trắc nghiệm hai tầng có điểm độ chắc chắn, câu sai quay lại; phiếu QALMRI; tóm tắt cuối lượt); Sổ lỗi sai | `reader/author.ts`, `reader/checker.ts`, `reader/items.ts` + `reader/lint.ts` (kiểm E.6), `reader/model.ts` |
-| **ER-3 Ví dụ tương tác** | widget cạnh công thức qua tự kiểm, đoán trước xem sau, "Thử điều này", so sánh hai cấu hình; nút yêu cầu widget từ đoạn đang chọn | `reader/widgets.ts`, `ui/src/reader/widget-host.tsx`, `ui/src/reader/kit/*` |
+| **ER-3 Ví dụ tương tác** | widget cạnh công thức qua tự kiểm, đoán trước xem sau, "Thử điều này", so sánh hai cấu hình; nút yêu cầu widget từ đoạn đang chọn | `reader/widgets.ts`, `ui/src/reader/widget-host.tsx` |
 | **ER-4 Đào sâu và ghi nhớ** | lượt 3 (dẫn lại công thức mờ dần, câu đào sâu chấm theo rubric, tìm chỗ sai, đồng nghiệp lề, review một trang, dựng lại sườn); lượt 4 (giải thích Feynman, thẻ ôn bạn duyệt/viết, ôn ngắt quãng ở Khởi động); tủ paper hiện tiến độ đọc; nút Reproduce sang xưởng | `reader/peer.ts`, `reader/cards.ts`, `reader/model.ts`, `mentor/papers.ts`, `ui/src/mentor/home.tsx` |
-| **ER-5 Bối cảnh** (sau) | tài liệu tham khảo theo vai trò, paper trích dẫn nó, "đọc paper này tiếp"; lab Python trên notebook | `reader/related.ts`, `MentorPlaces` |
+| **ER-5 Bối cảnh** | tài liệu tham khảo theo vai trò, paper trích dẫn nó, mở paper khác; lab Python từ widget trên notebook | `reader/related.ts`, `reader/lab.ts`, `MentorPlaces` |
 
-Sau mỗi bước: `pnpm typecheck`, `pnpm test`, `pnpm --filter @ainb/bridge test mentor`, đóng gói và cài lại VSIX.
+Workflow `test` trên GitHub chạy `pnpm typecheck`, `pnpm build` và `pnpm test` (gồm cả bộ Mentor). Đóng gói và cài lại VSIX sau khi CI qua.
 
 **ER-2 đã chốt khi làm** (khác hoặc cụ thể hơn thiết kế ở trên):
 
@@ -506,7 +508,8 @@ Sau mỗi bước: `pnpm typecheck`, `pnpm test`, `pnpm --filter @ainb/bridge te
 - **Nhớ lại, tự giải thích, 5C, QALMRI, tóm tắt** đi sang khung chat như tin nhắn của bạn, kèm `<reader-grade>` (rubric + bản tham chiếu, chỉ có từ lúc này); gia sư chấm bằng `reader_grade`. Không mở chat gia sư thì bài được giữ và bản tham chiếu mở ngay. **Đọc hình** và **đoán bảng** không chấm: viết xong thì thấy thông điệp/kết quả tham chiếu.
 - **Người kiểm** là một chat ẩn mới cho mỗi lô (đóng ngay sau), chỉ thấy câu hỏi đã xáo và các đoạn chứa câu trích; trả lời lệch hoặc thấy phương án khác cũng đúng thì câu trả về người soạn (`reader_items_fix`), tối đa hai lần, rồi bỏ. Câu người soạn không sửa thì bỏ luôn. Người kiểm không chạy được thì câu vẫn đến tay bạn, đánh dấu `unchecked`. Chưa tách model nhẹ cho người kiểm (quyết định 4): cùng agent với gia sư.
 - **Sổ lỗi sai**: câu sai với độ chắc ≥ 2 (đoán sai thì không), và hiểu sai gia sư ghi bằng `reader_misconception`, vào sổ của paper (thẻ Sổ lỗi sai của tab đọc) và sổ của Mentor (`misconception`, `attemptId "paper:<id>"`, tag `paper:<id>:<concept>`, kèm tên paper; Mentor hỏi lại sau 2 ngày như hiểu sai trong bài).
-- **Chưa làm ở ER-2**: rê chuột lên ký hiệu trong công thức để xem nghĩa (bảng ký hiệu ở thẻ riêng), nút "Hỏi tôi một câu", thanh lượt trong khung chat (`reader-bar.tsx`), chọn câu theo khái niệm yếu nhất, chuỗi ngày học của Mentor.
+- Các bước sau bổ sung tooltip ký hiệu trong bản HTML, nút **Hỏi tôi một câu**, thanh lượt trong chat và ghi nhận ngày học của Mentor khi người đọc nộp bài, trả lời checkpoint hoặc ôn thẻ.
+- Đặt `AINB_READER_CHECKER_MODEL` trước khi chạy bridge nếu muốn người kiểm dùng mã model khác trong cùng agent ACP. Có thể đặt `AINB_SEMANTIC_SCHOLAR_KEY` để tab Bối cảnh gọi Semantic Scholar.
 
 ### F.2 Kiểm thử tự động (không dùng agent thật, không mạng)
 
@@ -527,7 +530,7 @@ Sau mỗi bước: `pnpm typecheck`, `pnpm test`, `pnpm --filter @ainb/bridge te
 
 ### F.4 Đo chất lượng nội dung do AI sinh
 
-Một bộ đo chạy tay (`ainb reader eval <arxiv…>`), trên năm paper mốc bạn đã có trong Mentor (Attention, LoRA, DDPM, ResNet, ViT), sau mỗi lần đổi prompt của người soạn:
+Sau khi soạn nội dung cho paper bằng bridge đang chạy, dùng `pnpm ainb reader eval <arxiv…>` để xem số liệu. Mặc định lệnh tra năm paper mốc Attention, LoRA, DDPM, ResNet và ViT. Thêm `--paper-quiz` để chạy một phiên ACP mới chỉ nhận bài học đã soạn và checkpoint đã qua người kiểm. Khi cần so prompt, chuẩn bị hai bộ nội dung ở hai hồ sơ `AINB_HOME` riêng để các lần đo dùng dữ liệu tương ứng.
 
 - tỉ lệ câu hỏi qua từng phép kiểm ở E.6 (bao nhiêu câu bị chặn vì câu trích bịa, vì giải mù lệch, vì sai mức Bloom);
 - widget qua tự kiểm sau ≤ 3 vòng;
@@ -564,4 +567,4 @@ Một bộ đo chạy tay (`ainb reader eval <arxiv…>`), trên năm paper mố
 | 6 | Thuật toán ôn thẻ | lịch cố định kiểu Quantum Country · FSRS (`ts-fsrs`) | **Lịch cố định** trước (dễ hiểu, khớp cách Mentor đang hẹn ôn); đủ dữ liệu ôn thì cân nhắc FSRS |
 | 7 | Thứ tự giao | ER-0 → 1 → 2 → 3 → 4 · đưa ví dụ tương tác (ER-3) lên trước câu hỏi (ER-2) | **ER-0 → 1 → 2 → 3 → 4**: câu hỏi và các lượt là xương sống; widget cần bản đồ paper (ER-2) để biết đặt ở đâu và minh họa khái niệm nào. Nếu bạn muốn thấy widget sớm, ER-3 có thể làm ngay sau ER-1 với widget theo yêu cầu (chưa tự đề xuất) |
 
-Bạn đã đồng ý cả bảy đề xuất. ER-0 (thử kỹ thuật) đã xong: cả bốn điều thiết kế dựa vào đều được; biên bản và các điều chỉnh ở `docs/easy-read-er0.md`. Bước kế tiếp: ER-1.
+Bảy quyết định đã được dùng cho triển khai. Biên bản ER‑0 ở `docs/easy-read-er0.md`.

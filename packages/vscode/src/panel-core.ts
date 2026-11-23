@@ -32,7 +32,7 @@ export interface ReaderTabs {
   /** The paper a reading tab shows. */
   info(tabId: number): { paperId: string; title: string } | null;
   /** Bring the reading tab to the front, at a place the tutor cited. */
-  reveal(tabId: number, anchor?: ReaderAnchor): Promise<void>;
+  reveal(tabId: number, anchor?: ReaderAnchor, action?: "quiz"): Promise<void>;
 }
 
 export const NO_READER_TABS: ReaderTabs = {
@@ -232,9 +232,14 @@ export class PanelCore {
       }
       case "reader.reveal": {
         // A citation chip in the tutor's answer: its reading tab scrolls there.
-        const { tabId, anchor } = params as { tabId: number; anchor?: ReaderAnchor };
+        const { tabId, anchor, action } = params as { tabId: number; anchor?: ReaderAnchor; action?: "quiz" };
         if (!isReaderTab(tabId) || !this.readers.has(tabId)) throw new Error("Tab đọc của paper này đã đóng. Mở lại paper (Easy Read: Mở paper…).");
-        return this.readers.reveal(tabId, anchor);
+        return this.readers.reveal(tabId, anchor, action === "quiz" ? action : undefined);
+      }
+      case "reader.guide": {
+        const { tabId } = params as { tabId: number };
+        const paper = this.readers.info(tabId);
+        return paper ? this.bridge.request("reader.guide", { paperId: paper.paperId }) : null;
       }
       case "attachments.get": return this.attached((params as { tabId: number }).tabId);
       case "attachments.remove": {

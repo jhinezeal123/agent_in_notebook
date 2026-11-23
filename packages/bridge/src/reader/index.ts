@@ -9,6 +9,11 @@ import { ReaderAuthor, type ReaderAuthorHost } from "./author.js";
 import { ingestArxiv, ingestPdf, type IngestDeps } from "./ingest.js";
 import { ReaderPasses, type ReaderPassesHost } from "./passes.js";
 import { cleanNote, ReaderStore, type ReaderMeta } from "./store.js";
+import { ReaderWidgets } from "./widgets.js";
+import { ReaderDeep } from "./deep.js";
+import { ReaderCards } from "./cards.js";
+import { ReaderPeers } from "./peer.js";
+import { ReaderRelatedPapers } from "./related.js";
 
 /** What the reader needs of Mentor's shelf (the paper's folder is shared with it). */
 export interface ReaderShelf {
@@ -32,6 +37,7 @@ export interface ReaderHubOptions extends IngestDeps {
   author?: () => ReaderAuthorHost | undefined;
   /** Misconceptions into Mentor's book. */
   misconception?: ReaderPassesHost["misconception"];
+  learning?(paperId: string, at: number): void;
 }
 
 /** A section counts as read once this share of its estimated time was spent in it. */
@@ -47,6 +53,11 @@ export class ReaderHub {
   readonly passes: ReaderPasses;
   /** The hidden author that prepares them. */
   readonly author: ReaderAuthor;
+  readonly widgets: ReaderWidgets;
+  readonly deep: ReaderDeep;
+  readonly cards: ReaderCards;
+  readonly peers: ReaderPeers;
+  readonly related: ReaderRelatedPapers;
   private readonly opening = new Map<string, Promise<ReaderView>>();
   private readonly renders = new Map<string, { resolve: (jpeg: Buffer) => void; reject: (e: Error) => void }[]>();
   /** Per paper, bumped whenever its guide changes (the tab asks for it again). */
@@ -56,9 +67,19 @@ export class ReaderHub {
   constructor(private readonly opts: ReaderHubOptions) {
     this.store = new ReaderStore(opts.root);
     this.author = new ReaderAuthor(this, () => opts.author?.());
+    this.widgets = new ReaderWidgets(this);
+    this.deep = new ReaderDeep(this);
+    this.cards = new ReaderCards(this);
+    this.peers = new ReaderPeers(this);
+    this.related = new ReaderRelatedPapers(this);
     this.passes = new ReaderPasses(this, this.author, { misconception: opts.misconception });
     this.author.passes = this.passes;
   }
+
+  learning(paperId: string, at: number): void {
+    this.opts.learning?.(paperId, at);
+  }
+
 
   /** Open a paper: fetched and converted the first time, as it was after that. */
   async open(source: { arxiv: string } | { pdfPath: string } | { paperId: string }): Promise<ReaderView> {
@@ -134,7 +155,12 @@ export class ReaderHub {
       const kids = sections.filter((k) => k.parent === s.id);
       if (!src.blocks.length && kids.length && !state.marked.has(s.id)) s.read = kids.every((k) => k.read);
     }
-    const notes = [...state.notes.values()].sort((a, b) => a.at - b.at);
+    const notes = [...state.notes.values()].sort((a, b) => a.at - b.at).map((note) => {
+      if (note.kind !== "note" || state.pass < 3) return note;
+      const replies = this.peers.replies(paperId, note.id);
+      const peerStatus = this.peers.status(paperId, note.id, note.at);
+      return { ...note, ...(replies.length ? { replies } : {}), ...(Object.keys(peerStatus).length ? { peerStatus } : {}) };
+    });
     return {
       paperId, title: meta.title, ...(meta.authors ? { authors: meta.authors } : {}), ...(meta.year ? { year: meta.year } : {}),
       ...(meta.arxiv ? { arxiv: meta.arxiv } : {}), ...(meta.url ? { url: meta.url } : {}),

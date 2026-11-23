@@ -46,7 +46,7 @@ export type MentorEvent =
   /** The learner reported the exercise as wrong: the attempt does not count (no rating, no review). */
   | (Base & { t: "void"; reason: string })
   /** A paper's milestones (attemptId "paper:<id>"): its plan approved, or the paper reproduced. Each is a learning day. */
-  | (Base & { t: "paper"; paperId: string; what: "planned" | "done" })
+  | (Base & { t: "paper"; paperId: string; what: "planned" | "done" | "read" })
   /** The notebook (its key) became the paper's workshop (attemptId "paper:<id>"). */
   | (Base & { t: "workshop"; paperId: string; notebook: string });
 

@@ -21,6 +21,8 @@ export interface ReaderDeps {
   follow(tabId: number): void;
   /** A reading tab opened or closed. */
   changed(): void;
+  reproduce(paperId: string): Promise<unknown>;
+  lab(paperId: string, widget: string): Promise<unknown>;
 }
 
 /** The tutor's mode (the bridge fixes it too: ReaderChat's settings). */
@@ -54,11 +56,12 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
     return tab ? { paperId: tab.paperId, title: tab.view.title } : null;
   }
 
-  async reveal(tabId: number, anchor?: ReaderAnchor): Promise<void> {
+  async reveal(tabId: number, anchor?: ReaderAnchor, action?: "quiz"): Promise<void> {
     const tab = this.byTab(tabId);
     if (!tab) return;
-    tab.panel.reveal(tab.panel.viewColumn, true);
+    tab.panel.reveal(tab.panel.viewColumn, action !== "quiz");
     if (anchor) await tab.panel.webview.postMessage({ event: "reveal", params: anchor });
+    if (action === "quiz") await tab.panel.webview.postMessage({ event: "quiz" });
   }
 
   private byTab(tabId: number): ReaderTab | undefined {
@@ -209,18 +212,33 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
         return result;
       }
       // The passes (ER-2): the guide and what the reader does in it.
-      case "reader.guide":
       case "reader.answer":
       case "reader.skip":
       case "reader.report":
+      case "reader.widget.answer":
+      case "reader.related":
+      case "reader.cards.keep":
+      case "reader.cards.drop":
+      case "reader.cards.review":
         return this.deps.request(method, { ...p, paperId });
+      case "reader.guide":
       case "reader.goal":
       case "reader.pass":
       case "reader.author":
+      case "reader.widget.request":
+      case "reader.peer":
         // These start the hidden author: it uses the reader's agent when no tutor chat is open.
         return this.deps.request(method, { ...p, paperId, agentId: this.deps.prefs().agentId });
       case "write":
         return this.write(tab, p);
+      case "appeal": {
+        const chat = await this.tutorChat(tab);
+        return this.deps.request("reader.appeal", { ...p, paperId, chatId: chat.chatId });
+      }
+      case "reproduce":
+        return this.deps.reproduce(paperId);
+      case "lab":
+        return this.deps.lab(paperId, String(p.widget));
       case "ask":
         return this.ask(tab, p.kind as ReaderAskKind, (p.anchor ?? {}) as ReaderAnchor, String(p.quote ?? ""));
       case "askText":
@@ -261,7 +279,7 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
    * are only kept.
    */
   private async write(tab: ReaderTab, p: Record<string, unknown>): Promise<unknown> {
-    const graded = ["5c", "recall", "explain", "qalmri", "summary"].includes(String(p.kind));
+    const graded = ["5c", "recall", "explain", "qalmri", "summary", "deep", "derive", "find-flaws", "review", "outline", "feynman"].includes(String(p.kind));
     const chat = graded ? await this.tutorChat(tab) : undefined;
     const result = await this.deps.request("reader.write", { ...p, paperId: tab.paperId, ...(chat ? { chatId: chat.chatId } : {}) });
     if (chat) this.deps.follow(tab.tabId);

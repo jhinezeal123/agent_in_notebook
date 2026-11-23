@@ -8,12 +8,14 @@
 import { randomBytes } from "node:crypto";
 import {
   READER_FIVE_C,
+  READER_BLOOMS,
   READER_GOALS,
   READER_PASS_LABEL,
   READER_QALMRI,
   readerCiteLabel,
   type ReaderAnswerResult,
   type ReaderChoice,
+  type ReaderExerciseKind,
   type ReaderGoal,
   type ReaderGrade,
   type ReaderGuide,
@@ -24,16 +26,19 @@ import {
   type ReaderView,
   type ReaderWriteKind,
   type ReaderWriteView,
+  type MentorPaper,
 } from "@ainb/protocol";
 import { descendants, type ReaderDoc } from "./doc.js";
 import type { ReaderHub } from "./index.js";
 import { answerResult, gradeChoice, itemView, misconceptionOf, pretestView, type ReaderItem, type ReaderMap, type ReaderPack, type ReaderUnitDef } from "./items.js";
 import { conceptMastery, isAgain, latestWrite, scoreOf, type ReaderState, type ReaderWrite } from "./model.js";
+import type { ReaderTask } from "./author.js";
+import { DAY_MS } from "./cards.js";
 
 /** What the passes ask of the hidden author (author.ts). */
 export interface ReaderAuthorQueue {
   /** Write the paper's map; a unit's checkpoint. Already done, queued or running: nothing. */
-  enqueue(paperId: string, task: { kind: "map" } | { kind: "unit"; unit: string }): void;
+  enqueue(paperId: string, task: ReaderTask): void;
   status(paperId: string): ReaderGuide["author"];
   unitState(paperId: string, unit: string): { state: "preparing" | "failed" | "waiting"; error?: string };
 }
@@ -48,7 +53,8 @@ export interface ReaderPassesHost {
   misconception?(p: { paperId: string; title: string; concept: string; note: string }): void;
 }
 
-const GRADED: ReadonlySet<ReaderWriteKind> = new Set(["5c", "recall", "explain", "qalmri", "summary"]);
+const EXERCISES: ReadonlySet<ReaderWriteKind> = new Set(["deep", "derive", "find-flaws", "review", "outline", "feynman", "synthesis"]);
+const GRADED: ReadonlySet<ReaderWriteKind> = new Set(["5c", "recall", "explain", "qalmri", "summary", ...[...EXERCISES].filter((kind) => kind !== "synthesis")]);
 const WRITE_MAX = 6000;
 const FIELD_MAX = 1500;
 /** The map's parts every paper needs (a PDF also needs its units). */
@@ -62,6 +68,13 @@ const WRITE_LABEL: Record<ReaderWriteKind, string> = {
   summary: "Tóm tắt lượt 2",
   figure: "Thông điệp của hình",
   predict: "Đoán kết quả",
+  deep: "Câu đào sâu",
+  derive: "Dẫn lại công thức",
+  "find-flaws": "Tìm chỗ sai",
+  review: "Review một trang",
+  outline: "Dựng lại sườn paper",
+  feynman: "Giải thích Feynman",
+  synthesis: "Ghi chú 5 câu",
 };
 
 export class ReaderPasses {
@@ -139,9 +152,11 @@ export class ReaderPasses {
     if (!state.goal) throw new Error("Chọn mục tiêu đọc trước đã.");
     const at = Date.now();
     if (done) {
+      if (pass !== state.pass && !state.passed.has(pass)) throw new Error("Chỉ kết thúc lượt đang đọc.");
+      if ((pass === 3 || pass === 4) && !this.canFinish(paperId, pass)) throw new Error("Hoàn thành hoặc bỏ qua các phần cần làm để kết thúc lượt này.");
       this.hub.store.append(paperId, { t: "r.pass", at, pass, what: "done" });
     } else {
-      if (pass > 2) throw new Error(`Lượt ${pass} (${READER_PASS_LABEL[pass]}) có ở bước sau của easy-read.`);
+      if (pass >= 3 && (state.goal === "gist" || !state.passed.has((pass - 1) as ReaderPass))) throw new Error("Kết thúc lượt trước và chọn mục tiêu đọc phù hợp.");
       for (let p = state.pass; p < pass; p++) if (!state.passed.has(p as ReaderPass)) this.hub.store.append(paperId, { t: "r.pass", at, pass: p as ReaderPass, what: "done" });
       this.hub.store.append(paperId, { t: "r.pass", at, pass, what: "start" });
       if (pass === 2) {
@@ -149,15 +164,34 @@ export class ReaderPasses {
         const ahead = units.findIndex((u) => !this.unitDone(paperId, u));
         for (const u of units.slice(Math.max(0, ahead), Math.max(0, ahead) + 2)) this.author.enqueue(paperId, { kind: "unit", unit: u.id });
       }
+      this.prepareLater(paperId);
     }
     this.hub.touch(paperId);
     return this.guide(paperId);
   }
 
+  prepareLater(paperId: string): void {
+    const pass = this.state(paperId).pass;
+    if (pass === 3) this.author.enqueue(paperId, { kind: "deep" });
+    if (pass === 4) this.author.enqueue(paperId, { kind: "cards" });
+  }
+
+  private canFinish(paperId: string, pass: 3 | 4): boolean {
+    const state = this.state(paperId);
+    if (pass === 3 && !this.hub.deep.read(paperId) && !state.skipped.has("exercise:deep-plan")) return false;
+    const required = pass === 4 ? ["feynman", "synthesis"] : state.goal === "use"
+      ? ["review", ...this.hub.deep.visible(paperId).filter((e) => e.bloom === "evaluate").map((e) => e.id)]
+      : ["review", "outline"];
+    return required.every((id) => {
+      const w = [...state.writes.values()].filter((x) => x.key === id).at(-1);
+      return state.skipped.has(`exercise:${id}`) || (!!w && (w.kind === "synthesis" || (w.grade ?? 0) >= 1 && !w.appealPending));
+    });
+  }
+
   /** The reader is in a section now: in pass 2, its unit and the next one get their checkpoints (one step ahead, not the whole paper). */
   sectionEntered(paperId: string, section: string): void {
     const state = this.state(paperId);
-    if (state.pass < 2) return;
+    if (state.pass !== 2) return;
     const units = this.units(paperId);
     const i = units.findIndex((u) => u.sections.includes(section));
     if (i < 0) return;
@@ -172,7 +206,10 @@ export class ReaderPasses {
     const clean = cleanChoice(item, choice);
     const { correct, partly } = gradeChoice(item, clean);
     const at = Date.now();
-    this.hub.store.append(paperId, { t: "r.answer", at, item: item.id, unit: item.unit, concept: item.concept, bloom: item.bloom, correct, ...(partly ? { partly } : {}), confidence, choice: clean });
+    const sections = this.units(paperId).find((u) => u.id === item.unit)?.sections ?? [item.unit];
+    const readAt = Math.max(...sections.map((s) => state.readAt.get(s) ?? 0));
+    this.hub.store.append(paperId, { t: "r.answer", at, item: item.id, unit: item.unit, concept: item.concept, bloom: item.bloom, correct, ...(partly ? { partly } : {}), confidence, choice: clean, ...(readAt > 0 ? { readAt } : {}) });
+    this.hub.learning(paperId, at);
     // Wrong while fairly sure: a misconception, not a guess (E.8). A guess that missed is not one.
     if (!correct && confidence >= 2) this.recordMiss(paperId, item.concept, misconceptionOf(item, clean) ?? `Trả lời sai: “${clip(item.stem, 120)}”`, item.id);
     this.hub.touch(paperId);
@@ -192,7 +229,12 @@ export class ReaderPasses {
   /** Something the reader wrote. The kinds the tutor grades go to it with their reference; the others are kept. */
   write(paperId: string, input: { kind: ReaderWriteKind; unit?: string; key?: string; text?: string; fields?: Record<string, string> }, tutor?: ReaderTutorPort): { id: string; graded: boolean } {
     const { kind } = input;
-    if (!WRITE_LABEL[kind]) throw new Error(`Không rõ loại bài viết ${kind}.`);
+    if (!Object.hasOwn(WRITE_LABEL, kind)) throw new Error(`Không rõ loại bài viết ${kind}.`);
+    if (EXERCISES.has(kind)) this.hub.deep.task(paperId, kind as ReaderExerciseKind, input.key);
+    if (kind === "deep") {
+      const previous = [...this.state(paperId).writes.values()].filter((w) => w.kind === kind && w.key === input.key);
+      if (previous.length >= 2 || previous.some((w) => w.grade === 2 || w.appealPending || (w.sent && w.grade === undefined))) throw new Error("Mỗi câu đào sâu được sửa một lần sau khi có nhận xét.");
+    }
     const units = this.units(paperId);
     const unit = input.unit ? units.find((u) => u.id === input.unit) : undefined;
     if ((kind === "recall" || kind === "explain" || kind === "qalmri") && !unit) throw new Error("Không rõ mục của checkpoint.");
@@ -206,18 +248,49 @@ export class ReaderPasses {
       ? labels.filter((l) => fields[l.key]).map((l) => `**${l.label}**: ${fields[l.key]}`).join("\n")
       : String(input.text ?? "")).trim().slice(0, WRITE_MAX);
     if (!text) throw new Error("Bài viết trống.");
+    if (kind === "feynman" && text.split(/\s+/).length > 200) throw new Error("Bài Feynman tối đa 200 từ.");
     const id = `w-${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
+    const at = Date.now();
     const graded = GRADED.has(kind) && !!tutor;
     this.hub.store.append(paperId, {
-      t: "r.write", at: Date.now(), id, kind, ...(unit ? { unit: unit.id } : {}), ...(input.key ? { key: input.key } : {}), text,
+      t: "r.write", at, id, kind, ...(unit ? { unit: unit.id } : {}), ...(input.key ? { key: input.key } : {}), text,
       ...(fields && Object.keys(fields).length ? { fields } : {}), ...(graded ? { sent: true } : {}),
     });
     if (graded) {
       const where = unit ? ` ${unitLabel(unit)}` : "";
-      tutor!.send(`📝 ${WRITE_LABEL[kind]}${where}:\n\n${text}`, this.gradingBlock(paperId, id, kind, unit));
+      tutor!.send(`📝 ${WRITE_LABEL[kind]}${where}:\n\n${text}`, this.gradingBlock(paperId, id, kind, unit, input.key));
     }
+    this.hub.learning(paperId, at);
     this.hub.touch(paperId);
     return { id, graded };
+  }
+
+  summary(paperId: string): MentorPaper["reader"] {
+    if (!this.hub.has(paperId)) return undefined;
+    const guide = this.guide(paperId);
+    const view = this.hub.view(paperId);
+    const sections = view.sections.filter((s) => !s.empty);
+    const measured = guide.map.concepts.filter((c) => c.mastery !== undefined);
+    const synthesis = guide.exercises?.find((t) => t.kind === "synthesis")?.write?.text;
+    return {
+      pass: guide.pass, total: sections.length, done: sections.filter((s) => s.read).length,
+      ...(measured.length ? { mastery: measured.reduce((sum, c) => sum + c.mastery!, 0) / measured.length } : {}),
+      weak: measured.filter((c) => c.mastery! < 0.6).sort((a, b) => a.mastery! - b.mastery!).slice(0, 3).map((c) => c.name),
+      due: guide.cards?.filter((c) => c.due !== undefined && c.due <= Date.now()).length ?? 0,
+      ...(synthesis ? { synthesis } : {}), ...(guide.deepUnderstood ? { deep: true } : {}),
+    };
+  }
+
+  appeal(paperId: string, id: string, reason: string, tutor: ReaderTutorPort): void {
+    const w = this.state(paperId).writes.get(id);
+    if (!w || !GRADED.has(w.kind) || w.grade === undefined || w.appealed) throw new Error("Bài này chưa có điểm hoặc đã yêu cầu chấm lại.");
+    const clean = String(reason ?? "").trim().slice(0, 1600);
+    if (!clean) throw new Error("Viết lý do bạn muốn chấm lại.");
+    const unit = w.unit ? this.units(paperId).find((u) => u.id === w.unit) : undefined;
+    const rubric = this.gradingBlock(paperId, id, w.kind, unit, w.key);
+    this.hub.store.append(paperId, { t: "r.appeal", at: Date.now(), write: id });
+    tutor.send(`Chấm lại bài của mình.\n\nBài gốc:\n${w.text}\n\nĐiểm cũ: ${w.grade}/2\n\nLý do: ${clean}`, rubric);
+    this.hub.touch(paperId);
   }
 
   /** The tutor's grade of a write (its `reader_grade`). */
@@ -225,6 +298,7 @@ export class ReaderPasses {
     const w = this.state(paperId).writes.get(writeId);
     if (!w) throw new Error(`No write "${writeId}" of the reader: grade the id given in <reader-grade write=…>.`);
     if (!GRADED.has(w.kind)) throw new Error(`A ${w.kind} write is not graded.`);
+    if (w.grade !== undefined && !w.appealPending) throw new Error("Bài này đã có điểm và chưa có yêu cầu chấm lại.");
     this.hub.store.append(paperId, {
       t: "r.grade", at: Date.now(), write: w.id, grade: g.grade,
       ...(g.parts?.length ? { parts: g.parts.map((p) => ({ key: p.key, grade: p.grade, ...(p.note ? { note: p.note.slice(0, 400) } : {}) })) } : {}),
@@ -237,15 +311,20 @@ export class ReaderPasses {
 
   /** "Cho xem luôn": the answer of a waiting task, shown; the task does not count. */
   skip(paperId: string, task: string): ReaderGuide {
-    if (!/^(5c|summary|(pretest|item|fig|predict):[\w.:-]{1,160}|[\w.-]{1,120}:(recall|explain|qalmri))$/.test(task)) throw new Error(`Không rõ việc "${task}".`);
+    const state = this.state(paperId);
+    const exercise = task.startsWith("exercise:") && (task === "exercise:deep-plan" && state.pass === 3 || this.hub.deep.visible(paperId).some((t) => task === `exercise:${t.id}`));
+    const widget = task.startsWith("widget:") && !!this.hub.widgets.read(paperId, task.slice(7))?.prediction;
+    if (!exercise && !widget && !/^(5c|summary|(pretest|item|fig|predict):[\w.:-]{1,160}|[\w.-]{1,120}:(recall|explain|qalmri))$/.test(task)) throw new Error(`Không rõ việc "${task}".`);
     this.hub.store.append(paperId, { t: "r.skip", at: Date.now(), task });
     this.hub.touch(paperId);
     return this.guide(paperId);
   }
 
   report(paperId: string, itemId: string, reason: string): ReaderGuide {
-    const item = this.item(paperId, itemId);
-    this.hub.store.append(paperId, { t: "r.report", at: Date.now(), item: item.id, reason: String(reason ?? "").trim().slice(0, 1000) || "(không nói lý do)" });
+    if (itemId.startsWith("widget:")) {
+      if (!this.hub.widgets.read(paperId, itemId.slice(7))) throw new Error("Không còn ví dụ đó.");
+    } else this.item(paperId, itemId);
+    this.hub.store.append(paperId, { t: "r.report", at: Date.now(), item: itemId, reason: String(reason ?? "").trim().slice(0, 1000) || "(không nói lý do)" });
     this.hub.touch(paperId);
     return this.guide(paperId);
   }
@@ -277,9 +356,24 @@ export class ReaderPasses {
     const doc = this.hub.doc(paperId);
     const readIds = new Set(view.sections.filter((s) => s.read).map((s) => s.id));
     const fivec = latestWrite(state, "5c");
-    const mastery = conceptMastery(state);
+    const mastery = conceptMastery(state, true);
     const units = this.units(paperId).map((u) => this.unitView(paperId, u, view, state, doc));
     const live = units.flatMap((u) => u.items.map((i) => i.id));
+    const exercises = this.hub.deep.visible(paperId).map((exercise) => {
+      const { id, kind, bloom, prompt, anchors } = exercise;
+      const w = latestWrite(state, kind, undefined, id);
+      return { id, kind, ...(bloom ? { bloom } : {}), prompt, anchors, ...this.hub.deep.references(paperId, exercise),
+        ...(w ? { write: writeView(w) } : {}), ...(state.skipped.has(`exercise:${id}`) ? { skipped: true } : {}) };
+    });
+    const cards = this.hub.cards.views(paperId);
+    const firstSpacedGrades = cards.filter((c) => c.kept).map((c) => state.cardReviews.get(c.id)?.[1]?.grade);
+    const understood = state.goal === "deep" && state.passed.size === 4 && units.length > 0
+      && units.every((u) => u.state === "ready" && (u.score.total === 0 ? !!u.light : u.score.firstRight / u.score.total >= 0.7))
+      && exercises.filter((e) => e.kind === "deep" && e.write?.grade === 2 && !e.write.grading && !e.skipped).length >= 3
+      && ["outline", "feynman", "review"].every((kind) => exercises.some((e) => e.kind === kind && (e.write?.grade ?? 0) >= 1 && !e.write?.grading && !e.skipped))
+      && firstSpacedGrades.length >= 5 && firstSpacedGrades.every(Boolean)
+      && firstSpacedGrades.filter((g) => g === "hard" || g === "good").length / firstSpacedGrades.length >= 0.8;
+    const next = this.nextQuestion(state, units, mastery);
     const name = (id: string) => map.concepts?.find((c) => c.id === id)?.name ?? id;
     return {
       paperId,
@@ -308,8 +402,29 @@ export class ReaderPasses {
       misses: state.misses.map((m) => ({ concept: m.concept, name: name(m.concept), note: m.note, at: m.at, ...(m.item ? { item: m.item } : {}) })).reverse(),
       again: live.filter((id) => isAgain(state.answers.get(id))),
       score: scoreOf(state, live),
-      skipped: [...state.skipped].filter((t) => t === "5c" || t === "summary" || t.startsWith("pretest:")),
+      skipped: [...state.skipped].filter((t) => t === "5c" || t === "summary" || t.startsWith("pretest:") || t.startsWith("exercise:")),
+      widgets: this.hub.widgets.views(paperId),
+      widgetRequests: this.hub.widgets.requests(paperId).filter((r) => !this.hub.widgets.read(paperId, r.id)),
+      exercises, cards, deepUnderstood: understood,
+      ...(state.pass === 3 || state.pass === 4 ? { canFinish: this.canFinish(paperId, state.pass) } : {}),
+      ...(next ? { nextQuestion: next } : {}),
     };
+  }
+
+  private nextQuestion(state: ReaderState, units: ReaderUnitView[], mastery: ReturnType<typeof conceptMastery>): string | undefined {
+    const items = units.filter((u) => u.read && u.state === "ready").flatMap((u) => u.items);
+    const since = Date.now() - DAY_MS;
+    const target = new Map<string, number>();
+    for (const item of items) {
+      const delayed = (state.answers.get(item.id) ?? []).filter((a) => a.readAt !== undefined && a.at - a.readAt >= DAY_MS).at(-1);
+      if (delayed?.correct && delayed.confidence >= 2) {
+        const level = Math.min(READER_BLOOMS.length - 1, READER_BLOOMS.indexOf(item.bloom) + 1);
+        target.set(item.concept, Math.max(level, target.get(item.concept) ?? 0));
+      }
+    }
+    const distance = (item: ReaderItemView) => Math.abs(READER_BLOOMS.indexOf(item.bloom) - (target.get(item.concept) ?? 0));
+    return items.filter((i) => !i.skipped && (!i.result || i.again || i.result.at <= since))
+      .sort((a, b) => (mastery.get(a.concept)?.mastery ?? 0) - (mastery.get(b.concept)?.mastery ?? 0) || distance(a) - distance(b) || Number(!!b.again) - Number(!!a.again))[0]?.id;
   }
 
   private unitView(paperId: string, u: ReaderUnitDef, view: ReaderView, state: ReaderState, doc: ReaderDoc): ReaderUnitView {
@@ -409,6 +524,8 @@ export class ReaderPasses {
         for (const i of u.items.filter((x) => !x.result)) waiting.push(`question ${i.id}${u === unit ? "" : ` (${u.number ? `§${u.number}` : u.title})`}: “${clip(i.stem, 200)}”`);
       }
     }
+    const exercises = (g.exercises ?? []).filter((e) => !e.skipped && (!e.write || e.kind === "deep" && !e.reference));
+    waiting.unshift(...exercises.map((e) => `${e.kind} ${e.id}: “${clip(e.prompt, 200)}”`));
     if (waiting.length) {
       lines.push("Waiting for the reader (do NOT give these answers or the right option; if asked, help one rung at a time on the hint ladder: 0 a guiding question, 1 a direction, 2 part of the explanation, 3 the full explanation with an example — the reader can also press “Cho xem luôn”):");
       for (const w of waiting.slice(0, 16)) lines.push(`- ${w}`);
@@ -419,10 +536,12 @@ export class ReaderPasses {
       lines.push("Answered lately (the reader has seen the right answer; explain freely):");
       lines.push(...answered);
     }
-    const grading = [...state.writes.values()].filter((w) => w.sent && w.grade === undefined);
+    const grading = [...state.writes.values()].filter((w) => w.sent && w.grade === undefined || w.appealPending);
     if (grading.length) lines.push(`Writes still to grade with reader_grade: ${grading.map((w) => `${w.id} (${WRITE_LABEL[w.kind]})`).join(", ")}.`);
     const weak = g.map.concepts.filter((c) => c.mastery !== undefined && c.mastery < 0.6);
     if (weak.length) lines.push(`Weak concepts: ${weak.map((c) => `${c.name} (${Math.round(c.mastery! * 100)} %)`).join(", ")}.`);
+    const due = g.cards?.filter((c) => c.kept && c.due !== undefined && c.due <= Date.now()).length ?? 0;
+    if (due) lines.push(`Review cards due for this paper: ${due}. Ask the reader to recall before they flip a card.`);
     if (g.misses.length) lines.push(`Misconceptions shown: ${g.misses.slice(0, 5).map((m) => `${m.name}: ${clip(m.note, 120)}`).join(" · ")}.`);
     return lines;
   }
@@ -445,12 +564,19 @@ export class ReaderPasses {
   }
 
   /** What the tutor gets with a write to grade: the rubric and the reference, now that the reader has written theirs. */
-  private gradingBlock(paperId: string, id: string, kind: ReaderWriteKind, unit?: ReaderUnitDef): string {
+  private gradingBlock(paperId: string, id: string, kind: ReaderWriteKind, unit?: ReaderUnitDef, key?: string): string {
     const map = this.map(paperId);
     const pack = unit ? this.pack(paperId, unit.id) : null;
     const ref: string[] = [];
     let parts = "";
     let rubric = "2 = complete and right, with the why; 1 = partly (main idea there, pieces missing or vague); 0 = missing or wrong.";
+    if (EXERCISES.has(kind)) {
+      const task = this.hub.deep.task(paperId, kind as ReaderExerciseKind, key);
+      rubric += `\n${task.rubric?.join("\n") ?? ""}`;
+      if (task.reference) ref.push(task.reference);
+      if (kind === "review") rubric += "\nGive your own brief review and compare it with theirs. A passing review identifies one assumption and one gap.";
+      if (kind === "feynman") rubric += "\nRespond as a third-year student and ask a follow-up at the point that is still unclear.";
+    }
     switch (kind) {
       case "5c":
         parts = ` parts: one per C (${READER_FIVE_C.map((c) => c.key).join(", ")}), each 0/1/2;`;
@@ -486,7 +612,7 @@ export class ReaderPasses {
       `<reader-grade write="${id}" kind="${kind}"${unit ? ` unit="${unit.id}"` : ""}>`,
       `The reader wrote the above in their own words (${WRITE_LABEL[kind]}${unit ? `, ${unitLabel(unit)}` : ""}). Grade it, then call reader_grade(write: "${id}", grade,${parts} missing, feedback).`,
       `Rubric: ${rubric}`,
-      ref.length ? `Reference (the reader has written theirs; show it after your feedback):\n${ref.join("\n")}` : "There is no written reference: grade against the paper (read it first).",
+      ref.length ? `Reference (for grading only; the reader opens the example from the reading tab):\n${ref.join("\n")}` : "There is no written reference: grade against the paper (read it first).",
       "How: solve it yourself first; for each point quote the reader's own words (present / missing / wrong); length earns nothing; be specific about what is missing, with [[anchors]]; end with one follow-up question about the biggest gap instead of handing over the full answer. Reply in Vietnamese.",
       "</reader-grade>",
     ].join("\n");
@@ -527,7 +653,8 @@ function writeView(w: ReaderWrite): ReaderWriteView {
   return {
     id: w.id, kind: w.kind, ...(w.unit ? { unit: w.unit } : {}), ...(w.key ? { key: w.key } : {}), text: w.text, ...(w.fields ? { fields: w.fields } : {}), at: w.at,
     ...(w.grade !== undefined ? { grade: w.grade } : {}), ...(w.parts ? { parts: w.parts } : {}), ...(w.missing ? { missing: w.missing } : {}), ...(w.feedback ? { feedback: w.feedback } : {}),
-    ...(w.sent && w.grade === undefined ? { grading: true as const } : {}),
+    ...(w.sent && w.grade === undefined || w.appealPending ? { grading: true as const } : {}),
+    ...(w.appealed ? { appealed: true } : {}),
   };
 }
 

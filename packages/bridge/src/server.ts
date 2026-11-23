@@ -62,6 +62,8 @@ import { authorChatKey } from "./mentor/place.js";
 import { WorkshopHub, WorkshopSession, type AuthorChat } from "./mentor/workshop.js";
 import { slugOf } from "./mentor/papers.js";
 import { ReaderHub } from "./reader/index.js";
+import { readerLab } from "./reader/lab.js";
+import { qualityStats, runPaperQuiz } from "./reader/eval.js";
 import { ReaderChat, readerOf } from "./reader/chat.js";
 import { paperEventId } from "./mentor/model.js";
 import type { ChatRole } from "./chat-role.js";
@@ -182,6 +184,11 @@ export class Bridge {
     this.quota.start();
     this.mentor = new Mentor({ dir: join(dataDir(), "mentor"), onChange: () => this.emitMentorUpdated(), log: (m) => this.log(m) });
     this.workshops = new WorkshopHub(this.mentor, {
+      readerProgress: (paperId) => {
+        const p = this.reader.passes.summary(paperId);
+        if (!p) return "";
+        return `Easy Read progress: pass ${p.pass}; ${p.done}/${p.total} sections read.${p.mastery !== undefined ? ` Delayed checkpoint mastery: ${Math.round(100 * p.mastery)}%.` : ""}${p.weak.length ? ` Concepts flagged for review: ${JSON.stringify(p.weak)}.` : ""} Use this to tailor the reproduction plan.`;
+      },
       authorChat: (paperId, tabId) => this.authorChat(paperId, tabId),
       exec: async (tabId, code, waitMs) => {
         const target: Target = { kind: "browser", tabId };
@@ -217,6 +224,9 @@ export class Bridge {
       author: () => ({ chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind), log: (m) => this.log(m) }),
       // A misconception about a paper goes into Mentor's book too (asked again in two days).
       misconception: ({ paperId, title, concept, note }) => this.mentor.record({ t: "misconception", attemptId: paperEventId(paperId), tag: `paper:${paperId}:${concept}`.slice(0, 80), note, title: title.slice(0, 200) }),
+      learning: (paperId) => {
+        if (!this.mentor.status().activeToday) this.mentor.record({ t: "paper", attemptId: paperEventId(paperId), paperId, what: "read" });
+      },
     });
     this.mentorPlaces = new MentorPlaces(this.mentor, {
       notebooks: () => this.browserNotebooks,
@@ -706,6 +716,12 @@ export class Bridge {
     }));
     rpc.handle("reader.get", guard<"reader.get">((p) => this.reader.view(String(p.paperId))));
     rpc.handle("reader.list", guard<"reader.list">(() => ({ papers: this.reader.list() })));
+    rpc.handle("reader.related", guard<"reader.related">((p) => this.reader.related.get(String(p.paperId))));
+    rpc.handle("reader.lab.open", guard<"reader.lab.open">((p) => {
+      const paperId = String(p.paperId);
+      const widget = String(p.widget);
+      return this.mentorPlaces.appendReaderLab(p.tabId, `reader: lab ${paperId} ${widget}`, readerLab(this.reader, paperId, widget));
+    }));
     rpc.handle("reader.progress", guard<"reader.progress">((p) => {
       this.readerAgent(String(p.paperId), p.agentId);
       this.reader.progress(String(p.paperId), String(p.section), Number(p.ms));
@@ -725,7 +741,55 @@ export class Bridge {
       return { accepted: true as const };
     }));
     // Passes 1–2 (ER-2): the goal, the passes, answers, the reader's writing graded by the tutor.
-    rpc.handle("reader.guide", guard<"reader.guide">((p) => this.reader.passes.guide(String(p.paperId))));
+    rpc.handle("reader.guide", guard<"reader.guide">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      this.readerAgent(paperId, p.agentId);
+      this.reader.passes.prepareLater(paperId);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.appeal", guard<"reader.appeal">((p) => {
+      const paperId = String(p.paperId);
+      const tutor = readerOf(this.chatById(p.chatId));
+      if (!tutor || tutor.paperId !== paperId) throw new Error("Mở chat gia sư của paper này trước.");
+      this.reader.passes.appeal(paperId, String(p.write), p.reason, tutor.tutorPort());
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.cards.due", guard<"reader.cards.due">(() => this.reader.cards.due()));
+    rpc.handle("reader.cards.keep", guard<"reader.cards.keep">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.cards.keep(paperId, p.card, p.edit);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.cards.drop", guard<"reader.cards.drop">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.cards.drop(paperId, String(p.card));
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.cards.review", guard<"reader.cards.review">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.cards.review(paperId, String(p.card), p.grade);
+      this.emitMentorUpdated();
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.widget.request", guard<"reader.widget.request">((p) => {
+      const paperId = String(p.paperId);
+      this.readerAgent(paperId, p.agentId);
+      this.reader.widgets.request(paperId, p.anchor, p.goal);
+      return this.reader.passes.guide(paperId);
+    }));
+    rpc.handle("reader.peer", guard<"reader.peer">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      this.readerAgent(paperId, p.agentId);
+      this.reader.peers.start(paperId, String(p.note), p.persona, (role) => this.readerHiddenChat(paperId, role, `peer:${p.persona}`));
+      return { accepted: true };
+    }));
+    rpc.handle("reader.widget.answer", guard<"reader.widget.answer">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.widgets.answer(paperId, String(p.id), p.choice);
+      return this.reader.passes.guide(paperId);
+    }));
     rpc.handle("reader.goal", guard<"reader.goal">((p) => {
       this.readerAgent(String(p.paperId), p.agentId);
       return this.reader.passes.goal(String(p.paperId), p.goal);
@@ -866,7 +930,7 @@ export class Bridge {
       const tabId = key ? this.mentorPlaces.tabOf(key) : undefined;
       return t && tabId !== undefined ? { ...t, place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : t;
     };
-    return { ...home, today: placed(home.today), warmup: placed(home.warmup), papers: home.papers.map((p) => this.placedPaper(p)) };
+    return { ...home, today: placed(home.today), warmup: placed(home.warmup), readerCards: this.reader.cards.due(), papers: home.papers.map((p) => this.placedPaper(p)) };
   }
 
   /** A paper with the Chrome tab of its workshop, when it is open. */
@@ -874,7 +938,8 @@ export class Bridge {
     const key = this.mentor.workshopOf(p.id);
     const tabId = key ? this.mentorPlaces.tabOf(key) : undefined;
     const running = this.workshops.running(p.id);
-    const out = { ...p, ...(tabId !== undefined ? { place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : {}) };
+    const reader = this.reader.passes.summary(p.id);
+    const out = { ...p, ...(reader ? { reader } : {}), ...(tabId !== undefined ? { place: { tabId, title: this.browserNotebooks.get(tabId)?.title ?? "" } } : {}) };
     return running ? { ...out, components: out.components.map((c) => (c.status === "planned" ? { ...c, status: "authoring" as const } : c)) } : out;
   }
 
@@ -1049,18 +1114,30 @@ export class Bridge {
    * A hidden chat of easy-read (the author or the checker of a paper): the
    * same agent as the paper's tutor, on no notebook, its events to no one.
    */
-  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker"): AuthorChat {
+  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "peer:experimentalist" | "peer:theorist"): AuthorChat {
     const tutor = [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
     const spec = tutor?.spec ?? findAgent(this.readerAgents.get(paperId) ?? "claude") ?? findAgent("claude");
     if (!spec) throw new Error("No agent to prepare the paper.");
-    const key = `reader-${kind}:${paperId}`;
+    const key = kind.startsWith("peer:") ? `reader-peer:${paperId}:${kind.slice(5)}` : `reader-${kind}:${paperId}`;
     const target: Target = { kind: "vscode", tabId: -2_000_000_000 - ++this.readerSeq };
     const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
     const chat = new Chat(target.tabId, spec, DEFAULT_SETTINGS, host, { notebookKey: key, role });
     this.byToken.set(chat.mcpToken, chat);
+    const inheritedModel = tutor?.options().find((option) => option.category === "model")?.value;
+    const model = kind === "checker" ? process.env.AINB_READER_CHECKER_MODEL || inheritedModel : inheritedModel;
+    let ready = Promise.resolve();
+    if (typeof model === "string" && model) {
+      ready = chat.ensureStarted().then(async () => {
+        const option = chat.options().find((o) => o.category === "model" && o.kind === "select");
+        if (option?.choices?.some((choice) => choice.value === model) && option.value !== model) await chat.setOption(option.id, model);
+      }).catch((e: Error) => this.log(`Reader: cannot select the ${kind} model: ${e.message}`));
+    }
     return {
-      send: (text, context) => chat.send(text, context ? { context } : {}),
+      send: (text, context) => {
+        ready = ready.then(() => { if (chat.status !== "closed") chat.send(text, context ? { context } : {}); });
+      },
       whenIdle: async (signal) => {
+        await ready;
         await new Promise((r) => setTimeout(r, 200));
         await chat.whenIdle(signal);
         if (signal.aborted) await chat.cancel().catch(() => false);
@@ -1270,10 +1347,34 @@ export class Bridge {
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { ok: true, version: BRIDGE_VERSION, extension: !!(this.clients.browser.connection || this.clients.vscode.connection) });
     }
-    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || url.pathname === "/shutdown" || url.pathname === "/mentor/verify" || url.pathname === "/mentor/reload")) return json(res, 404, { error: "not found" });
+    if (!isLoopback(req) || req.method !== "POST" || !(url.pathname.startsWith("/mcp/") || ["/shutdown", "/mentor/verify", "/mentor/reload", "/reader/eval"].includes(url.pathname))) return json(res, 404, { error: "not found" });
     // Browsers attach Origin to cross-site requests; the relay is for local processes only.
     if (req.headers.origin) return json(res, 403, { error: "forbidden" });
     const auth = req.headers.authorization ?? "";
+    if (url.pathname === "/reader/eval") {
+      if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });
+      try {
+        const input = JSON.parse(await readBody(req)) as { paper?: unknown; quiz?: boolean; agent?: unknown };
+        const wanted = String(input.paper ?? "");
+        const arxiv = parseArxivId(wanted);
+        const paperId = this.reader.has(wanted) ? wanted : arxiv ? this.reader.store.ids().find((id) => {
+          try {
+            const known = this.reader.meta(id).arxiv;
+            return known && paperIdFor(known) === paperIdFor(arxiv);
+          } catch { return false; }
+        }) : undefined;
+        if (!paperId) return json(res, 404, { error: "Mở paper và soạn nội dung trong Easy Read trước khi đo." });
+        this.readerAgent(paperId, input.agent);
+        const items = this.reader.passes.items(paperId);
+        const stats = qualityStats(this.reader.store.state(paperId), items);
+        const quiz = input.quiz === true
+          ? await runPaperQuiz(this.reader, paperId, items, (role) => this.readerHiddenChat(paperId, role, "checker"))
+          : undefined;
+        return json(res, 200, { paperId, title: this.reader.meta(paperId).title, ...stats, ...(quiz ? { quiz } : {}) });
+      } catch (e) {
+        return json(res, 400, { error: (e as Error).message });
+      }
+    }
     if (url.pathname === "/shutdown") {
       // `ainb stop`, for a bridge running in the background with no console to Ctrl+C.
       if (!safeEqual(auth.replace(/^Bearer\s+/i, ""), this.opts.token)) return json(res, 401, { error: "bad token" });
