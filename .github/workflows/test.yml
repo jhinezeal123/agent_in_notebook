@@ -53,11 +53,22 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+  reader-e2e:
+    if: inputs.reader_e2e
+    # Playwright 1.56.1's Chromium supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Install Chromium for Easy Read
-        if: inputs.reader_e2e
         run: pnpm --filter @ainb/ui exec playwright install --with-deps chromium
       - name: Test Easy Read in Chromium
-        if: inputs.reader_e2e
         env:
           E2E_READER: "1"
         run: pnpm --filter @ainb/ui exec vitest run test/reader-tab.test.ts
