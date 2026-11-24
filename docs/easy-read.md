@@ -509,7 +509,7 @@ Workflow `test` trên GitHub chạy `pnpm typecheck`, `pnpm build` và `pnpm tes
 - **Người kiểm** là một chat ẩn mới cho mỗi lô (đóng ngay sau), chỉ thấy câu hỏi đã xáo và các đoạn chứa câu trích; trả lời lệch hoặc thấy phương án khác cũng đúng thì câu trả về người soạn (`reader_items_fix`), tối đa hai lần, rồi bỏ. Câu người soạn không sửa thì bỏ luôn. Người kiểm không chạy được thì câu vẫn đến tay bạn, đánh dấu `unchecked`. Chưa tách model nhẹ cho người kiểm (quyết định 4): cùng agent với gia sư.
 - **Sổ lỗi sai**: câu sai với độ chắc ≥ 2 (đoán sai thì không), và hiểu sai gia sư ghi bằng `reader_misconception`, vào sổ của paper (thẻ Sổ lỗi sai của tab đọc) và sổ của Mentor (`misconception`, `attemptId "paper:<id>"`, tag `paper:<id>:<concept>`, kèm tên paper; Mentor hỏi lại sau 2 ngày như hiểu sai trong bài).
 - Các bước sau bổ sung tooltip ký hiệu trong bản HTML, nút **Hỏi tôi một câu**, thanh lượt trong chat và ghi nhận ngày học của Mentor khi người đọc nộp bài, trả lời checkpoint hoặc ôn thẻ.
-- Đặt `AINB_READER_CHECKER_MODEL` trước khi chạy bridge nếu muốn người kiểm dùng mã model khác trong cùng agent ACP. Có thể đặt `AINB_SEMANTIC_SCHOLAR_KEY` để tab Bối cảnh gọi Semantic Scholar.
+- Có thể chọn riêng Agent và Model cho Người kiểm ngay trong menu Agent của khung chat (`reader.settings`, lưu ở `reader.json`); vẫn hỗ trợ đặt `AINB_READER_CHECKER_MODEL` trước khi chạy bridge làm mặc định dự phòng. Có thể đặt `AINB_SEMANTIC_SCHOLAR_KEY` để tab Bối cảnh gọi Semantic Scholar.
 
 ### F.2 Kiểm thử tự động (không dùng agent thật, không mạng)
 

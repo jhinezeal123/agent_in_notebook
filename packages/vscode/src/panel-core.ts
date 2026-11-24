@@ -63,6 +63,7 @@ const BRIDGE_METHODS = new Set([
   "chats.search", "research.quota", "research.closeSession",
   "mentor.status", "mentor.judge", "mentor.hint", "mentor.stage", "mentor.codeReview", "mentor.report",
   "mentor.paper.approve", "mentor.paper.author", "mentor.paper.stopAuthoring",
+  "reader.settings",
 ]);
 
 /** A notebook in a Chrome tab has the tab's id, negated, so it never meets an editor id. */

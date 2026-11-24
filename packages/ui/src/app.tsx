@@ -13,7 +13,7 @@ import { exportChatMarkdown } from "./export-chat.js";
 import { contextualSuggestions, matchSlashCommands, type SlashCommand } from "./slash-commands.js";
 import { resolveLang, t, type LangPref, type UiLang } from "./i18n.js";
 import type { MentorStage } from "@ainb/protocol";
-import type { ReaderGuide } from "@ainb/protocol";
+import type { ReaderGuide, ReaderSettings } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -27,6 +27,8 @@ export function App() {
   const [reader, setReader] = useState<{ paperId: string; title: string } | null>(null);
   const [readerGuide, setReaderGuide] = useState<ReaderGuide | null>(null);
   const [readerRevision, setReaderRevision] = useState(0);
+  const [readerSettings, setReaderSettings] = useState<ReaderSettings>({});
+  const [checkerModelDraft, setCheckerModelDraft] = useState("");
   const readerRef = useRef(reader);
   readerRef.current = reader;
   const [choices, setChoices] = useState<NotebookChoice[]>([]);
@@ -130,6 +132,16 @@ export function App() {
     }, () => {});
     return () => { stale = true; };
   }, [reader?.paperId, tabId, connected, readerRevision]);
+
+  useEffect(() => {
+    let stale = false;
+    if (reader && connected) void client.request<ReaderSettings>("reader.settings", {}).then((s) => {
+      if (stale) return;
+      setReaderSettings(s);
+      setCheckerModelDraft(s.checkerModel ?? "");
+    }, () => {});
+    return () => { stale = true; };
+  }, [reader?.paperId, connected]);
 
   // Load the tab's notebook and chat whenever the tab or the connection changes.
   useEffect(() => {
@@ -335,6 +347,13 @@ export function App() {
   };
 
   const manageAgents = () => void run(client.request("studio.open", { view: "settings", section: "agents" }));
+  const updateReaderSettings = (patch: { checkerAgentId?: string; checkerModel?: string }) => {
+    void run(client.request<ReaderSettings>("reader.settings", patch)).then((res) => {
+      if (!res) return;
+      setReaderSettings(res);
+      setCheckerModelDraft(res.checkerModel ?? "");
+    });
+  };
 
   const actions: PartActions = useMemo(
     () => ({
@@ -698,6 +717,68 @@ export function App() {
                       )}
                     </div>
                   ))}
+                  {reader && (() => {
+                    const checkerSameAgent = !readerSettings.checkerAgentId || readerSettings.checkerAgentId === prefs.agentId;
+                    const tutorModelOpt = checkerSameAgent ? modelOptions.find((o) => o.category === "model" && o.kind === "select" && (o.choices?.length ?? 0) > 0) : undefined;
+                    const baseDefault = checkerSameAgent ? t("options.sameAsTutor", lang) : t("options.agentDefault", lang);
+                    const defaultModelLabel = readerSettings.checkerEnvModel ? `${baseDefault} (env: ${readerSettings.checkerEnvModel})` : baseDefault;
+                    return (
+                      <>
+                        <div class="options-caption">{t("options.checkerCaption", lang)}</div>
+                        <div class="option-row">
+                          <span class="option-name">{t("options.checkerAgent", lang)}</span>
+                          <Picker
+                            label={t("options.checkerAgent", lang)}
+                            value={readerSettings.checkerAgentId ?? ""}
+                            options={[
+                              { value: "", label: t("options.sameAsTutor", lang) },
+                              ...agents.map((a) => ({ value: a.id, label: a.available ? a.name : `${a.name} (not installed)`, disabled: !a.available, title: a.reason })),
+                              ...(readerSettings.checkerAgentId && !agents.some((a) => a.id === readerSettings.checkerAgentId)
+                                ? [{ value: readerSettings.checkerAgentId, label: readerSettings.checkerAgentId }]
+                                : []),
+                            ]}
+                            onChange={(id) => updateReaderSettings({ checkerAgentId: id, checkerModel: "" })}
+                          />
+                        </div>
+                        <div class="option-row">
+                          <span class="option-name">{t("options.checkerModel", lang)}</span>
+                          {tutorModelOpt ? (
+                            <Picker
+                              label={t("options.checkerModel", lang)}
+                              value={readerSettings.checkerModel ?? ""}
+                              options={[
+                                { value: "", label: defaultModelLabel },
+                                ...(tutorModelOpt.choices ?? []).map((c) => ({ value: c.value, label: c.name, title: c.description ?? undefined })),
+                                ...(readerSettings.checkerModel && !(tutorModelOpt.choices ?? []).some((c) => c.value === readerSettings.checkerModel)
+                                  ? [{ value: readerSettings.checkerModel, label: readerSettings.checkerModel }]
+                                  : []),
+                              ]}
+                              onChange={(v) => updateReaderSettings({ checkerModel: v })}
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              class="option-input"
+                              aria-label={t("options.checkerModel", lang)}
+                              value={checkerModelDraft}
+                              placeholder={readerSettings.checkerEnvModel ? `env: ${readerSettings.checkerEnvModel}` : t("options.modelPlaceholder", lang)}
+                              onInput={(e) => setCheckerModelDraft(e.currentTarget.value)}
+                              onBlur={() => {
+                                const v = checkerModelDraft.trim();
+                                if (v !== (readerSettings.checkerModel ?? "")) updateReaderSettings({ checkerModel: v });
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  e.currentTarget.blur();
+                                }
+                              }}
+                            />
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                   <div class="option-row">
                     <span class="option-name">{t("options.language", lang)}</span>
                     <Picker
@@ -1368,9 +1449,14 @@ function OptionsMenu({ label, children }: { label: string; children: ComponentCh
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  const close = () => {
+    if (document.activeElement instanceof HTMLElement && root.current?.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    setOpen(false);
+  };
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
     const away = (e: Event) => { if (!root.current?.contains(e.target as Node)) close(); };
     const key = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -1386,7 +1472,7 @@ function OptionsMenu({ label, children }: { label: string; children: ComponentCh
   }, [open]);
   return (
     <span class="options" ref={root}>
-      <button ref={button} class="options-btn" aria-haspopup="dialog" aria-expanded={open} aria-label="Agent and options" title={`Agent: ${label}. Change the agent and its options.`} onClick={() => setOpen(!open)}>
+      <button ref={button} class="options-btn" aria-haspopup="dialog" aria-expanded={open} aria-label="Agent and options" title={`Agent: ${label}. Change the agent and its options.`} onClick={() => (open ? close() : setOpen(true))}>
         <Icon name="sliders" /><span>{label}</span>
       </button>
       {open && <div class="options-menu" role="dialog" aria-label="Agent and options">{children}</div>}

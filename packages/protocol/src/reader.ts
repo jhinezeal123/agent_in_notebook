@@ -570,6 +570,16 @@ export interface ReaderRelated {
 
 export type ReaderMapPart = "roles" | "fivec" | "concepts" | "notation" | "background" | "pretest" | "units";
 
+/** Easy-read settings saved on the bridge (reader.json). */
+export interface ReaderSettings {
+  /** Agent id for the blind question checker; absent = same as the tutor. */
+  checkerAgentId?: string;
+  /** Model value for the blind question checker; absent = AINB_READER_CHECKER_MODEL or tutor's model (when same agent). */
+  checkerModel?: string;
+  /** Read-only hint: AINB_READER_CHECKER_MODEL when set in the bridge's environment. */
+  checkerEnvModel?: string;
+}
+
 /** Points for an answer by how sure the reader was (Gardner-Medwin): 1 → +1/0, 2 → +2/−2, 3 → +3/−6. */
 export function readerPoints(correct: boolean, confidence: 1 | 2 | 3): number {
   return correct ? confidence : ([0, 0, -2, -6] as const)[confidence];

@@ -385,6 +385,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .option-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .option-row .picker { width: 100%; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--fg); }
 .option-row .picker select { width: 100%; max-width: none; padding: 4px 20px 4px 8px; }
+.option-row .option-input { width: 100%; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: var(--r-md); background: var(--input-bg); color: var(--fg); font: inherit; font-size: 12px; box-sizing: border-box; }
 .option-row input.switch { justify-self: end; }
 .send { width: 28px; height: 28px; border: 1px solid transparent; border-radius: 8px; display: grid; place-items: center; padding: 0; cursor: pointer; background: var(--btn-bg); color: var(--btn-fg); flex: none; transition: background .12s; }
 .send:hover:not(:disabled) { background: var(--btn-hover); }

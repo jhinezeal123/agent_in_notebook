@@ -4,7 +4,7 @@
 // A tool step can `capture` {name: regex} from its result; later args use it as {{name}}.
 // Every tool result is echoed back as a message chunk "RESULT <tool>: <text>".
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import { agent, ndJsonStream } from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -70,6 +70,10 @@ const app = agent({ name: "fake-agent" })
     s.cancelled = false;
     s.turns++;
     const text = params.prompt.map((b) => (b.type === "text" ? b.text : "")).join("");
+    if (process.env.FAKE_AGENT_LOG) {
+      const role = text.includes("<reader-checker>") ? "checker" : text.includes("<reader-author>") ? "author" : "other";
+      appendFileSync(process.env.FAKE_AGENT_LOG, `${JSON.stringify({ tag: process.env.FAKE_AGENT_TAG ?? "fake", model, role })}\n`);
+    }
     if (text.includes("<reader>\n")) s.reader = true;
     let said = false;
     const emitText = (t) =>

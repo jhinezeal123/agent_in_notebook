@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ChatSnapshot, MessagePatch, ReaderGuide, ReaderLibraryItem, ReaderView } from "@ainb/protocol";
+import type { ChatSnapshot, MessagePatch, ReaderGuide, ReaderLibraryItem, ReaderSettings, ReaderView } from "@ainb/protocol";
 import { itemId, rightChoice, type ItemInput } from "../src/reader/items.js";
 import { Bridge } from "../src/server.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
@@ -24,6 +24,7 @@ const NO_ORX = { knownPorts: [], locate: () => ({ missing: "OpenResearch not use
 const READER_TAB = 1_000_000_001;
 
 let home: string;
+let agentLog: string;
 let bridge: Bridge;
 let port: number;
 let editor: FakeExtension;
@@ -35,7 +36,11 @@ const script = (steps: unknown[]) => `SCRIPT: ${JSON.stringify(steps)}`;
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "ainb-reader-bridge-"));
   process.env.AINB_HOME = home;
-  writeFileSync(join(home, "agents.json"), JSON.stringify([{ id: "fake", name: "Fake Agent", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 3 }]));
+  agentLog = join(home, "agent-log.jsonl");
+  writeFileSync(join(home, "agents.json"), JSON.stringify([
+    { id: "fake", name: "Fake Agent", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 3, env: { FAKE_AGENT_LOG: agentLog, FAKE_AGENT_TAG: "fake" } },
+    { id: "fake-checker", name: "Fake Checker", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 3, env: { FAKE_AGENT_LOG: agentLog, FAKE_AGENT_TAG: "fake-checker" } },
+  ]));
   bridge = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: NO_ORX, log: () => {} });
   port = await bridge.listen();
   editor = new FakeExtension(new FakeNotebook([]), 300);
@@ -304,4 +309,109 @@ describe("passes 1–2 through the bridge (ER-2)", () => {
     expect(unit.recall).toMatchObject({ grade: 2, feedback: "Đủ ý chính [[page-3]]." });
     expect(unit.points!.map((p) => p.text)).toEqual(["Scaled dot-product attention", "Không dùng recurrence"]);
   });
+});
+
+describe("checker settings (reader.settings)", () => {
+  const ARCH = "We use scaled dot-product attention.";
+  const BLEU = "The Transformer reaches 28.4 BLEU on English-to-German.";
+  const ev = (page: number, quote: string) => [{ anchor: `page-${page}`, quote }];
+  const opt = (text: string, correct: boolean, why: string) => ({ text, correct, why });
+  const ITEMS: ItemInput[] = [
+    { concept: "scaled-dot", bloom: "understand", kind: "mcq", stem: "Transformer dùng loại attention nào trong kiến trúc của nó?", options: [opt("Scaled dot-product", true, "Đúng như mục 3"), opt("Additive attention", false, "Nhầm với attention của Bahdanau"), opt("Hard attention", false, "Nhầm với attention chọn một vị trí")], evidence: ev(3, ARCH), explain: "Mục 3 [[page-3]].", difficulty: 2 },
+    { concept: "attention", bloom: "apply", kind: "mcq", stem: "Với một query, bước đầu tiên để tính trọng số của scaled dot-product là gì?", options: [opt("Nhân vô hướng query với từng key", true, "Dot-product"), opt("Cộng query với key rồi qua tanh", false, "Nhầm với additive attention"), opt("Lấy trung bình các value", false, "Bỏ qua bước so khớp query–key")], evidence: ev(3, ARCH), explain: "Dot-product [[page-3]].", difficulty: 3 },
+    { concept: "attention", bloom: "remember", kind: "mcq", stem: "Cơ chế được mục Model Architecture nêu tên là cơ chế gì?", options: [opt("Attention", true, "Đúng tên"), opt("Convolution", false, "Nhầm với mô hình CNN"), opt("Recurrence", false, "Nhầm với mô hình RNN")], evidence: ev(3, ARCH), explain: "[[page-3]].", difficulty: 1 },
+  ];
+  const MAP = {
+    roles: [{ anchor: "page-2", role: "objective" }, { anchor: "page-3", role: "method" }, { anchor: "page-4", role: "result" }],
+    fivec: { category: "Kiến trúc mới.", context: "RNN và attention.", correctness: "Hợp lý.", contributions: "Transformer chỉ dùng attention [[page-3]].", clarity: "Rõ." },
+    concepts: [{ id: "attention", name: "Attention" }, { id: "scaled-dot", name: "Scaled dot-product" }, { id: "bleu", name: "BLEU" }],
+    notation: [{ symbol: "d_k", meaning: "số chiều của key" }],
+    background: [],
+    pretest: [
+      { section: "page-3", stem: "Đoán xem Transformer dùng loại attention nào?", answer: "Scaled dot-product.", explain: "[[page-3]]", evidence: ev(3, ARCH) },
+      { section: "page-4", stem: "Đoán điểm BLEU Anh–Đức của Transformer?", answer: "28.4", explain: "[[page-4]]", evidence: ev(4, BLEU) },
+    ],
+    units: [{ title: "Introduction", sections: ["page-1", "page-2"] }, { title: "Model Architecture", sections: ["page-3"] }, { title: "Results", sections: ["page-4"] }],
+  };
+  const readLog = () => existsSync(agentLog) ? readFileSync(agentLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { tag: string; model: string; role: string }) : [];
+  const settled = async (id: string, what: string, ok: (g: ReaderGuide) => boolean) => {
+    const end = Date.now() + 30_000;
+    let g = await editor.request<ReaderGuide>("reader.guide", { paperId: id });
+    while (!(ok(g) && g.author.state !== "running")) {
+      if (g.author.state === "failed") throw new Error(`author failed waiting for ${what}: ${JSON.stringify(g.author)}`);
+      if (Date.now() > end) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(g.author)}`);
+      await new Promise((r) => setTimeout(r, 100));
+      g = await editor.request<ReaderGuide>("reader.guide", { paperId: id });
+    }
+    return g;
+  };
+  async function openSamplePaper(name: string) {
+    const pdf = join(home, name);
+    writeFileSync(pdf, `%PDF-1.7\n% ${name}\n`);
+    const id = (await editor.request<ReaderView>("reader.open", { source: { pdfPath: pdf } })).paperId;
+    await editor.request("reader.pdfText", { paperId: id, title: name, pages: ["Cover", "1 Introduction\nRecurrent models are slow to train on long sequences.", `3 Model Architecture\n${ARCH}`, `5 Results\n${BLEU}`] });
+    return id;
+  }
+
+  beforeAll(() => {
+    const L = "ABC";
+    const answers = ITEMS.map((i) => {
+      const item = { ...i, id: itemId("page-3", i), unit: "page-3" };
+      return { id: item.id, bloom: i.bloom, options: rightChoice(item).options!.map((n) => L[n]), note: "from the passage" };
+    });
+    const file = join(home, "fake-reader-settings-author.json");
+    writeFileSync(file, JSON.stringify({
+      "reader:map": [{ tool: "reader_map_write", args: MAP }],
+      "reader:checkpoint:page-1": [{ tool: "reader_items_write", args: { unit: "page-1", guide: "Paper giải bài toán gì?", light: "Chỉ mở đầu.", points: [{ text: "RNN chậm", anchor: "page-2" }, { text: "Cần song song", anchor: "page-2" }], items: [] } }],
+      "reader:checkpoint:page-3": [{ tool: "reader_items_write", args: { unit: "page-3", guide: "Attention được tính thế nào?", points: [{ text: "Scaled dot-product attention", anchor: "page-3" }, { text: "Không dùng recurrence", anchor: "page-3" }], items: ITEMS } }],
+      "reader:check": [{ tool: "reader_check_write", args: { answers } }],
+    }));
+    process.env.FAKE_AUTHOR = file;
+  });
+
+  afterAll(async () => {
+    await editor.request("reader.settings", { checkerAgentId: "", checkerModel: "" }).catch(() => {});
+    delete process.env.FAKE_AUTHOR;
+    delete process.env.AINB_READER_CHECKER_MODEL;
+  });
+
+  it("reads defaults, persists to reader.json, validates agent ids, reflects env hint, and clears fields", async () => {
+    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual({});
+    await expect(editor.request("reader.settings", { checkerAgentId: "no-such-agent" })).rejects.toThrow(/Unknown agent/);
+    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "smart" })).toEqual({ checkerAgentId: "fake-checker", checkerModel: "smart" });
+    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ checkerAgentId: "fake-checker", checkerModel: "smart" });
+    process.env.AINB_READER_CHECKER_MODEL = "env-fast";
+    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual({ checkerAgentId: "fake-checker", checkerModel: "smart", checkerEnvModel: "env-fast" });
+    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "", checkerModel: "" })).toEqual({ checkerEnvModel: "env-fast" });
+    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({});
+    delete process.env.AINB_READER_CHECKER_MODEL;
+  });
+
+  it("runs the blind checker on the configured agent and model", async () => {
+    const id = await openSamplePaper("checker-custom.pdf");
+    await editor.request("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "smart" });
+    const logBefore = readLog().length;
+    await editor.request("reader.goal", { paperId: id, goal: "use", agentId: "fake" });
+    await settled(id, "the map", (x) => x.map.has.pretest);
+    await editor.request("reader.pass", { paperId: id, pass: 2, agentId: "fake" });
+    await settled(id, "the checkpoints", (x) => x.units.filter((u) => u.state === "ready").length === 2);
+    const entries = readLog().slice(logBefore);
+    expect(entries.filter((e) => e.role === "author").every((e) => e.tag === "fake")).toBe(true);
+    expect(entries.filter((e) => e.role === "checker")).toEqual([{ tag: "fake-checker", model: "smart", role: "checker" }]);
+  }, 60_000);
+
+  it("does not inherit the tutor's model when the checker runs on a different agent and checkerModel is unset", async () => {
+    const id = await openSamplePaper("checker-no-inherit.pdf");
+    const snap = await editor.request<ChatSnapshot>("chat.open", { tabId: READER_TAB + 2, agentId: "fake", settings: { scope: "auto", review: false, targetCellIds: [] }, reader: { paperId: id } });
+    await editor.request("chat.option", { chatId: snap.chatId, optionId: "model", value: "smart" });
+    await editor.request("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "" });
+    const logBefore = readLog().length;
+    await editor.request("reader.goal", { paperId: id, goal: "use", agentId: "fake" });
+    await settled(id, "the map", (x) => x.map.has.pretest);
+    await editor.request("reader.pass", { paperId: id, pass: 2, agentId: "fake" });
+    await settled(id, "the checkpoints", (x) => x.units.filter((u) => u.state === "ready").length === 2);
+    const entries = readLog().slice(logBefore);
+    expect(entries.some((e) => e.role === "author" && e.tag === "fake" && e.model === "smart")).toBe(true);
+    expect(entries.filter((e) => e.role === "checker")).toEqual([{ tag: "fake-checker", model: "fast", role: "checker" }]);
+  }, 60_000);
 });

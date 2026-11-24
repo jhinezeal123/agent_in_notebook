@@ -5,7 +5,7 @@
 import type { ChatImageMime } from "./chat-image.js";
 import type { MentorAttemptDetail, MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
-import type { ReaderAnchor, ReaderAnswerResult, ReaderAskKind, ReaderCardGrade, ReaderCardView, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderView, ReaderWriteKind } from "./reader.js";
+import type { ReaderAnchor, ReaderAnswerResult, ReaderAskKind, ReaderCardGrade, ReaderCardView, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderSettings, ReaderView, ReaderWriteKind } from "./reader.js";
 import type { AppliedChange, CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
@@ -515,6 +515,8 @@ export interface BridgeMethods {
   "reader.report": { params: { paperId: string; item: string; reason: string }; result: ReaderGuide };
   /** The hidden author: stop it, or try a failed task again. */
   "reader.author": { params: { paperId: string; action: "stop" | "retry"; agentId?: string }; result: ReaderGuide };
+  /** Easy-read settings (checker agent and model): omit fields to read; pass empty string to clear a field. */
+  "reader.settings": { params: { checkerAgentId?: string; checkerModel?: string }; result: ReaderSettings };
 }
 
 /**

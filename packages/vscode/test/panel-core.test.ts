@@ -132,4 +132,10 @@ describe("reading tabs (easy-read)", () => {
     expect(c.activeTab).toBeNull();
     expect(events.filter((e) => e.event === "activeTab").map((e) => e.params)).toEqual([TAB, null]);
   });
+
+  it("forwards reader.settings to the bridge", async () => {
+    const { c, requests } = withReader();
+    await c.handle("reader.settings", { checkerAgentId: "codex", checkerModel: "gpt-5-mini" });
+    expect(requests).toEqual([["reader.settings", { checkerAgentId: "codex", checkerModel: "gpt-5-mini" }]]);
+  });
 });

@@ -82,6 +82,29 @@ export function resetToken(): BridgeConfig {
   return next;
 }
 
+function loadJsonObject(file: string): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return {}; // none yet
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch (e) {
+    keepBroken(file, e);
+    return {};
+  }
+}
+
+/** Write a config object atomically, keeping fields this version does not know. */
+function saveJsonObject(file: string, known: readonly string[], cfg: Record<string, unknown>): void {
+  const old = loadJsonObject(file);
+  const kept = Object.fromEntries(Object.entries(old).filter(([k]) => !known.includes(k)));
+  writeAtomic(file, JSON.stringify({ ...kept, ...cfg }, null, 2), 0o600);
+}
+
 /** OpenResearch settings, in research.json. */
 export interface ResearchConfig {
   /** The orx binary to run; unset: look on PATH and in the usual install places. */
@@ -97,52 +120,39 @@ export interface ResearchConfig {
 }
 
 export function loadResearchConfig(): ResearchConfig {
-  const file = join(dataDir(), "research.json");
-  let raw: string;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    return {}; // none yet
-  }
-  let cfg: any;
-  try {
-    cfg = JSON.parse(raw);
-  } catch (e) {
-    // Losing research.json silently would move notebooks to a new Scratch; keep the broken file.
-    keepBroken(file, e);
-    return {};
-  }
+  const cfg = loadJsonObject(join(dataDir(), "research.json"));
   const out: ResearchConfig = {};
-  if (typeof cfg?.orxPath === "string" && cfg.orxPath) out.orxPath = cfg.orxPath;
-  if (cfg?.env && typeof cfg.env === "object" && !Array.isArray(cfg.env)) {
+  if (typeof cfg.orxPath === "string" && cfg.orxPath) out.orxPath = cfg.orxPath;
+  if (cfg.env && typeof cfg.env === "object" && !Array.isArray(cfg.env)) {
     const env = Object.fromEntries(Object.entries(cfg.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
     if (Object.keys(env).length) out.env = env;
   }
-  if (typeof cfg?.scratchProjectId === "string" && cfg.scratchProjectId) out.scratchProjectId = cfg.scratchProjectId;
+  if (typeof cfg.scratchProjectId === "string" && cfg.scratchProjectId) out.scratchProjectId = cfg.scratchProjectId;
   return out;
 }
 
 /** Write research.json, keeping fields this version does not know. */
 export function saveResearchConfig(cfg: ResearchConfig): void {
-  const file = join(dataDir(), "research.json");
-  let old: Record<string, unknown> = {};
-  let raw: string | undefined;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    // none yet
-  }
-  if (raw !== undefined) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) old = parsed;
-    } catch (e) {
-      keepBroken(file, e);
-    }
-  }
-  const known = ["orxPath", "env", "scratchProjectId"];
-  const kept = Object.fromEntries(Object.entries(old).filter(([k]) => !known.includes(k)));
-  writeAtomic(file, JSON.stringify({ ...kept, ...cfg }, null, 2), 0o600);
+  saveJsonObject(join(dataDir(), "research.json"), ["orxPath", "env", "scratchProjectId"], cfg as Record<string, unknown>);
+}
+
+/** Easy-read settings, in reader.json. */
+export interface ReaderConfig {
+  checkerAgentId?: string;
+  checkerModel?: string;
+}
+
+export function loadReaderConfig(): ReaderConfig {
+  const cfg = loadJsonObject(join(dataDir(), "reader.json"));
+  const out: ReaderConfig = {};
+  if (typeof cfg.checkerAgentId === "string" && cfg.checkerAgentId) out.checkerAgentId = cfg.checkerAgentId;
+  if (typeof cfg.checkerModel === "string" && cfg.checkerModel) out.checkerModel = cfg.checkerModel;
+  return out;
+}
+
+/** Write reader.json, keeping fields this version does not know. */
+export function saveReaderConfig(cfg: ReaderConfig): void {
+  saveJsonObject(join(dataDir(), "reader.json"), ["checkerAgentId", "checkerModel"], cfg as Record<string, unknown>);
 }
 
 /** A user-defined ACP agent from agents.json. */

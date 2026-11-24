@@ -40,7 +40,7 @@ import {
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
-import { BRIDGE_VERSION, dataDir, loadResearchConfig, removeCustomAgent, saveResearchConfig } from "./config.js";
+import { BRIDGE_VERSION, dataDir, loadReaderConfig, loadResearchConfig, removeCustomAgent, saveReaderConfig, saveResearchConfig, type ReaderConfig } from "./config.js";
 import { Orx, type OrxOptions } from "./research/orx.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
@@ -845,6 +845,29 @@ export class Bridge {
       else this.reader.author.retry(paperId);
       return this.reader.passes.guide(paperId);
     }));
+    rpc.handle("reader.settings", guard<"reader.settings">((p) => {
+      if (p?.checkerAgentId !== undefined || p?.checkerModel !== undefined) {
+        const next: ReaderConfig = { ...loadReaderConfig() };
+        if (p.checkerAgentId !== undefined) {
+          const id = typeof p.checkerAgentId === "string" ? p.checkerAgentId.trim() : "";
+          if (id) {
+            if (!findAgent(id)) throw new Error(`Unknown agent ${id}`);
+            next.checkerAgentId = id;
+          } else {
+            delete next.checkerAgentId;
+          }
+        }
+        if (p.checkerModel !== undefined) {
+          const model = typeof p.checkerModel === "string" ? p.checkerModel.trim() : "";
+          if (model) next.checkerModel = model;
+          else delete next.checkerModel;
+        }
+        saveReaderConfig(next);
+      }
+      const saved = loadReaderConfig();
+      const envModel = process.env.AINB_READER_CHECKER_MODEL;
+      return { ...saved, ...(envModel ? { checkerEnvModel: envModel } : {}) };
+    }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
       if (p?.orxPath !== undefined) {
@@ -1128,20 +1151,34 @@ export class Bridge {
    */
   private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "peer:experimentalist" | "peer:theorist"): AuthorChat {
     const tutor = [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
-    const spec = tutor?.spec ?? findAgent(this.readerAgents.get(paperId) ?? "claude") ?? findAgent("claude");
+    const readerCfg = kind === "checker" ? loadReaderConfig() : {};
+    const fallbackSpec = tutor?.spec ?? findAgent(this.readerAgents.get(paperId) ?? "claude") ?? findAgent("claude");
+    let spec = fallbackSpec;
+    if (kind === "checker" && readerCfg.checkerAgentId) {
+      const configured = findAgent(readerCfg.checkerAgentId);
+      if (configured) spec = configured;
+      else this.log(`Reader: configured checker agent "${readerCfg.checkerAgentId}" is not available; falling back.`);
+    }
     if (!spec) throw new Error("No agent to prepare the paper.");
     const key = kind.startsWith("peer:") ? `reader-peer:${paperId}:${kind.slice(5)}` : `reader-${kind}:${paperId}`;
     const target: Target = { kind: "vscode", tabId: -2_000_000_000 - ++this.readerSeq };
     const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
     const chat = new Chat(target.tabId, spec, DEFAULT_SETTINGS, host, { notebookKey: key, role });
     this.byToken.set(chat.mcpToken, chat);
-    const inheritedModel = tutor?.options().find((option) => option.category === "model")?.value;
-    const model = kind === "checker" ? process.env.AINB_READER_CHECKER_MODEL || inheritedModel : inheritedModel;
+    const tutorModel = tutor?.options().find((option) => option.category === "model")?.value;
+    const sameAgentAsTutor = !!tutor && spec.id === tutor.spec.id;
+    const model = kind === "checker"
+      ? readerCfg.checkerModel || process.env.AINB_READER_CHECKER_MODEL || (sameAgentAsTutor ? tutorModel : undefined)
+      : tutorModel;
     let ready = Promise.resolve();
     if (typeof model === "string" && model) {
       ready = chat.ensureStarted().then(async () => {
         const option = chat.options().find((o) => o.category === "model" && o.kind === "select");
-        if (option?.choices?.some((choice) => choice.value === model) && option.value !== model) await chat.setOption(option.id, model);
+        if (option?.choices?.some((choice) => choice.value === model)) {
+          if (option.value !== model) await chat.setOption(option.id, model);
+        } else if (option) {
+          this.log(`Reader: model "${model}" is not offered by ${spec.name} for ${kind}; using agent default.`);
+        }
       }).catch((e: Error) => this.log(`Reader: cannot select the ${kind} model: ${e.message}`));
     }
     return {

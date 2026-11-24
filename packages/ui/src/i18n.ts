@@ -63,6 +63,12 @@ const STRINGS = {
     "composer.stop": "Stop",
     "a11y.turnDone": "Agent finished responding.",
     "options.language": "Language",
+    "options.checkerCaption": "Question checker",
+    "options.checkerAgent": "Checker agent",
+    "options.checkerModel": "Checker model",
+    "options.sameAsTutor": "Same as tutor",
+    "options.agentDefault": "Agent default",
+    "options.modelPlaceholder": "Model ID (optional)",
   },
   vi: {
     "setup.title": "Kết nối với bridge",
@@ -116,6 +122,12 @@ const STRINGS = {
     "composer.stop": "Dừng",
     "a11y.turnDone": "Agent đã trả lời xong.",
     "options.language": "Ngôn ngữ",
+    "options.checkerCaption": "Người kiểm (Easy-read)",
+    "options.checkerAgent": "Agent kiểm",
+    "options.checkerModel": "Model kiểm",
+    "options.sameAsTutor": "Theo gia sư",
+    "options.agentDefault": "Mặc định của agent",
+    "options.modelPlaceholder": "Mã model (tuỳ chọn)",
   },
 } as const;
 
