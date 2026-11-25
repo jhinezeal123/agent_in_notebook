@@ -6,32 +6,51 @@
 import DOMPurify from "dompurify";
 import katex from "katex";
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { ReaderAnchor, ReaderSectionView } from "@ainb/protocol";
+import type { ReaderAnchor, ReaderSectionView, ReaderTranslationUnits } from "@ainb/protocol";
 import { quoteRange } from "./anchors.js";
 import { flash, jpegOf, READING_LINE, scrollToBox, type DocDecor, type DocHandle, type ReaderInit, type ReaderPageHost } from "./host.js";
 
 const MATH_BATCH = 120;
 
-export function HtmlDoc({ init, host, scroller, onReady, onSection }: {
+export function HtmlDoc({ init, host, scroller, onReady, onSection, lang = "en", translationRev = 0 }: {
   init: ReaderInit;
   host: ReaderPageHost;
   scroller: () => HTMLElement | null;
   onReady: (doc: DocHandle) => void;
   onSection: (id: string | undefined) => void;
+  /** "vi": the page with its units numbered, the Vietnamese put in place of the English as it comes. */
+  lang?: "en" | "vi";
+  /** Changes whenever units were translated: they are asked for again. */
+  translationRev?: number;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<{ error?: string; loading: boolean }>({ loading: true });
+  /** Whether the page shown is the translation's, and what of it is in Vietnamese now. */
+  const shown = useRef<Shown | null>(null);
 
   useEffect(() => {
     let stale = false;
     const el = root.current!;
+    shown.current = null;
+    setState({ loading: true });
     void (async () => {
       try {
-        const res = await fetch(`${init.base}doc.html`);
+        let vi = lang === "vi";
+        let res = await fetch(`${init.base}${vi ? TRANSLATION_PAGE : "doc.html"}`);
+        // The translation's page is not written yet: the English, as it is.
+        if (!res.ok && vi) {
+          vi = false;
+          res = await fetch(`${init.base}doc.html`);
+        }
         if (!res.ok) throw new Error(`Không đọc được bản HTML của paper (${res.status}).`);
         const html = await res.text();
+        const units = vi ? (await host.request<ReaderTranslationUnits>("reader.translation").catch(() => null))?.units ?? {} : {};
         if (stale) return;
         el.innerHTML = clean(html, init.base);
+        el.classList.toggle("er-doc-vi", vi);
+        const now: Shown = { vi, units: {}, originals: new Map() };
+        shown.current = now;
+        if (vi) translate(el, units, now, init.base);
         setState({ loading: false });
         onReady(handle(el, init, scroller));
         await typeset(el, () => stale);
@@ -40,7 +59,19 @@ export function HtmlDoc({ init, host, scroller, onReady, onSection }: {
       }
     })();
     return () => { stale = true; };
-  }, [init.base]);
+  }, [init.base, lang]);
+
+  // More units translated (the translator is running): put in place, their formulas drawn.
+  useEffect(() => {
+    const now = shown.current;
+    if (!now?.vi || !translationRev) return;
+    let stale = false;
+    void host.request<ReaderTranslationUnits>("reader.translation").then(async ({ units }) => {
+      if (stale || shown.current !== now || !root.current) return;
+      for (const el of translate(root.current, units, now, init.base)) await typeset(el, () => stale);
+    }, () => {});
+    return () => { stale = true; };
+  }, [translationRev]);
 
   // The section in view, as the reader scrolls.
   useEffect(() => {
@@ -58,6 +89,15 @@ export function HtmlDoc({ init, host, scroller, onReady, onSection }: {
   }, [init.base, init.view.sections.length]);
 
   const onClick = (e: MouseEvent) => {
+    // Alt+click on a translated passage: its English, and back.
+    if (e.altKey && shown.current?.vi) {
+      const unit = (e.target as Element).closest?.<HTMLElement>("[data-er-u]");
+      if (unit) {
+        e.preventDefault();
+        void toggleOriginal(unit, shown.current, init.base);
+        return;
+      }
+    }
     const a = (e.target as Element).closest?.("a[href]");
     if (!(a instanceof HTMLAnchorElement)) return;
     const href = a.getAttribute("href") ?? "";
@@ -82,6 +122,73 @@ export function HtmlDoc({ init, host, scroller, onReady, onSection }: {
       <div ref={root} class="er-doc er-doc-html ltx_page_content" onClick={onClick} />
     </>
   );
+}
+
+/** The page the translation is shown on: doc.html with each unit's element numbered (data-er-u). */
+const TRANSLATION_PAGE = "translation/units.html";
+
+interface Shown {
+  vi: boolean;
+  /** Each unit's Vietnamese as it is on the page now. */
+  units: Record<string, string>;
+  /** Each translated unit's English, for Alt+click. */
+  originals: Map<string, string>;
+}
+
+/** A unit's element in Vietnamese (`html` cleaned like the rest of the page). */
+function putVi(el: HTMLElement, html: string, base: string): void {
+  el.innerHTML = clean(html, base);
+  el.setAttribute("data-er-vi", "");
+  el.lang = "vi";
+  el.classList.remove("er-original");
+}
+
+/**
+ * The Vietnamese of each unit in place of its English, in the page's order.
+ * A unit put in again (a paragraph whose footnote is a unit of its own) has
+ * its inner units put in again too. Returns the elements changed, for their
+ * formulas to be drawn.
+ */
+function translate(root: HTMLElement, units: Record<string, string>, now: Shown, base: string): HTMLElement[] {
+  const changed: HTMLElement[] = [];
+  const put = (el: HTMLElement) => {
+    const n = el.dataset.erU ?? "";
+    const html = units[n];
+    if (!html || (now.units[n] === html && el.hasAttribute("data-er-vi"))) return;
+    // The reader is looking at this one's English (Alt+click): it stays so until clicked again.
+    if (el.classList.contains("er-original")) {
+      now.units[n] = html;
+      return;
+    }
+    if (!now.originals.has(n)) now.originals.set(n, el.innerHTML);
+    putVi(el, html, base);
+    now.units[n] = html;
+    changed.push(el);
+    for (const inner of el.querySelectorAll<HTMLElement>("[data-er-u]")) put(inner);
+  };
+  for (const el of root.querySelectorAll<HTMLElement>("[data-er-u]")) if (el.isConnected) put(el);
+  return changed;
+}
+
+/** One unit in English again, or back in Vietnamese. */
+async function toggleOriginal(el: HTMLElement, now: Shown, base: string): Promise<void> {
+  const n = el.dataset.erU ?? "";
+  const original = now.originals.get(n);
+  const vi = now.units[n];
+  if (original === undefined || !vi) return;
+  if (el.classList.contains("er-original")) {
+    putVi(el, vi, base);
+    for (const inner of el.querySelectorAll<HTMLElement>("[data-er-u]")) {
+      const html = now.units[inner.dataset.erU ?? ""];
+      if (html) putVi(inner, html, base);
+    }
+  } else {
+    el.innerHTML = original;
+    el.removeAttribute("data-er-vi");
+    el.lang = "en";
+    el.classList.add("er-original");
+  }
+  await typeset(el, () => false);
 }
 
 /** The bridge's HTML, sanitized again (MathML and SVG kept), images pointed at the paper's folder. */

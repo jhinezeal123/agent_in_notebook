@@ -15,6 +15,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ReaderGuide, ReaderUnitView, ReaderView } from "@ainb/protocol";
 
 const DOC = readFileSync(join(__dirname, "fixtures", "reader-doc.html"), "utf8");
+/** The page the translation is shown on: two paragraphs numbered as the bridge numbers its units. */
+const UNITS_PAGE = DOC.replace('<p class="ltx_p">For a pre-trained', '<p class="ltx_p" data-er-u="1">For a pre-trained').replace('<p class="ltx_p">We use a random', '<p class="ltx_p" data-er-u="2">We use a random');
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1sAAAAASUVORK5CYII=", "base64");
 const section = (id: string, title: string, level: 1 | 2, number?: string, parent?: string) => ({ id, title, level, minutes: 1, readMs: 0, read: false, ...(number ? { number } : {}), ...(parent ? { parent } : {}) });
 const VIEW: ReaderView = {
@@ -50,6 +52,8 @@ declare global {
     emit(event: string, params?: unknown): void;
     guide: ReaderGuide;
     answer: unknown;
+    translation: { rev: number; units: Record<string, string> };
+    translate: Record<string, unknown>;
   }
 }
 
@@ -91,6 +95,8 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
                   return window.guide;
                 }
                 if (method === "write") return { id: "w-1", graded: true, guide: window.guide };
+                if (method === "reader.translation") return window.translation;
+                if (method === "reader.translate") return window.translate[params.action];
                 return { ok: true };
               },
               on(l) { listeners.add(l); return () => listeners.delete(l); },
@@ -110,6 +116,7 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
       const url = route.request().url();
       if (url.endsWith("/index.html")) return route.fulfill({ contentType: "text/html", body: '<!doctype html><html><body style="margin:0;height:800px"><div id="root" style="height:800px"></div></body></html>' });
       if (url.endsWith("/paper/doc.html")) return route.fulfill({ contentType: "text/html", body: DOC });
+      if (url.endsWith("/paper/translation/units.html")) return route.fulfill({ contentType: "text/html", body: UNITS_PAGE });
       if (url.endsWith(".png")) return route.fulfill({ contentType: "image/png", body: PNG });
       if (url.endsWith(".svg")) return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30" fill="red"/></svg>' });
       return route.fulfill({ status: 404, body: "" });
@@ -274,7 +281,7 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
   });
   it("shows the background agents' bar while idle: proposals fold out, Soạn tất cả asks first, the paper can be locked", async () => {
     await page.evaluate(() => {
-      window.guide = { ...window.guide, agentTurns: { author: 4, checker: 2, peer: 1 }, author: { state: "idle", queued: 0, mode: "ask", proposals: [
+      window.guide = { ...window.guide, agentTurns: { author: 4, checker: 2, peer: 1, translator: 0 }, author: { state: "idle", queued: 0, mode: "ask", proposals: [
         { key: "deep", label: "Bài tập đào sâu", maxTurns: 3 }, { key: "unit:S4", label: "Checkpoint §4", maxTurns: 11 },
       ] } };
       window.emit("updated", { ...(window as unknown as { view: ReaderView }).view, guideRev: 11 });
@@ -294,5 +301,75 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
     await bar.getByRole("checkbox", { name: "Khóa agent cho paper này" }).click();
     const calls = await page.evaluate(() => window.calls.filter((c) => c[0] === "reader.author").map((c) => c[1]));
     expect(calls).toEqual([{ action: "run", task: "deep" }, { action: "run", task: "all" }, { action: "stop" }]);
+  });
+
+  it("offers a translation with the turns it takes, then shows each unit in Vietnamese as it comes, formulas drawn; Alt+click shows the English; EN goes back", async () => {
+
+    await page.evaluate(() => {
+      const v = (window as unknown as { view: ReaderView }).view;
+      (window as unknown as { view: ReaderView }).view = { ...v, translation: { state: "none", done: 0, failed: 0, rev: 0 } };
+      window.translation = { rev: 0, units: {} };
+      window.translate = {
+        estimate: { state: "none", done: 0, failed: 0, rev: 0, total: 2, turnsLeft: 1 },
+        start: { state: "running", done: 0, failed: 0, rev: 1, total: 2, turnsLeft: 1 },
+      };
+      window.emit("updated", (window as unknown as { view: ReaderView }).view);
+    });
+
+    await page.locator(".er-head").getByRole("button", { name: "Dịch tiếng Việt" }).click();
+    const offer = page.locator(".er-translate");
+    await offer.getByText("khoảng").waitFor();
+    expect(await offer.innerText()).toContain("2 đoạn");
+    expect(await offer.innerText()).toContain("1 lượt agent");
+    await offer.getByRole("button", { name: "Dịch", exact: true }).click();
+    // The translator is running; a first unit comes, with a formula in it.
+    await page.evaluate(() => {
+      window.translation = { rev: 1, units: { 1: 'Với ma trận trọng số đã huấn luyện <math alttext="W_{0}" display="inline"><mi>W</mi></math>, ta ràng buộc cập nhật của nó bằng phân rã hạng thấp (low-rank).' } };
+      const v = (window as unknown as { view: ReaderView }).view;
+      window.emit("updated", { ...v, translation: { state: "running", done: 1, failed: 0, rev: 1, total: 2, turnsLeft: 1 } });
+    });
+    const first = page.locator('.er-doc-vi [data-er-u="1"]');
+    await first.getByText("Với ma trận trọng số").waitFor();
+    expect(await first.getAttribute("lang")).toBe("vi");
+    await page.waitForFunction(() => !!document.querySelector('[data-er-u="1"] .er-math[data-tex="W_{0}"] .katex'));
+    expect(await page.locator('[data-er-u="2"]').innerText()).toContain("We use a random");
+    expect(await page.locator('[data-er-u="2"][data-er-vi]').count()).toBe(0);
+    expect(await page.locator(".er-translate").innerText()).toContain("1/2 đoạn");
+    await page.locator(".er-seg").getByRole("button", { name: "VI" }).waitFor();
+
+    // The second unit, as the run goes on: put in place without reloading the page.
+    await page.evaluate(() => {
+      window.translation = { rev: 2, units: { ...window.translation.units, 2: "Ta khởi tạo ngẫu nhiên theo Gauss." } };
+      const v = (window as unknown as { view: ReaderView }).view;
+      window.emit("updated", { ...v, translation: { state: "done", done: 2, failed: 0, rev: 2, total: 2, turnsLeft: 0 } });
+    });
+    await page.locator('[data-er-u="2"]').getByText("Ta khởi tạo").waitFor();
+    expect(await page.locator(".er-translate").count()).toBe(0);
+    expect(await first.innerText()).toContain("Với ma trận");
+
+    // Alt+click: the English of that paragraph, and back.
+    await first.click({ modifiers: ["Alt"] });
+    await first.getByText("For a pre-trained weight matrix").waitFor();
+    await first.click({ modifiers: ["Alt"] });
+    await first.getByText("Với ma trận trọng số").waitFor();
+
+    // A selection in the translation is asked about as such.
+    await page.evaluate(() => {
+      const p = document.querySelector('[data-er-u="2"]')!;
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await page.locator(".er-selbar").getByText("Giải thích").click();
+    const ask = await page.waitForFunction(() => window.calls.filter((c) => c[0] === "ask").at(-1)?.[1]?.lang);
+    expect(await ask.jsonValue()).toBe("vi");
+
+    await page.locator(".er-seg").getByRole("button", { name: "EN" }).click();
+    await page.locator('.er-doc-html:not(.er-doc-vi) [id="S4.SS1"]').waitFor();
+    expect(await page.locator(".er-doc [data-er-vi]").count()).toBe(0);
+    const translateCalls = await page.evaluate(() => window.calls.filter((c) => c[0] === "reader.translate").map((c) => c[1]));
+    expect(translateCalls).toEqual([{ action: "estimate" }, { action: "start" }]);
   });
 });

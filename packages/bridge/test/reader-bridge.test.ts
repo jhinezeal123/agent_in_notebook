@@ -10,11 +10,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ChatSnapshot, MessagePatch, ReaderGuide, ReaderLibraryItem, ReaderSettings, ReaderView } from "@ainb/protocol";
+import type { ChatSnapshot, MessagePatch, ReaderGuide, ReaderLibraryItem, ReaderSettings, ReaderTranslationUnits, ReaderTranslationView, ReaderView } from "@ainb/protocol";
 import { itemId, rightChoice, type ItemInput } from "../src/reader/items.js";
 import { Bridge } from "../src/server.js";
 import { FakeExtension, FakeNotebook } from "./fixtures/fake-extension.js";
-import { JPEG } from "./fixtures/reader/fake-arxiv.js";
+import { JPEG, LORA, LORA_ID, testHub } from "./fixtures/reader/fake-arxiv.js";
 
 const TOKEN = "test-token-reader-0123456789abcdef";
 const CLI = resolve(__dirname, "../dist/cli.js");
@@ -405,7 +405,7 @@ describe("background agents: settings (reader.settings) and the tutor's agent", 
       g = await editor.request<ReaderGuide>("reader.guide", { paperId: id, agentId: "fake" });
       expect(g.author.state).toBe("idle");
       expect(readLog().length).toBe(logBefore);
-      expect(g.agentTurns).toEqual({ author: 0, checker: 0, peer: 0 });
+      expect(g.agentTurns).toEqual({ author: 0, checker: 0, peer: 0, translator: 0 });
       await openTutor(id);
       // The tutor opened: still nothing runs in mode ask.
       g = await editor.request<ReaderGuide>("reader.guide", { paperId: id });
@@ -449,4 +449,54 @@ describe("background agents: settings (reader.settings) and the tutor's agent", 
     expect(entries.some((e) => e.role === "checker")).toBe(true);
     expect(entries.every((e) => e.tag === "fake" && e.model === "smart")).toBe(true);
   }, 60_000);
+});
+
+describe("the Vietnamese translation through the bridge", () => {
+  const TAB = READER_TAB + 90;
+
+  beforeAll(async () => {
+    // An arXiv HTML paper on the bridge's shelf (fetched from the fake arXiv, as the bridge would).
+    await testHub(undefined, { root: join(home, "mentor", "papers") }).hub.open({ arxiv: LORA });
+  });
+
+  it("refuses with the tutor closed, then translates on the tutor's agent, in a hidden chat the editor never sees", async () => {
+    await editor.request("reader.settings", { agentMode: "ask" });
+    const before = await editor.request<ReaderView>("reader.get", { paperId: LORA_ID });
+    expect(before.translation).toMatchObject({ state: "none", done: 0 });
+    const est = await editor.request<ReaderTranslationView>("reader.translate", { paperId: LORA_ID, action: "estimate" });
+    expect(est).toMatchObject({ total: 23, turnsLeft: 1 });
+    // No tutor open: the run starts and stops at once, saying to open it.
+    await editor.request("reader.translate", { paperId: LORA_ID, action: "start" });
+    let view = await editor.request<ReaderView>("reader.get", { paperId: LORA_ID });
+    for (const end = Date.now() + 10_000; view.translation!.state === "running" && Date.now() < end;) {
+      await new Promise((r) => setTimeout(r, 50));
+      view = await editor.request<ReaderView>("reader.get", { paperId: LORA_ID });
+    }
+    expect(view.translation).toMatchObject({ state: "failed", error: expect.stringContaining("Mở chat gia sư") });
+
+    await editor.request<ChatSnapshot>("chat.open", { tabId: TAB, agentId: "fake", settings: { scope: "auto", review: false, targetCellIds: [] }, reader: { paperId: LORA_ID } });
+    const shown = editor.snapshots.length;
+    await editor.request("reader.translate", { paperId: LORA_ID, action: "start" });
+    for (const end = Date.now() + 60_000; Date.now() < end;) {
+      view = await editor.request<ReaderView>("reader.get", { paperId: LORA_ID });
+      if (view.translation!.state !== "running") break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(view.translation).toMatchObject({ state: "done", done: 23, total: 23, failed: 0 });
+    const { units } = await editor.request<ReaderTranslationUnits>("reader.translation", { paperId: LORA_ID });
+    expect(units["18"]).toMatch(/^VI For a pre-trained weight matrix <math /);
+    expect(existsSync(join(view.dir, "translation", "units.html"))).toBe(true);
+    const g = await editor.request<ReaderGuide>("reader.guide", { paperId: LORA_ID });
+    expect(g.agentTurns!.translator).toBe(1);
+    expect(editor.snapshots.slice(shown).every((sn) => sn.tabId > -1_000_000_000)).toBe(true);
+    expect(events.some((e) => e.event === "reader.updated" && e.params.paperId === LORA_ID && e.params.view.translation?.done === 23)).toBe(true);
+  }, 90_000);
+
+  it("tells the tutor a selection came from the translation", async () => {
+    const chat = await editor.request<ChatSnapshot>("chat.get", { tabId: TAB });
+    const before = editor.statuses.length;
+    await editor.request("reader.ask", { chatId: chat!.chatId, kind: "explain", anchor: { id: "S4.SS1.p1" }, quote: "Với ma trận trọng số đã huấn luyện", lang: "vi" });
+    await editor.waitFor(() => editor.statuses.slice(before).some((s) => s === "idle" || s === "error"), 60_000, "turn end");
+    expect(editor.agentText()).toContain('[saw <reader-selection kind="explain" anchor="S4.SS1.p1" lang="vi">]');
+  }, 90_000);
 });

@@ -746,7 +746,7 @@ export class Bridge {
     rpc.handle("reader.ask", guard<"reader.ask">((p) => {
       const tutor = readerOf(this.chatById(p.chatId));
       if (!tutor) throw new Error("Chat này không phải gia sư của một paper.");
-      tutor.ask(p.kind, p.anchor ?? {}, String(p.quote ?? ""));
+      tutor.ask(p.kind, p.anchor ?? {}, String(p.quote ?? ""), p.lang === "vi" ? "vi" : undefined);
       return { accepted: true as const };
     }));
     // Passes 1–2 (ER-2): the goal, the passes, answers, the reader's writing graded by the tutor.
@@ -841,12 +841,26 @@ export class Bridge {
     rpc.handle("reader.author", guard<"reader.author">((p) => {
       const paperId = String(p.paperId);
       this.reader.meta(paperId);
-      if (p.action === "stop") this.reader.author.stop(paperId);
+      if (p.action === "stop") {
+        // The lock stops every background agent of the paper, the translator too.
+        this.reader.author.stop(paperId);
+        this.reader.translator.stop(paperId);
+      }
       else if (p.action === "unlock") this.reader.author.unlock(paperId);
       else if (p.action === "run") this.reader.author.start(paperId, String(p.task ?? "all"));
       else this.reader.author.retry(paperId);
       return this.reader.passes.guide(paperId);
     }));
+    // The Vietnamese translation: a hidden chat on the tutor's agent, only on the reader's click.
+    rpc.handle("reader.translate", guard<"reader.translate">((p) => {
+      const paperId = String(p.paperId);
+      this.reader.meta(paperId);
+      if (p.action === "estimate") return this.reader.translator.estimate(paperId);
+      if (p.action === "stop") return this.reader.translator.stop(paperId) ?? this.reader.translator.estimate(paperId);
+      if (p.action === "start" || p.action === "retry") return this.reader.translator.start(paperId, p.action === "retry");
+      throw new Error("action is estimate, start, retry or stop.");
+    }));
+    rpc.handle("reader.translation", guard<"reader.translation">((p) => this.reader.translator.units(String(p.paperId))));
     rpc.handle("reader.settings", guard<"reader.settings">((p) => {
       if (p?.agentMode !== undefined || p?.checker !== undefined || p?.checkerRounds !== undefined) {
         const next: ReaderConfig = { ...loadReaderConfig() };
@@ -1149,7 +1163,7 @@ export class Bridge {
    * does not run (the reading tab opens the tutor before a click starts one).
    * `agentId`: `ainb reader eval` only, which has no tutor.
    */
-  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "peer:experimentalist" | "peer:theorist", agentId?: string): AuthorChat {
+  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "translator" | "peer:experimentalist" | "peer:theorist", agentId?: string): AuthorChat {
     const tutor = agentId ? undefined : this.readerTutor(paperId);
     const spec = tutor?.spec ?? (agentId ? findAgent(agentId) : undefined);
     if (!spec) throw new Error(agentId ? `Không có agent ${agentId}.` : "Mở chat gia sư của paper này: agent nền chạy đúng agent và cấu hình của gia sư.");
@@ -1168,7 +1182,7 @@ export class Bridge {
           }
         }).catch((e: Error) => this.log(`Reader: cannot copy the tutor's settings to the ${kind}: ${e.message}`))
       : Promise.resolve();
-    const counted = kind.startsWith("peer:") ? "peer" : kind as "author" | "checker";
+    const counted = kind.startsWith("peer:") ? "peer" : kind as "author" | "checker" | "translator";
     return {
       send: (text, context) => {
         // Each turn is a request the agent's provider bills: counted for the reader to see.

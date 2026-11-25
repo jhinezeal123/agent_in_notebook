@@ -80,10 +80,11 @@ const CONFIRM_TURNS = 10;
 
 /** Agent turns the hidden chats spent on this paper, always in the tab's header, for the reader to keep an eye on the bill. */
 export function AgentTurns({ guide }: { guide: ReaderGuide }) {
-  const t = guide.agentTurns ?? { author: 0, checker: 0, peer: 0 };
-  const total = t.author + t.checker + t.peer;
+  const t = guide.agentTurns ?? { author: 0, checker: 0, peer: 0, translator: 0 };
+  const translator = t.translator ?? 0;
+  const total = t.author + t.checker + t.peer + translator;
   return (
-    <span class="er-turns" title={`Lượt agent nền đã chạy cho paper này: soạn ${t.author} · kiểm ${t.checker} · đồng nghiệp lề ${t.peer}. Mỗi lượt là một yêu cầu tính phí theo nhà cung cấp của agent; không tính lượt chat với gia sư.`}>
+    <span class="er-turns" title={`Lượt agent nền đã chạy cho paper này: soạn ${t.author} · kiểm ${t.checker} · đồng nghiệp lề ${t.peer} · dịch ${translator}. Mỗi lượt là một yêu cầu tính phí theo nhà cung cấp của agent; không tính lượt chat với gia sư.`}>
       Agent nền: {total} lượt
     </span>
   );

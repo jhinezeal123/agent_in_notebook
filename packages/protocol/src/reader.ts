@@ -91,6 +91,35 @@ export interface ReaderView {
   /** Changes whenever the guide (`reader.guide`) does: the tab asks for it again. */
   guideRev?: number;
   session?: ReaderStudySession;
+  /** The Vietnamese translation of an HTML paper (absent for a PDF: there is no text to put back in place). */
+  translation?: ReaderTranslationView;
+}
+
+/**
+ * A paper's Vietnamese translation (docs/easy-read.md, "Dịch paper"): its
+ * paragraphs, headings, captions and footnotes translated by a hidden chat on
+ * the tutor's agent; formulas, citations, figures, tables of numbers and
+ * references stay the paper's own.
+ */
+export interface ReaderTranslationView {
+  /** "none": never started; "partial": some units are translated and nothing runs. */
+  state: "none" | "running" | "partial" | "done" | "failed";
+  /** Units translated, out of `total` (absent until the paper was looked at for translation). */
+  done: number;
+  total?: number;
+  /** Units the agent could not translate (tried twice): shown in English, tried again on "Dịch lại". */
+  failed: number;
+  /** Agent turns, at most, for what is left (each batch of units is one). */
+  turnsLeft?: number;
+  /** Changes whenever units are saved: the tab asks `reader.translation` again. */
+  rev: number;
+  error?: string;
+}
+
+/** The translated units of a paper: each unit's inner HTML, by the number its element carries (data-er-u). */
+export interface ReaderTranslationUnits {
+  rev: number;
+  units: Record<string, string>;
 }
 
 export const READER_SESSION_MS = 40 * 60_000;
@@ -462,6 +491,7 @@ export interface ReaderAgentTurns {
   author: number;
   checker: number;
   peer: number;
+  translator: number;
 }
 
 /** Everything the passes need: the paper's map, the units with their checkpoints, what the reader wrote and answered. */

@@ -13,6 +13,7 @@ import { ReaderAuthorRole } from "../src/reader/author.js";
 import { READER_SETTINGS, TUTOR_TOOLS } from "../src/reader/chat.js";
 import { ReaderCheckerRole } from "../src/reader/checker.js";
 import { READER_TOOLS } from "../src/reader/tools.js";
+import { TranslatorRole } from "../src/reader/translator.js";
 
 const ROOT = resolve(__dirname, "../../..");
 const source = (rel: string) => readFileSync(resolve(ROOT, rel), "utf8");
@@ -24,11 +25,12 @@ describe("the reader's tools in the chat", () => {
     ...TUTOR_TOOLS.map((t) => t.name),
     ...new ReaderAuthorRole(null as never, "p", null as never).tools().map((t) => t.name),
     ...new ReaderCheckerRole(null as never, "p", []).tools().map((t) => t.name),
+    ...new TranslatorRole("p", () => {}, () => {}).tools().map((t) => t.name),
   ])];
 
   it("are let through in Notebook-only mode, however the agent spells them", () => {
     // chat.ts isNotebookTool: the reader's names need their patterns (paper_\w+, reader_\w+) there.
-    expect(all).toEqual(expect.arrayContaining(["reader_grade", "reader_misconception", "reader_map_write", "reader_items_write", "reader_items_fix", "reader_check_write"]));
+    expect(all).toEqual(expect.arrayContaining(["reader_grade", "reader_misconception", "reader_map_write", "reader_items_write", "reader_items_fix", "reader_check_write", "reader_translation_save"]));
     for (const n of all) {
       for (const spelled of [n, `mcp__notebook__${n}`, `notebook/${n}`]) {
         expect(isNotebookTool(spelled, undefined), `${spelled} would be refused in Notebook-only mode; add its pattern to isNotebookTool in chat.ts`).toBe(true);

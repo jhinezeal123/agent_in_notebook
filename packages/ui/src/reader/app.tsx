@@ -7,7 +7,7 @@
 // says when one is read.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { READER_ASK_LABEL, readerCiteLabel, readerSessionRemaining, type ReaderAnchor, type ReaderAskKind, type ReaderGuide, type ReaderNote, type ReaderSectionView, type ReaderStudySession, type ReaderView } from "@ainb/protocol";
+import { READER_ASK_LABEL, readerCiteLabel, readerSessionRemaining, type ReaderTranslationView, type ReaderAnchor, type ReaderAskKind, type ReaderGuide, type ReaderNote, type ReaderSectionView, type ReaderStudySession, type ReaderView } from "@ainb/protocol";
 import { anchorFor, selectionText } from "./anchors.js";
 import { HtmlDoc } from "./doc-html.js";
 import { PdfDoc } from "./doc-pdf.js";
@@ -17,6 +17,7 @@ import { ReaderWidgets } from "./widget-host.js";
 import { Cite, Md } from "./bits.js";
 import { EquationNotation } from "./notation.js";
 import { StudyClock } from "./session.js";
+import { LangSwitch, TranslateLine, type ReaderLang } from "./translate.js";
 
 /** How often time spent is sent to the bridge, and how long without a sign of the reader it stops counting. */
 const FLUSH_MS = 15_000;
@@ -43,7 +44,13 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
   const [docReady, setDocReady] = useState(0);
   /** A note being written: from a selection (its anchor and words) or from scratch. */
   const [draft, setDraft] = useState<{ kind: ReaderNote["kind"]; anchor?: ReaderAnchor; text: string; id?: string } | null>(null);
-  const [bar, setBar] = useState<{ x: number; y: number; anchor: ReaderAnchor; quote: string } | null>(null);
+  const [bar, setBar] = useState<{ x: number; y: number; anchor: ReaderAnchor; quote: string; vi?: boolean } | null>(null);
+  /** The paper in English or in its Vietnamese translation (kept per paper in this tab's storage). */
+  const [lang, setLangState] = useState<ReaderLang>("en");
+  /** The reader pressed "Dịch tiếng Việt": the offer, with its estimate, waits for Dịch. */
+  const [offered, setOffered] = useState<ReaderTranslationView | null>(null);
+  /** The section to come back to once the page is drawn again in the other language. */
+  const backTo = useRef<string | undefined>(undefined);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<DocHandle | null>(null);
   const currentRef = useRef<string | undefined>(undefined);
@@ -85,6 +92,12 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
       }
     });
   }, [host]);
+
+  // The language the reader last chose for this paper.
+  useEffect(() => {
+    if (!view?.paperId) return;
+    try { setLangState(localStorage.getItem(`er-lang:${view.paperId}`) === "vi" ? "vi" : "en"); } catch { /* storage off: English */ }
+  }, [view?.paperId]);
 
   usePageTime(host, currentRef, sessionRef, () => void host.request<ReaderView>("reader.get").then(setView, () => {}));
 
@@ -134,7 +147,8 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
       const quote = selectionText(range);
       if (quote.length < 2) return setBar(null);
       const rect = range.getBoundingClientRect();
-      setBar({ x: Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2)), y: rect.top, anchor: anchorFor(range, quote), quote });
+      const vi = !!(range.startContainer.nodeType === 1 ? range.startContainer as Element : range.startContainer.parentElement)?.closest("[data-er-vi]");
+      setBar({ x: Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2)), y: rect.top, anchor: anchorFor(range, quote), quote, ...(vi ? { vi } : {}) });
     }, 0);
     const onDown = (e: MouseEvent) => {
       if (!(e.target as Element).closest?.(".er-selbar")) setBar(null);
@@ -151,10 +165,10 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
 
   const ask = (kind: ReaderAskKind) => {
     if (!bar) return;
-    const { anchor, quote } = bar;
+    const { anchor, quote, vi } = bar;
     setBar(null);
     document.getSelection()?.removeAllRanges();
-    void host.request("ask", { kind, anchor, quote }).then(() => say(`Đã hỏi gia sư: ${READER_ASK_LABEL[kind]}`), (e: Error) => say(e.message));
+    void host.request("ask", { kind, anchor, quote, ...(vi ? { lang: "vi" } : {}) }).then(() => say(`Đã hỏi gia sư: ${READER_ASK_LABEL[kind]}`), (e: Error) => say(e.message));
   };
 
   const keep = (kind: ReaderNote["kind"]) => {
@@ -203,11 +217,24 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
 
   const ready = useCallback((doc: DocHandle) => {
     docRef.current = doc;
+    const back = backTo.current;
+    backTo.current = undefined;
+    if (back) requestAnimationFrame(() => doc.scrollTo(back));
     setDocReady((n) => n + 1);
   }, []);
   const scroller = useCallback(() => scrollerRef.current, []);
   /** Sections with text of their own: what "x/y mục" counts (as the reading list does). */
   const own = useMemo(() => (view?.sections ?? []).filter((s) => !s.empty), [view]);
+
+  /** Vietnamese only once there is a translation to show. */
+  const shownLang: ReaderLang = lang === "vi" && view?.translation && view.translation.state !== "none" ? "vi" : "en";
+  const setLang = (next: ReaderLang) => {
+    if (next === shownLang && next === lang) return;
+    backTo.current = currentRef.current;
+    setLangState(next);
+    try { localStorage.setItem(`er-lang:${view?.paperId}`, next); } catch { /* storage off */ }
+  };
+  const offer = () => void act<ReaderTranslationView>("reader.translate", { action: "estimate" }).then(setOffered, () => {});
 
   if (error) return <div class="er-center"><p>{error}</p><button class="er-btn" onClick={load}>Thử lại</button></div>;
   if (!init || !view) return <div class="er-center er-muted">Đang mở paper…</div>;
@@ -251,12 +278,14 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
         <button class={`er-btn${notesOpen ? " on" : ""}`} onClick={() => setAside((a) => (a === "notes" ? null : "notes"))} title="Câu hỏi của tôi và ghi chú">
           Câu hỏi & ghi chú{openQuestions ? ` (${openQuestions})` : ""}
         </button>
+        <LangSwitch view={view} lang={shownLang} setLang={setLang} offer={offer} />
         <button class="er-btn primary" onClick={() => void host.request("chat.focus")} title="Khung chat bên cạnh là gia sư của paper này">Hỏi gia sư</button>
       </header>
-      {(view.warnings.length > 0 || view.arxivHint || textState || cover || guide) && (
+      {(view.warnings.length > 0 || view.arxivHint || textState || cover || guide || view.translation) && (
         <div class="er-notices">
           {cover && <div class="er-notice">Mục đang được gập để bạn nhớ lại. Viết xong (hoặc bấm “Mở lại mục”) thì nó hiện lại.</div>}
           {guide && <AuthorLine guide={guide} act={act} />}
+          {view.translation && <TranslateLine t={view.translation} offered={offered} lang={shownLang} act={act} close={() => setOffered(null)} onStarted={() => { setOffered(null); setLang("vi"); }} />}
           {textState && <div class="er-notice">Đang rút chữ của PDF cho gia sư… {textState.done}/{textState.total} trang</div>}
           {view.arxivHint && (
             <div class="er-notice">
@@ -287,7 +316,7 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
         )}
         <main class="er-scroll" ref={scrollerRef}>
           {view.view === "html"
-            ? <HtmlDoc init={init} host={host} scroller={scroller} onReady={ready} onSection={setCurrent} />
+            ? <HtmlDoc init={init} host={host} scroller={scroller} onReady={ready} onSection={setCurrent} lang={shownLang} translationRev={view.translation?.rev ?? 0} />
             : <PdfDoc init={init} host={host} scroller={scroller} onReady={ready} onSection={setCurrent} onTextProgress={setTextState} />}
           <ReaderWidgets widgets={guide?.widgets ?? []} root={scrollerRef.current} version={docReady} actions={actions} />
         </main>

@@ -29,7 +29,7 @@ import { measureRules } from "./eval.js";
 
 export interface ReaderAuthorHost {
   /** A hidden chat about the paper, taking this role; shown nowhere. */
-  chat(paperId: string, role: ChatRole, kind: "author" | "checker"): AuthorChat;
+  chat(paperId: string, role: ChatRole, kind: "author" | "checker" | "translator"): AuthorChat;
   log?(m: string): void;
   /** When the author may run, and the checker with it (reader.json). Absent: on its own, checker on, two fix rounds. */
   settings?(): ReaderAgentSettings;
@@ -222,6 +222,11 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     if (task.kind === "deep") return !!this.hub.deep.read(paperId);
     if (task.kind === "cards") return this.hub.cards.hasProposals(paperId);
     return !this.passes.mapMissing(paperId).length;
+  }
+
+  /** The reader locked this paper: no background agent runs for it (the translator asks too). */
+  locked(paperId: string): boolean {
+    return this.stopped(paperId);
   }
 
   private stopped(paperId: string): boolean {

@@ -126,7 +126,7 @@ export function toolCtx(): ToolContext {
 }
 
 export interface ScriptCall {
-  kind: "author" | "checker";
+  kind: "author" | "checker" | "translator";
   text: string;
   context: string;
   role: ChatRole;
@@ -135,7 +135,7 @@ export interface ScriptCall {
 
 /** An author host whose agent is a script: each message sent runs it, in order. */
 export function scriptedAuthor(script: (call: ScriptCall) => Promise<void> | void) {
-  const sent: { kind: "author" | "checker"; text: string; context: string }[] = [];
+  const sent: { kind: "author" | "checker" | "translator"; text: string; context: string }[] = [];
   const results: ToolResult[] = [];
   let open = 0;
   const host: ReaderAuthorHost = {
