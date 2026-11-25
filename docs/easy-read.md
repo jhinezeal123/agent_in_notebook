@@ -24,7 +24,7 @@ Nghiên cứu đầy đủ kèm nguồn: [`docs/easy-read-nghien-cuu.md`](easy-r
 3. **Luật do máy giữ, không chỉ do prompt**: thứ tự các bước, đáp án bị ẩn, câu hỏi phải qua kiểm.
 4. **Mỗi buổi ≤ 40 phút.** Thanh đọc đếm ngược theo đồng hồ của buổi; mốc bắt đầu và kết thúc còn khi mở lại tab. Khi hết giờ, bấm **Bắt đầu buổi mới** để tiếp tục nộp checkpoint. Tiến độ và lịch ôn lấy từ nhật ký.
 
-**Đội agent**: *gia sư* (chat với bạn) · *người soạn* (chạy nền, soạn trước một bước so với bạn: bản đồ paper, câu hỏi, widget) · *người kiểm* (giải mù từng câu trắc nghiệm, không thấy đáp án) · *đồng nghiệp lề* (phản biện ở lượt 3). Tất cả chạy trên agent ACP bạn đang dùng.
+**Đội agent**: *gia sư* (chat với bạn) · *người soạn* (chạy nền, soạn trước một bước so với bạn: bản đồ paper, câu hỏi, widget) · *người kiểm* (giải mù từng câu trắc nghiệm, không thấy đáp án) · *đồng nghiệp lề* (phản biện ở lượt 3). Tất cả chạy trên agent ACP bạn đang dùng. Mặc định agent nền **không tự chạy**: mỗi việc của người soạn (kèm người kiểm) chờ bạn bấm **Soạn**, và mỗi paper có thể bị khóa agent, xem E.4.5.
 
 Bảy quyết định triển khai đã chốt ở G.3.
 
@@ -296,7 +296,7 @@ reader/
 
 ### E.4 Bốn vai agent và việc của từng vai
 
-Như xưởng paper: một chat **hiện** để làm việc với bạn, các chat **ẩn** làm việc nặng phía sau. Tất cả là `Chat` của lõi với một `ChatRole` riêng (`chat-role.ts`), chạy cùng agent ACP bạn chọn (có thể chọn model nhẹ hơn cho chat ẩn qua config option của ACP).
+Như xưởng paper: một chat **hiện** để làm việc với bạn, các chat **ẩn** làm việc nặng phía sau. Tất cả là `Chat` của lõi với một `ChatRole` riêng (`chat-role.ts`), chạy **đúng agent và cấu hình của gia sư** (agent, model và các tùy chọn khác; trừ chế độ phiên của agent, để chat ẩn vẫn bị chặn dùng công cụ trên máy). Không có cấu hình agent riêng cho vai nào (E.4.5).
 
 #### E.4.1 Gia sư (`ReaderChat`, hiện trong khung chat)
 
@@ -331,6 +331,22 @@ Một phiên mới, **không thấy đáp án**: nhận câu hỏi trắc nghi�
 #### E.4.4 Đồng nghiệp lề (`ReaderPeer`, chat ẩn, lượt 3)
 
 Một chat ẩn cho mỗi góc nhìn bạn chọn (tối đa hai), khóa `reader-peer:<paperId>:<persona>`. Mỗi ghi chú lề của bạn thành một lượt; câu trả lời hiện thành luồng ở lề (không vào khung chat), có mốc. Tool: `paper_read`, `paper_find`, `reader_margin_reply`. Persona là một đoạn trong playbook (`<reader-peer persona="experimentalist">`), không phải agent khác.
+
+#### E.4.5 Bạn quyết định khi nào agent nền chạy
+
+Mỗi lượt của agent nền là một yêu cầu tính phí, nên bạn quyết định khi nào nó chạy. Cài đặt nằm trong `reader.json`, chỉnh ở mục **Agent nền (Easy-read)** của khung chat:
+
+- **Chạy** (`agentMode`):
+  - `ask` (mặc định): việc các lượt chuẩn bị trước (bản đồ paper khi chọn mục tiêu; checkpoint hai mục kế tiếp khi sang lượt 2 hay đọc tới; bài đào sâu; thẻ ôn) chỉ hiện thành **đề xuất** trên thanh người soạn, kèm số lượt agent tối đa. Agent chỉ chạy khi bạn bấm **Soạn** (hoặc **Soạn tất cả**, hay **Soạn checkpoint mục này** trên thẻ của mục).
+  - `auto`: các việc đó tự chạy, như trước.
+  - `off`: không việc nào chạy, kể cả khi bấm.
+- **Khóa agent cho paper này** (công tắc trên thanh Agent nền, lưu trong `reader/author.json` của paper): dừng ngay việc đang chạy, đưa nó về danh sách đề xuất, và không agent nền nào chạy cho paper đó (kể cả khi bấm Soạn, ở `auto`, hay sau khi khởi động lại) cho tới khi bạn bỏ khóa. Bỏ khóa không tự chạy gì.
+- **Thanh Agent nền** luôn hiện phía trên paper: chọn chế độ Chạy (áp dụng cho mọi paper, giống cài đặt ở khung chat), công tắc khóa, việc đang chạy, và một dòng thu gọn "N việc chờ duyệt · tối đa M lượt agent" mở ra danh sách. Checkpoint của từng mục được bấm Soạn trên thẻ mục ở lượt 2 (thanh chỉ đếm). **Soạn tất cả** hỏi xác nhận khi tổng vượt 10 lượt. Số lượt đã chạy luôn hiện ở thanh tiêu đề của tab ("Agent nền: N lượt").
+- **Giải mù câu hỏi** (`checker`, mặc định bật) chạy kèm mỗi checkpoint bạn bấm Soạn. Tắt thì câu hỏi tới tay bạn với nhãn "chưa kiểm". **Số vòng sửa** (`checkerRounds`, 0–2, mặc định 2) giới hạn số lần câu bị trả lại cho người soạn.
+- Số lượt tối đa của một checkpoint: 3 lượt soạn, mỗi lần kiểm tối đa 2 lượt (`checkerRounds + 1` lần), mỗi vòng sửa 1 lượt soạn. Với cài đặt mặc định là 11 lượt.
+- Mỗi lượt gửi tới chat ẩn (soạn, kiểm, đồng nghiệp lề) được đếm trong `reader/usage.json` và hiện trên thanh người soạn. Lượt chat với gia sư không tính vào đây.
+- **Một cấu hình agent duy nhất là của gia sư**: người soạn, người kiểm và đồng nghiệp lề chạy đúng agent của chat gia sư đang mở, chép mọi tùy chọn của nó (model, mức suy luận…; trừ chế độ phiên). Chat gia sư đóng thì không agent nền nào chạy: việc chuẩn bị trước chỉ thành đề xuất, kể cả ở `auto`; tab đọc mở chat gia sư trước khi một cú bấm Soạn chạy. Không còn fallback ngầm sang agent khác. (`ainb reader eval --quiz` là ngoại lệ dành cho dev: nó chọn agent bằng tham số của nó.)
+- Việc bạn tự yêu cầu (ví dụ tương tác từ một đoạn chọn, nhận ví dụ gia sư đề xuất, Soạn lại) chạy ngay, trừ khi chế độ là `off`.
 
 ### E.5 Tool
 
@@ -506,7 +522,7 @@ Workflow `test` trên GitHub chạy `pnpm typecheck`, `pnpm build` và `pnpm tes
 - Người soạn bắt đầu bản đồ khi bạn **chọn mục tiêu** (không phải ngay khi nạp), để mở paper chỉ để đọc không tốn agent. Bản đồ ghi từng phần (`reader_map_write`), phần nào qua kiểm hiện ngay.
 - **Mục của lượt 2**: với HTML là các mục cấp 1 có số (bỏ abstract, phụ lục, tài liệu tham khảo, lời cảm ơn), kèm mục con; với PDF người soạn chia trang thành mục (`units` trong bản đồ). Checkpoint của hai mục đầu soạn khi vào lượt 2; mục kế tiếp soạn khi bạn vào mục trước nó. Mục không có gì để kiểm (related work, kết luận) có `light` và 0–2 câu.
 - **Nhớ lại, tự giải thích, 5C, QALMRI, tóm tắt** đi sang khung chat như tin nhắn của bạn, kèm `<reader-grade>` (rubric + bản tham chiếu, chỉ có từ lúc này); gia sư chấm bằng `reader_grade`. Không mở chat gia sư thì bài được giữ và bản tham chiếu mở ngay. **Đọc hình** và **đoán bảng** không chấm: viết xong thì thấy thông điệp/kết quả tham chiếu.
-- **Người kiểm** là một chat ẩn mới cho mỗi lô (đóng ngay sau), chỉ thấy câu hỏi đã xáo và các đoạn chứa câu trích; trả lời lệch hoặc thấy phương án khác cũng đúng thì câu trả về người soạn (`reader_items_fix`), tối đa hai lần, rồi bỏ. Câu người soạn không sửa thì bỏ luôn. Người kiểm không chạy được thì câu vẫn đến tay bạn, đánh dấu `unchecked`. Chưa tách model nhẹ cho người kiểm (quyết định 4): cùng agent với gia sư.
+- **Người kiểm** là một chat ẩn mới cho mỗi lô (đóng ngay sau), chỉ thấy câu hỏi đã xáo và các đoạn chứa câu trích; trả lời lệch hoặc thấy phương án khác cũng đúng thì câu trả về người soạn (`reader_items_fix`), tối đa hai lần, rồi bỏ. Câu người soạn không sửa thì bỏ luôn. Người kiểm không chạy được thì câu vẫn đến tay bạn, đánh dấu `unchecked`. Người kiểm dùng cùng agent và cấu hình với gia sư (quyết định 4).
 - **Sổ lỗi sai**: câu sai với độ chắc ≥ 2 (đoán sai thì không), và hiểu sai gia sư ghi bằng `reader_misconception`, vào sổ của paper (thẻ Sổ lỗi sai của tab đọc) và sổ của Mentor (`misconception`, `attemptId "paper:<id>"`, tag `paper:<id>:<concept>`, kèm tên paper; Mentor hỏi lại sau 2 ngày như hiểu sai trong bài).
 - Các bước sau bổ sung tooltip ký hiệu trong bản HTML, nút **Hỏi tôi một câu**, thanh lượt trong chat và ghi nhận ngày học của Mentor khi người đọc nộp bài, trả lời checkpoint hoặc ôn thẻ.
 - Có thể chọn riêng Agent và Model cho Người kiểm ngay trong menu Agent của khung chat (`reader.settings`, lưu ở `reader.json`); vẫn hỗ trợ đặt `AINB_READER_CHECKER_MODEL` trước khi chạy bridge làm mặc định dự phòng. Có thể đặt `AINB_SEMANTIC_SCHOLAR_KEY` để tab Bối cảnh gọi Semantic Scholar.
@@ -578,7 +594,7 @@ Agent trả lời đủ 46 câu. Hai widget DDPM qua tự kiểm trong tổng c�
 | 1 | Easy-read nằm ở đâu | tab riêng, chung tủ paper với Mentor · nằm trong trang Mentor · tách hẳn, kho riêng | **Tab riêng, chung tủ paper**: đọc không cần notebook nên không nên bị kẹp trong luồng bài tập; nhưng một paper chỉ nên có một chỗ (đọc rồi reproduce, chung lịch ôn, chuỗi ngày, Sổ lỗi sai) |
 | 2 | Giữ đáp án chặt tới đâu | mềm: việc đang chờ có nút "Cho xem luôn", ghi lại là đã bỏ qua, không tính tiến độ · cứng: phải làm mới mở · tắt | **Mềm**: đúng tinh thần "hỗ trợ tối đa" mà vẫn giữ mặc định là tự làm; bỏ qua có ghi lại nên tiến độ vẫn thật |
 | 3 | Ngôn ngữ | giải thích và câu hỏi tiếng Việt, thuật ngữ + câu trích tiếng Anh · toàn tiếng Anh · cho chọn | **Tiếng Việt, giữ thuật ngữ và câu trích tiếng Anh** (như Mentor); câu hỏi viết đơn giản (ngôn ngữ đơn giản giúp người đọc không phải bản ngữ) |
-| 4 | Agent của các chat ẩn | cùng agent và model với gia sư · model nhẹ hơn cho người soạn/người kiểm | **Cùng agent; cho chọn model nhẹ riêng cho người kiểm** (việc giải mù đơn giản), người soạn giữ model mạnh vì chất lượng câu hỏi phụ thuộc vào nó |
+| 4 | Agent của các chat ẩn | cùng agent và model với gia sư · model nhẹ hơn cho người soạn/người kiểm | **Một cấu hình chung: mọi vai theo gia sư** (agent, model và tùy chọn của chat gia sư). Bản trước cho người kiểm chọn agent/model riêng; đã bỏ để bạn chỉ quản một cấu hình và biết chắc agent nào đang tiêu tiền |
 | 5 | PDF không có trên arXiv | pdf.js + ảnh trang cho agent (không cài gì) · thêm Marker/MinerU (Python, nặng, giấy phép có điều kiện) | **pdf.js + ảnh trang** trước; xem lại khi thấy công thức trong PDF là chỗ đau thật |
 | 6 | Thuật toán ôn thẻ | lịch cố định kiểu Quantum Country · FSRS (`ts-fsrs`) | **Lịch cố định** trước (dễ hiểu, khớp cách Mentor đang hẹn ôn); đủ dữ liệu ôn thì cân nhắc FSRS |
 | 7 | Thứ tự giao | ER-0 → 1 → 2 → 3 → 4 · đưa ví dụ tương tác (ER-3) lên trước câu hỏi (ER-2) | **ER-0 → 1 → 2 → 3 → 4**: câu hỏi và các lượt là xương sống; widget cần bản đồ paper (ER-2) để biết đặt ở đâu và minh họa khái niệm nào. Nếu bạn muốn thấy widget sớm, ER-3 có thể làm ngay sau ER-1 với widget theo yêu cầu (chưa tự đề xuất) |

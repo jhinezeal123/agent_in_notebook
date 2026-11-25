@@ -13,7 +13,7 @@ import { exportChatMarkdown } from "./export-chat.js";
 import { contextualSuggestions, matchSlashCommands, type SlashCommand } from "./slash-commands.js";
 import { resolveLang, t, type LangPref, type UiLang } from "./i18n.js";
 import type { MentorStage } from "@ainb/protocol";
-import type { ReaderGuide, ReaderSettings } from "@ainb/protocol";
+import type { ReaderAgentMode, ReaderGuide, ReaderSettings } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -28,7 +28,6 @@ export function App() {
   const [readerGuide, setReaderGuide] = useState<ReaderGuide | null>(null);
   const [readerRevision, setReaderRevision] = useState(0);
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>({});
-  const [checkerModelDraft, setCheckerModelDraft] = useState("");
   const readerRef = useRef(reader);
   readerRef.current = reader;
   const [choices, setChoices] = useState<NotebookChoice[]>([]);
@@ -138,7 +137,6 @@ export function App() {
     if (reader && connected) void client.request<ReaderSettings>("reader.settings", {}).then((s) => {
       if (stale) return;
       setReaderSettings(s);
-      setCheckerModelDraft(s.checkerModel ?? "");
     }, () => {});
     return () => { stale = true; };
   }, [reader?.paperId, connected]);
@@ -347,11 +345,10 @@ export function App() {
   };
 
   const manageAgents = () => void run(client.request("studio.open", { view: "settings", section: "agents" }));
-  const updateReaderSettings = (patch: { checkerAgentId?: string; checkerModel?: string }) => {
+  const updateReaderSettings = (patch: { agentMode?: ReaderAgentMode; checker?: boolean; checkerRounds?: number }) => {
     void run(client.request<ReaderSettings>("reader.settings", patch)).then((res) => {
       if (!res) return;
       setReaderSettings(res);
-      setCheckerModelDraft(res.checkerModel ?? "");
     });
   };
 
@@ -718,64 +715,37 @@ export function App() {
                     </div>
                   ))}
                   {reader && (() => {
-                    const checkerSameAgent = !readerSettings.checkerAgentId || readerSettings.checkerAgentId === prefs.agentId;
-                    const tutorModelOpt = checkerSameAgent ? modelOptions.find((o) => o.category === "model" && o.kind === "select" && (o.choices?.length ?? 0) > 0) : undefined;
-                    const baseDefault = checkerSameAgent ? t("options.sameAsTutor", lang) : t("options.agentDefault", lang);
-                    const defaultModelLabel = readerSettings.checkerEnvModel ? `${baseDefault} (env: ${readerSettings.checkerEnvModel})` : baseDefault;
                     return (
                       <>
-                        <div class="options-caption">{t("options.checkerCaption", lang)}</div>
+                        <div class="options-caption">{t("options.agentCaption", lang)}</div>
                         <div class="option-row">
-                          <span class="option-name">{t("options.checkerAgent", lang)}</span>
+                          <span class="option-name" title={t("options.agentModeHint", lang)}>{t("options.agentMode", lang)}</span>
                           <Picker
-                            label={t("options.checkerAgent", lang)}
-                            value={readerSettings.checkerAgentId ?? ""}
+                            label={t("options.agentMode", lang)}
+                            value={readerSettings.agentMode ?? "ask"}
                             options={[
-                              { value: "", label: t("options.sameAsTutor", lang) },
-                              ...agents.map((a) => ({ value: a.id, label: a.available ? a.name : `${a.name} (not installed)`, disabled: !a.available, title: a.reason })),
-                              ...(readerSettings.checkerAgentId && !agents.some((a) => a.id === readerSettings.checkerAgentId)
-                                ? [{ value: readerSettings.checkerAgentId, label: readerSettings.checkerAgentId }]
-                                : []),
+                              { value: "ask", label: t("options.agentMode.ask", lang) },
+                              { value: "auto", label: t("options.agentMode.auto", lang) },
+                              { value: "off", label: t("options.agentMode.off", lang) },
                             ]}
-                            onChange={(id) => updateReaderSettings({ checkerAgentId: id, checkerModel: "" })}
+                            onChange={(v) => updateReaderSettings({ agentMode: v as ReaderAgentMode })}
                           />
                         </div>
+                        <div class="options-caption">{t("options.checkerCaption", lang)}</div>
                         <div class="option-row">
-                          <span class="option-name">{t("options.checkerModel", lang)}</span>
-                          {tutorModelOpt ? (
-                            <Picker
-                              label={t("options.checkerModel", lang)}
-                              value={readerSettings.checkerModel ?? ""}
-                              options={[
-                                { value: "", label: defaultModelLabel },
-                                ...(tutorModelOpt.choices ?? []).map((c) => ({ value: c.value, label: c.name, title: c.description ?? undefined })),
-                                ...(readerSettings.checkerModel && !(tutorModelOpt.choices ?? []).some((c) => c.value === readerSettings.checkerModel)
-                                  ? [{ value: readerSettings.checkerModel, label: readerSettings.checkerModel }]
-                                  : []),
-                              ]}
-                              onChange={(v) => updateReaderSettings({ checkerModel: v })}
-                            />
-                          ) : (
-                            <input
-                              type="text"
-                              class="option-input"
-                              aria-label={t("options.checkerModel", lang)}
-                              value={checkerModelDraft}
-                              placeholder={readerSettings.checkerEnvModel ? `env: ${readerSettings.checkerEnvModel}` : t("options.modelPlaceholder", lang)}
-                              onInput={(e) => setCheckerModelDraft(e.currentTarget.value)}
-                              onBlur={() => {
-                                const v = checkerModelDraft.trim();
-                                if (v !== (readerSettings.checkerModel ?? "")) updateReaderSettings({ checkerModel: v });
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  e.currentTarget.blur();
-                                }
-                              }}
-                            />
-                          )}
+                          <span class="option-name" title={t("options.checkerOnHint", lang)}>{t("options.checkerOn", lang)}</span>
+                          <input type="checkbox" class="switch" aria-label={t("options.checkerOn", lang)} checked={readerSettings.checker !== false} onChange={(e) => updateReaderSettings({ checker: e.currentTarget.checked })} />
                         </div>
+                        <div class="option-row">
+                          <span class="option-name">{t("options.checkerRounds", lang)}</span>
+                          <Picker
+                            label={t("options.checkerRounds", lang)}
+                            value={String(readerSettings.checkerRounds ?? 2)}
+                            options={[0, 1, 2].map((n) => ({ value: String(n), label: String(n) }))}
+                            onChange={(v) => updateReaderSettings({ checkerRounds: Number(v) })}
+                          />
+                        </div>
+                        <div class="options-note">{t("options.agentsFollowTutor", lang)}</div>
                       </>
                     );
                   })()}

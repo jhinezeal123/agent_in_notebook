@@ -89,7 +89,7 @@ export function ItemCard({ item, n, retry, sections, onAnswer, onSkip, onReport,
               <Md text={text} class="er-inline" />
               {right && (isRight ? <span class="er-mark ok">✓</span> : isChosen ? <span class="er-mark bad">✗</span> : null)}
             </label>
-            {right && why?.[i] && (isRight || isChosen) && <div class="er-why small">{isRight ? "Vì sao đúng: " : "Hiểu sai: "}{why[i]}</div>}
+            {right && why?.[i] && (isRight || isChosen) && <div class="er-why small">{isRight ? "Vì sao đúng: " : "Hiểu sai: "}<Md text={why[i]!} class="er-inline" /></div>}
           </div>
         );
       })}
@@ -205,7 +205,7 @@ function ResultBox({ result, skipped, sections, onCite }: { result: ReaderAnswer
           {result.evidence.map((e, i) => (
             <div key={i} class="er-quote-line">
               <Cite anchor={{ id: e.anchor, quote: e.quote }} sections={sections} onCite={onCite} />
-              <span class="er-muted small">“{e.quote}”</span>
+              <Md text={`“${e.quote}”`} class="er-inline er-muted small" />
             </div>
           ))}
         </div>
@@ -256,7 +256,7 @@ export function PretestCard({ item, n, sections, onGuess, onSkip, onCite }: {
           })}
         </div>
       )}
-      {!item.options && item.guess?.text && <div class="er-mine small">Bạn đoán: {item.guess.text}</div>}
+      {!item.options && item.guess?.text && <div class="er-mine small">Bạn đoán: <Md text={item.guess.text} class="er-inline" /></div>}
       {!item.guess && !item.answer && (
         <>
           {!item.options && <textarea rows={2} value={text} placeholder="Đoán của bạn (sai cũng có ích)…" onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />}
@@ -269,12 +269,12 @@ export function PretestCard({ item, n, sections, onGuess, onSkip, onCite }: {
       {item.guess && !item.answer && <p class="er-muted small">Đáp án mở khi bạn đọc xong {where ? (where.number ? `§${where.number}` : where.title) : "mục chứa nó"}.</p>}
       {item.answer && (
         <div class="er-result">
-          <div class="er-result-head">Đáp án: {item.answer.text}</div>
+          <div class="er-result-head">Đáp án: <Md text={item.answer.text} onCite={onCite} class="er-inline" /></div>
           <Md text={item.answer.explain} onCite={onCite} />
           {item.answer.evidence.map((e, i) => (
             <div key={i} class="er-quote-line">
               <Cite anchor={{ id: e.anchor, quote: e.quote }} sections={sections} onCite={onCite} />
-              <span class="er-muted small">“{e.quote}”</span>
+              <Md text={`“${e.quote}”`} class="er-inline er-muted small" />
             </div>
           ))}
         </div>

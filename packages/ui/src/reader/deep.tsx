@@ -21,7 +21,7 @@ export function LaterPass({ guide, view, actions }: { guide: ReaderGuide; view: 
   return <>
     {pass === 3 && !exercises.some((e) => e.kind === "deep") && !guide.skipped.includes("exercise:deep-plan") && <>
       <p class="er-muted small">Đang chờ bộ câu đào sâu, dẫn công thức và tìm chỗ sai.</p>
-      {(guide.author.state === "failed" || guide.author.state === "stopped") && <button class="er-link" onClick={() => void actions.act("reader.skip", { task: "exercise:deep-plan" }).catch(() => {})}>Bỏ qua bộ câu soạn sẵn</button>}
+      {guide.author.state !== "running" && <button class="er-link" onClick={() => void actions.act("reader.skip", { task: "exercise:deep-plan" }).catch(() => {})}>Bỏ qua bộ câu soạn sẵn</button>}
     </>}
     {exercises.map((exercise, i) => <Exercise key={exercise.id} exercise={exercise} index={i + 1} view={view} actions={actions} cover={cover} foldPaper={foldPaper} />)}
     {pass === 4 && <ReaderCards guide={guide} actions={actions} />}

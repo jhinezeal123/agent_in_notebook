@@ -2,13 +2,16 @@
 // one step ahead of the reader, apart from the tutor (there is no kernel to
 // share, so the reader keeps asking the tutor meanwhile). Its tasks, one at a
 // time: the paper's map when the reader chooses a goal; a unit's checkpoint
-// when the reader reaches the unit before it. Everything it writes goes
+// when the reader reaches the unit before it. Work the passes prepare ahead
+// runs on its own only in mode "auto" (reader.json); by default ("ask") it
+// waits as a proposal until the reader presses Soạn, and Dừng is kept on disk
+// so nothing restarts on its own. Everything it writes goes
 // through the schemas and checks of items.ts and lint.ts; a checkpoint's
 // questions are then solved blind by the checker (checker.ts), and those it
 // answers otherwise go back to the author, twice at most, then are dropped.
 
 import { z } from "zod";
-import type { ReaderAuthorView, ReaderWidgetRequest } from "@ainb/protocol";
+import type { ReaderAgentMode, ReaderAuthorView, ReaderWidgetRequest } from "@ainb/protocol";
 import type { ChatPort, ChatRole, RoleTurn } from "../chat-role.js";
 import type { AuthorChat } from "../mentor/workshop.js";
 import { callTool, tool, type ToolContext, type ToolDef, type ToolResult } from "../notebook/tools.js";
@@ -28,7 +31,19 @@ export interface ReaderAuthorHost {
   /** A hidden chat about the paper, taking this role; shown nowhere. */
   chat(paperId: string, role: ChatRole, kind: "author" | "checker"): AuthorChat;
   log?(m: string): void;
+  /** When the author may run, and the checker with it (reader.json). Absent: on its own, checker on, two fix rounds. */
+  settings?(): ReaderAgentSettings;
+  /** The agent to run on is there (the paper's tutor chat is open); false: work prepared ahead waits as a proposal. */
+  canRun?(paperId: string): boolean;
 }
+
+export interface ReaderAgentSettings {
+  mode: ReaderAgentMode;
+  checker: boolean;
+  rounds: number;
+}
+
+const AUTO: ReaderAgentSettings = { mode: "auto", checker: true, rounds: 2 };
 
 export type ReaderTask = { kind: "map" } | { kind: "unit"; unit: string } | { kind: "widget"; request: ReaderWidgetRequest } | { kind: "deep" } | { kind: "cards" };
 type Task = ReaderTask;
@@ -41,6 +56,8 @@ interface Queue {
   note?: string;
   /** Tasks that could not be done, and why (tried again on "Soạn lại"). */
   failed: Map<string, { task: Task; why: string }>;
+  /** Tasks waiting for the reader's click (mode "ask", or after Dừng). */
+  proposed: Map<string, Task>;
 }
 
 interface Draft {
@@ -52,10 +69,9 @@ interface Draft {
 
 /** Turns the author gets for a task before it counts as failed. */
 const TURNS = 3;
-/** Times the checker's disagreements go back to the author. */
-const FIX_ROUNDS = 2;
-
 const taskKey = (t: Task) => t.kind === "unit" ? `unit:${t.unit}` : t.kind === "widget" ? `widget:${t.request.id}` : t.kind;
+/** A task the reader can start by its key alone (a widget needs its request: only from a proposal). */
+const taskFromKey = (key: string): Task | undefined => key === "map" || key === "deep" || key === "cards" ? { kind: key } : key.startsWith("unit:") && key.length > 5 ? { kind: "unit", unit: key.slice(5) } : undefined;
 
 export class ReaderAuthor implements ReaderAuthorQueue {
   private readonly queues = new Map<string, Queue>();
@@ -66,15 +82,41 @@ export class ReaderAuthor implements ReaderAuthorQueue {
 
   // ------------------------------------------------------------------ the queue
 
-  enqueue(paperId: string, task: Task): void {
+  /**
+   * A task for the author. `user`: the reader asked for it (a click), so it
+   * runs now; otherwise (the passes preparing ahead) it runs on its own only
+   * in mode "auto" and when the paper is not locked, else it waits as a
+   * proposal the reader can start. In mode "off", or locked, nothing runs.
+   */
+  enqueue(paperId: string, task: Task, user = false): void {
     const q = this.queue(paperId);
     const key = taskKey(task);
-    if (q.failed.has(key) || (q.current && taskKey(q.current) === key) || q.tasks.some((t) => taskKey(t) === key)) return;
-    if (task.kind === "unit" && this.passes.pack(paperId, task.unit)) return;
-    if (task.kind === "widget" && this.hub.widgets.read(paperId, task.request.id)) return;
-    if (task.kind === "deep" && this.hub.deep.read(paperId)) return;
-    if (task.kind === "cards" && this.hub.cards.hasProposals(paperId)) return;
+    if ((q.current && taskKey(q.current) === key) || q.tasks.some((t) => taskKey(t) === key)) return;
+    if (this.done(paperId, task)) {
+      if (q.proposed.delete(key)) this.hub.touch(paperId);
+      return;
+    }
+    // No agent to write with (a hub without one): the request stays, as before.
     if (!this.host()) return;
+    const s = this.settings();
+    if (s.mode === "off") {
+      if (user) throw new Error("Agent nền đang tắt trong cài đặt Easy-read: bật lại (Hỏi trước hoặc Tự động) để soạn.");
+      return;
+    }
+    if (user && this.stopped(paperId)) throw new Error("Paper này đang khóa agent: mở khóa trên thanh người soạn để soạn.");
+    if (!user) {
+      if (q.failed.has(key)) return;
+      if (s.mode === "ask" || this.stopped(paperId) || this.host()?.canRun?.(paperId) === false) {
+        if (!q.proposed.has(key)) {
+          q.proposed.set(key, task);
+          this.hub.touch(paperId);
+        }
+        return;
+      }
+    } else {
+      q.failed.delete(key);
+    }
+    q.proposed.delete(key);
     // The map first: the checkpoints use its concepts.
     if (task.kind === "map") q.tasks.unshift(task);
     else q.tasks.push(task);
@@ -82,54 +124,122 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     else this.hub.touch(paperId);
   }
 
+  /** The reader pressed Soạn on a proposal ("all": every one), or on a unit's card. */
+  start(paperId: string, key: string): void {
+    const q = this.queue(paperId);
+    if (key === "all") {
+      const all = [...q.proposed.values()];
+      if (!all.length) throw new Error("Không có việc nào đang chờ soạn.");
+      for (const task of all) this.enqueue(paperId, task, true);
+      return;
+    }
+    const task = q.proposed.get(key) ?? q.failed.get(key)?.task ?? taskFromKey(key);
+    if (!task) throw new Error(`Không rõ việc soạn "${key}".`);
+    this.enqueue(paperId, task, true);
+  }
+
+  /** Khóa: the work in hand stops and goes back to proposals; no agent runs for this paper, on its own or on a click, until the reader unlocks it (kept on disk). */
   stop(paperId: string): void {
     const q = this.queue(paperId);
-    for (const task of [...(q.current ? [q.current] : []), ...q.tasks]) q.failed.set(taskKey(task), { task, why: "đã dừng" });
+    for (const task of [...(q.current ? [q.current] : []), ...q.tasks]) q.proposed.set(taskKey(task), task);
     q.tasks = [];
+    this.setStopped(paperId, true);
     q.abort?.abort();
     this.hub.touch(paperId);
   }
 
-  /** The tasks that failed, again. */
+  /** Mở khóa: proposals stay proposals; nothing starts until a click (or mode "auto" prepares again). */
+  unlock(paperId: string): void {
+    this.setStopped(paperId, false);
+    this.hub.touch(paperId);
+  }
+
+  /** The tasks that failed, again; nothing failed: every proposal (the reader pressed Soạn lại). */
   retry(paperId: string): void {
+    if (this.stopped(paperId)) throw new Error("Paper này đang khóa agent: mở khóa trên thanh người soạn để soạn.");
     const q = this.queue(paperId);
     const again = [...q.failed.values()].map((f) => f.task);
     q.failed.clear();
     if (q.state !== "running") q.state = "idle";
-    for (const t of again) this.enqueue(paperId, t);
+    for (const t of again) this.enqueue(paperId, t, true);
     if (!again.length) {
       // Nothing failed: what the reader is at, again (a stop left it undone).
-      this.passes.prepareMap(paperId);
+      this.passes.prepare(paperId);
+      for (const t of [...q.proposed.values()]) this.enqueue(paperId, t, true);
       this.hub.touch(paperId);
     }
   }
 
   status(paperId: string): ReaderAuthorView {
-    const q = this.queues.get(paperId);
-    if (!q) return { state: "idle", queued: 0 };
+    const q = this.queue(paperId);
+    const s = this.settings();
     const failed = [...q.failed.values()];
+    const proposals = [...q.proposed.entries()]
+      .filter(([, task]) => !this.done(paperId, task))
+      .map(([key, task]) => ({ key, label: this.taskLabel(paperId, task), maxTurns: this.maxTurns(task, s) }));
+    const locked = this.stopped(paperId);
     return {
-      state: q.current ? "running" : q.state,
+      state: q.current ? "running" : locked ? "stopped" : q.state === "stopped" ? "idle" : q.state,
+      ...(locked ? { locked: true } : {}),
       ...(q.current ? { task: this.taskLabel(paperId, q.current) } : {}),
       ...(q.note ? { note: q.note } : {}),
       ...(failed.length && !q.current ? { error: failed.map((f) => `${this.taskLabel(paperId, f.task)}: ${f.why}`).join(" · ") } : {}),
       queued: q.tasks.length,
+      mode: s.mode,
+      ...(proposals.length ? { proposals } : {}),
     };
   }
 
-  unitState(paperId: string, unit: string): { state: "preparing" | "failed" | "waiting"; error?: string } {
+  unitState(paperId: string, unit: string): { state: "preparing" | "failed" | "waiting" | "proposed"; error?: string } {
     const q = this.queues.get(paperId);
     const key = `unit:${unit}`;
     if (q?.current && taskKey(q.current) === key) return { state: "preparing" };
+    if (q?.tasks.some((t) => taskKey(t) === key)) return { state: "preparing" };
     const failed = q?.failed.get(key);
     if (failed) return { state: "failed", error: failed.why };
+    if (q?.proposed.has(key)) return { state: "proposed" };
     return { state: "waiting" };
+  }
+
+  private settings(): ReaderAgentSettings {
+    try {
+      return this.host()?.settings?.() ?? AUTO;
+    } catch {
+      return { ...AUTO, mode: "ask" };
+    }
+  }
+
+  /** The most agent turns a task may take (what the reader is told before pressing Soạn). */
+  private maxTurns(task: Task, s: ReaderAgentSettings): number {
+    // A checkpoint: the author's turns, then per check up to two checker turns, and one author turn per fix round.
+    return task.kind === "unit" && s.checker ? TURNS + 2 * (s.rounds + 1) + s.rounds : TURNS;
+  }
+
+  /** Already written: nothing to do. */
+  private done(paperId: string, task: Task): boolean {
+    if (task.kind === "unit") return !!this.passes.pack(paperId, task.unit);
+    if (task.kind === "widget") return !!this.hub.widgets.read(paperId, task.request.id);
+    if (task.kind === "deep") return !!this.hub.deep.read(paperId);
+    if (task.kind === "cards") return this.hub.cards.hasProposals(paperId);
+    return !this.passes.mapMissing(paperId).length;
+  }
+
+  private stopped(paperId: string): boolean {
+    try {
+      return this.hub.store.readJson<{ stopped?: boolean }>(paperId, "author.json")?.stopped === true;
+    } catch {
+      return false;
+    }
+  }
+
+  private setStopped(paperId: string, stopped: boolean): void {
+    this.hub.store.writeJsonFile(paperId, "author.json", { stopped });
   }
 
   private queue(paperId: string): Queue {
     let q = this.queues.get(paperId);
     if (!q) {
-      q = { tasks: [], state: "idle", failed: new Map() };
+      q = { tasks: [], state: "idle", failed: new Map(), proposed: new Map() };
       this.queues.set(paperId, q);
     }
     return q;
@@ -182,6 +292,8 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       q.state = abort.signal.aborted ? "stopped" : q.failed.size ? "failed" : "idle";
       this.hub.touch(paperId);
     }
+    // Soạn pressed while a stopped task was still winding down: what it queued runs now.
+    if (q.tasks.length) void this.run(paperId);
   }
 
   private async prepare(chat: AuthorChat, signal: AbortSignal, ready: () => boolean, label: string, context: string): Promise<void> {
@@ -245,7 +357,12 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       if (!this.drafts.has(key)) throw new Error("người soạn chưa viết được checkpoint của mục này");
       const q = this.queue(paperId);
       const unchecked = new Set<string>();
-      for (let round = 0; !signal.aborted; round++) {
+      const settings = this.settings();
+      if (!settings.checker) {
+        // The reader turned the checker off: the questions arrive marked as not checked.
+        for (const i of this.drafts.get(key)!.items) unchecked.add(i.id);
+      }
+      for (let round = 0; settings.checker && !signal.aborted; round++) {
         const draft = this.drafts.get(key)!;
         const batch = draft.items.filter((i) => draft.changed.has(i.id));
         if (!batch.length) break;
@@ -273,8 +390,8 @@ export class ReaderAuthor implements ReaderAuthorQueue {
           ...(lowOnly ? { bloomRejected: 1 } : {}),
         } });
         if (!bad.length && !lowOnly) break;
-        if (round >= FIX_ROUNDS) {
-          // Still not solved blind after two fixes: the question does not reach the reader.
+        if (round >= settings.rounds) {
+          // Still not solved blind after the last fix round: the question does not reach the reader.
           const drop = new Set(bad.map((b) => b.item.id));
           draft.items = draft.items.filter((i) => !drop.has(i.id));
           break;

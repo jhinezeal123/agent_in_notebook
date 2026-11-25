@@ -40,7 +40,7 @@ import {
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
-import { BRIDGE_VERSION, dataDir, loadReaderConfig, loadResearchConfig, removeCustomAgent, saveReaderConfig, saveResearchConfig, type ReaderConfig } from "./config.js";
+import { BRIDGE_VERSION, dataDir, loadReaderConfig, loadResearchConfig, readerAgentSettings, removeCustomAgent, saveReaderConfig, saveResearchConfig, type ReaderConfig } from "./config.js";
 import { Orx, type OrxOptions } from "./research/orx.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
@@ -220,8 +220,14 @@ export class Bridge {
       },
       emit: (event, params) => this.toEditor(event, params),
       log: (m) => this.log(m),
-      // The hidden author and checker of a paper (ER-2), shown nowhere.
-      author: () => ({ chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind), log: (m) => this.log(m) }),
+      // The hidden author and checker of a paper (ER-2), shown nowhere; when they may run is the reader's (reader.json).
+      author: () => ({
+        chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind),
+        log: (m) => this.log(m),
+        settings: () => readerAgentSettings(loadReaderConfig()),
+        // On their own, background agents wait while the paper's tutor is closed: they only ever run on its agent.
+        canRun: (paperId) => !!this.readerTutor(paperId),
+      }),
       // A misconception about a paper goes into Mentor's book too (asked again in two days).
       misconception: ({ paperId, title, concept, note }) => this.mentor.record({ t: "misconception", attemptId: paperEventId(paperId), tag: `paper:${paperId}:${concept}`.slice(0, 80), note, title: title.slice(0, 200) }),
       learning: (paperId) => {
@@ -727,7 +733,6 @@ export class Bridge {
       return this.mentorPlaces.appendReaderLab(p.tabId, `reader: lab ${paperId} ${widget}`, readerLab(this.reader, paperId, widget));
     }));
     rpc.handle("reader.progress", guard<"reader.progress">((p) => {
-      this.readerAgent(String(p.paperId), p.agentId);
       this.reader.progress(String(p.paperId), String(p.section), Number(p.ms));
       return { ok: true as const };
     }));
@@ -748,8 +753,8 @@ export class Bridge {
     rpc.handle("reader.guide", guard<"reader.guide">((p) => {
       const paperId = String(p.paperId);
       this.reader.meta(paperId);
-      this.readerAgent(paperId, p.agentId);
-      this.reader.passes.prepareLater(paperId);
+      // What the reader is at would need: proposals the reader starts (mode "ask"), or jobs (mode "auto").
+      this.reader.passes.prepare(paperId);
       return this.reader.passes.guide(paperId);
     }));
     rpc.handle("reader.appeal", guard<"reader.appeal">((p) => {
@@ -778,14 +783,12 @@ export class Bridge {
     }));
     rpc.handle("reader.widget.request", guard<"reader.widget.request">((p) => {
       const paperId = String(p.paperId);
-      this.readerAgent(paperId, p.agentId);
       this.reader.widgets.request(paperId, p.anchor, p.goal);
       return this.reader.passes.guide(paperId);
     }));
     rpc.handle("reader.peer", guard<"reader.peer">((p) => {
       const paperId = String(p.paperId);
       this.reader.meta(paperId);
-      this.readerAgent(paperId, p.agentId);
       this.reader.peers.start(paperId, String(p.note), p.persona, (role) => this.readerHiddenChat(paperId, role, `peer:${p.persona}`));
       return { accepted: true };
     }));
@@ -797,12 +800,10 @@ export class Bridge {
     }));
     rpc.handle("reader.goal", guard<"reader.goal">((p) => {
       this.reader.requireStudySession(String(p.paperId));
-      this.readerAgent(String(p.paperId), p.agentId);
       return this.reader.passes.goal(String(p.paperId), p.goal);
     }));
     rpc.handle("reader.pass", guard<"reader.pass">((p) => {
       this.reader.requireStudySession(String(p.paperId));
-      this.readerAgent(String(p.paperId), p.agentId);
       return this.reader.passes.pass(String(p.paperId), Number(p.pass) as 1 | 2 | 3 | 4, !!p.done);
     }));
     rpc.handle("reader.answer", guard<"reader.answer">((p) => {
@@ -840,33 +841,29 @@ export class Bridge {
     rpc.handle("reader.author", guard<"reader.author">((p) => {
       const paperId = String(p.paperId);
       this.reader.meta(paperId);
-      this.readerAgent(paperId, p.agentId);
       if (p.action === "stop") this.reader.author.stop(paperId);
+      else if (p.action === "unlock") this.reader.author.unlock(paperId);
+      else if (p.action === "run") this.reader.author.start(paperId, String(p.task ?? "all"));
       else this.reader.author.retry(paperId);
       return this.reader.passes.guide(paperId);
     }));
     rpc.handle("reader.settings", guard<"reader.settings">((p) => {
-      if (p?.checkerAgentId !== undefined || p?.checkerModel !== undefined) {
+      if (p?.agentMode !== undefined || p?.checker !== undefined || p?.checkerRounds !== undefined) {
         const next: ReaderConfig = { ...loadReaderConfig() };
-        if (p.checkerAgentId !== undefined) {
-          const id = typeof p.checkerAgentId === "string" ? p.checkerAgentId.trim() : "";
-          if (id) {
-            if (!findAgent(id)) throw new Error(`Unknown agent ${id}`);
-            next.checkerAgentId = id;
-          } else {
-            delete next.checkerAgentId;
-          }
+        if (p.agentMode !== undefined) {
+          if (p.agentMode !== "ask" && p.agentMode !== "auto" && p.agentMode !== "off") throw new Error("agentMode is ask, auto or off.");
+          next.agentMode = p.agentMode;
         }
-        if (p.checkerModel !== undefined) {
-          const model = typeof p.checkerModel === "string" ? p.checkerModel.trim() : "";
-          if (model) next.checkerModel = model;
-          else delete next.checkerModel;
+        if (p.checker !== undefined) next.checker = !!p.checker;
+        if (p.checkerRounds !== undefined) {
+          if (![0, 1, 2].includes(Number(p.checkerRounds))) throw new Error("checkerRounds is 0, 1 or 2.");
+          next.checkerRounds = Number(p.checkerRounds);
         }
         saveReaderConfig(next);
       }
       const saved = loadReaderConfig();
-      const envModel = process.env.AINB_READER_CHECKER_MODEL;
-      return { ...saved, ...(envModel ? { checkerEnvModel: envModel } : {}) };
+      const effective = readerAgentSettings(saved);
+      return { agentMode: effective.mode, checker: effective.checker, checkerRounds: effective.rounds };
     }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
@@ -1138,51 +1135,44 @@ export class Bridge {
   }
 
   private readerSeq = 0;
-  /** The agent the reader uses, per paper (the editor says), for hidden chats when no tutor chat is open. */
-  private readonly readerAgents = new Map<string, string>();
 
-  private readerAgent(paperId: string, agentId: unknown): void {
-    if (typeof agentId === "string" && findAgent(agentId)) this.readerAgents.set(paperId, agentId);
+  /** The open tutor chat of a paper: every background agent of easy-read runs on its agent and settings. */
+  private readerTutor(paperId: string): Chat | undefined {
+    return [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
   }
 
   /**
-   * A hidden chat of easy-read (the author or the checker of a paper): the
-   * same agent as the paper's tutor, on no notebook, its events to no one.
+   * A hidden chat of easy-read (the author, the checker, a margin peer): the
+   * paper's tutor's agent with the tutor's settings copied (its model,
+   * effort…; not its session mode, which could let the agent's own tools run
+   * without asking), on no notebook, its events to no one. No tutor open: it
+   * does not run (the reading tab opens the tutor before a click starts one).
+   * `agentId`: `ainb reader eval` only, which has no tutor.
    */
-  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "peer:experimentalist" | "peer:theorist"): AuthorChat {
-    const tutor = [...this.chats.values()].find((c) => readerOf(c)?.paperId === paperId && c.status !== "closed");
-    const readerCfg = kind === "checker" ? loadReaderConfig() : {};
-    const fallbackSpec = tutor?.spec ?? findAgent(this.readerAgents.get(paperId) ?? "claude") ?? findAgent("claude");
-    let spec = fallbackSpec;
-    if (kind === "checker" && readerCfg.checkerAgentId) {
-      const configured = findAgent(readerCfg.checkerAgentId);
-      if (configured) spec = configured;
-      else this.log(`Reader: configured checker agent "${readerCfg.checkerAgentId}" is not available; falling back.`);
-    }
-    if (!spec) throw new Error("No agent to prepare the paper.");
+  private readerHiddenChat(paperId: string, role: ChatRole, kind: "author" | "checker" | "peer:experimentalist" | "peer:theorist", agentId?: string): AuthorChat {
+    const tutor = agentId ? undefined : this.readerTutor(paperId);
+    const spec = tutor?.spec ?? (agentId ? findAgent(agentId) : undefined);
+    if (!spec) throw new Error(agentId ? `Không có agent ${agentId}.` : "Mở chat gia sư của paper này: agent nền chạy đúng agent và cấu hình của gia sư.");
     const key = kind.startsWith("peer:") ? `reader-peer:${paperId}:${kind.slice(5)}` : `reader-${kind}:${paperId}`;
     const target: Target = { kind: "vscode", tabId: -2_000_000_000 - ++this.readerSeq };
     const host: ChatHost = { ...this.chatHost(target, key, true), emit: () => {} };
     const chat = new Chat(target.tabId, spec, DEFAULT_SETTINGS, host, { notebookKey: key, role });
     this.byToken.set(chat.mcpToken, chat);
-    const tutorModel = tutor?.options().find((option) => option.category === "model")?.value;
-    const sameAgentAsTutor = !!tutor && spec.id === tutor.spec.id;
-    const model = kind === "checker"
-      ? readerCfg.checkerModel || process.env.AINB_READER_CHECKER_MODEL || (sameAgentAsTutor ? tutorModel : undefined)
-      : tutorModel;
-    let ready = Promise.resolve();
-    if (typeof model === "string" && model) {
-      ready = chat.ensureStarted().then(async () => {
-        const option = chat.options().find((o) => o.category === "model" && o.kind === "select");
-        if (option?.choices?.some((choice) => choice.value === model)) {
-          if (option.value !== model) await chat.setOption(option.id, model);
-        } else if (option) {
-          this.log(`Reader: model "${model}" is not offered by ${spec.name} for ${kind}; using agent default.`);
-        }
-      }).catch((e: Error) => this.log(`Reader: cannot select the ${kind} model: ${e.message}`));
-    }
+    let ready: Promise<void> = tutor
+      ? tutor.ensureStarted().then(() => chat.ensureStarted()).then(async () => {
+          for (const want of tutor.options().filter((o) => !o.viaMode)) {
+            const have = chat.options().find((o) => o.id === want.id && !o.viaMode);
+            if (!have || have.value === want.value) continue;
+            if (have.kind === "select" && !have.choices?.some((c) => c.value === want.value)) continue;
+            await chat.setOption(have.id, want.value);
+          }
+        }).catch((e: Error) => this.log(`Reader: cannot copy the tutor's settings to the ${kind}: ${e.message}`))
+      : Promise.resolve();
+    const counted = kind.startsWith("peer:") ? "peer" : kind as "author" | "checker";
     return {
       send: (text, context) => {
+        // Each turn is a request the agent's provider bills: counted for the reader to see.
+        this.reader.countTurn(paperId, counted);
         ready = ready.then(() => { if (chat.status !== "closed") chat.send(text, context ? { context } : {}); });
       },
       whenIdle: async (signal) => {
@@ -1413,11 +1403,10 @@ export class Bridge {
           } catch { return false; }
         }) : undefined;
         if (!paperId) return json(res, 404, { error: "Mở paper và soạn nội dung trong Easy Read trước khi đo." });
-        this.readerAgent(paperId, input.agent);
         const items = this.reader.passes.items(paperId);
         const stats = qualityStats(this.reader.store.state(paperId), items);
         const quiz = input.quiz === true
-          ? await runPaperQuiz(this.reader, paperId, items, (role) => this.readerHiddenChat(paperId, role, "checker"))
+          ? await runPaperQuiz(this.reader, paperId, items, (role) => this.readerHiddenChat(paperId, role, "checker", typeof input.agent === "string" && input.agent ? input.agent : undefined))
           : undefined;
         return json(res, 200, { paperId, title: this.reader.meta(paperId).title, ...stats, ...(quiz ? { quiz } : {}) });
       } catch (e) {

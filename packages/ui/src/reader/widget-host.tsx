@@ -41,18 +41,18 @@ export function Widget({ widget, actions }: { widget: ReaderWidgetView; actions:
     finally { setBusy(false); }
   }
   return <details class="er-widget">
-    <summary>{widget.title}</summary>
+    <summary><Md text={widget.title} class="er-inline" /></summary>
     <div class="er-row">{widget.evidence?.map(({ anchor, quote }, i) => <Cite key={i} anchor={{ id: anchor, quote }} onCite={actions.cite} />)}</div>
     {widget.prediction && !widget.model && <div>
-      <p>{widget.prediction.question}</p>
+      <Md text={widget.prediction.question} onCite={actions.cite} />
       {widget.prediction.choices.map((option, index) => <label key={option}>
-        <input type="radio" name={`prediction-${widget.id}`} checked={choice === index} onChange={() => setChoice(index)} /> {option}
+        <input type="radio" name={`prediction-${widget.id}`} checked={choice === index} onChange={() => setChoice(index)} /> <Md text={option} class="er-inline" />
       </label>)}
       <button class="er-btn primary" disabled={busy || choice === undefined} onClick={() => void submit()}>Chốt dự đoán</button>
       <button class="er-link" disabled={busy} onClick={() => void actions.act("reader.skip", { task: `widget:${widget.id}` }).catch(() => {})}>Cho xem luôn</button>
     </div>}
     {widget.result && <p role="status">{widget.result.correct ? "Dự đoán đúng." : "Dự đoán chưa đúng. Thử thay đổi tham số để xem vì sao."}</p>}
-    {(widget.result?.right ?? widget.right) !== undefined && <p>Đáp án · {widget.prediction?.choices[(widget.result?.right ?? widget.right)!]}</p>}
+    {(widget.result?.right ?? widget.right) !== undefined && <p>Đáp án · <Md text={widget.prediction?.choices[(widget.result?.right ?? widget.right)!] ?? ""} class="er-inline" /></p>}
     {widget.explanation && <Md text={widget.explanation} onCite={actions.cite} />}
     {widget.model && <Model model={widget.model} />}
     {!!widget.tryThis.length && <div><b>Thử điều này</b><ul>{widget.tryThis.map((s) => <li key={s}><Md text={s} /></li>)}</ul></div>}

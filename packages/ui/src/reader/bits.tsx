@@ -48,11 +48,11 @@ export function WriteResult({ write, labels, onCite }: { write: ReaderWriteView;
       {write.parts && write.parts.length > 0 && (
         <div class="er-parts">
           {write.parts.map((p) => (
-            <div key={p.key} class="er-row small"><GradeBadge grade={p.grade} /> <b>{labels?.[p.key] ?? p.key}</b>{p.note && <span class="er-muted"> {p.note}</span>}</div>
+            <div key={p.key} class="er-row small"><GradeBadge grade={p.grade} /> <b>{labels?.[p.key] ?? p.key}</b>{p.note && <span class="er-muted"> <Md text={p.note} onCite={onCite} class="er-inline" /></span>}</div>
           ))}
         </div>
       )}
-      {write.missing && write.missing.length > 0 && <div class="small"><b>Còn thiếu:</b> {write.missing.join(" · ")}</div>}
+      {write.missing && write.missing.length > 0 && <div class="small"><b>Còn thiếu:</b> <Md text={write.missing.join(" · ")} onCite={onCite} class="er-inline" /></div>}
       {write.feedback && <Md text={write.feedback} onCite={onCite} class="er-feedback" />}
     </div>
   );

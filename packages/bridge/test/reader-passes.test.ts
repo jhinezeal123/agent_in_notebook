@@ -10,6 +10,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { READER_FIVE_C } from "@ainb/protocol";
 import { ReaderChat } from "../src/reader/chat.js";
 import type { ReaderCheckerRole } from "../src/reader/checker.js";
+import type { ReaderAgentSettings } from "../src/reader/author.js";
 import { itemId, rightChoice, type ReaderItem } from "../src/reader/items.js";
 import { cleanShelves, LORA, LORA_ID, testHub } from "./fixtures/reader/fake-arxiv.js";
 import { checkerAnswer, FORWARD_TWOTIER, lightPack, MAP, PACK_S4, PARAMS_NUMERIC, scriptedAuthor, toolCtx, ZERO_MCQ, type ScriptCall } from "./fixtures/reader/lora-guide.js";
@@ -27,6 +28,8 @@ interface Behaviour {
   fixes?: boolean;
   /** The checker does not answer at all. */
   silentChecker?: boolean;
+  /** When the author may run (reader.json); absent: on its own, as before. */
+  settings?: ReaderAgentSettings;
 }
 
 function author(b: Behaviour = {}) {
@@ -51,7 +54,7 @@ function author(b: Behaviour = {}) {
 async function reading(b: Behaviour = {}) {
   const a = author(b);
   const misconception = vi.fn();
-  const t = testHub(undefined, { author: () => a.host, misconception });
+  const t = testHub(undefined, { author: () => (b.settings ? { ...a.host, settings: () => b.settings! } : a.host), misconception });
   await t.hub.open({ arxiv: LORA });
   const idle = () => vi.waitFor(() => expect(t.hub.author.status(LORA_ID).state).not.toBe("running"), { timeout: 3000, interval: 10 });
   return { ...t, a, misconception, idle, passes: t.hub.passes };
@@ -107,6 +110,47 @@ describe("pass 1: the map", () => {
     await vi.waitFor(() => expect(t.hub.author.status(LORA_ID).state).toBe("stopped"), { timeout: 3000, interval: 10 });
   });
 
+  it("in mode ask, runs nothing until the reader presses Soạn; a locked paper runs nothing until unlocked", async () => {
+    const settings: ReaderAgentSettings = { mode: "ask", checker: true, rounds: 2 };
+    const a = scriptedAuthor(() => {});
+    const t = testHub(undefined, { author: () => ({ ...a.host, settings: () => settings }) });
+    await t.hub.open({ arxiv: LORA });
+    t.hub.passes.goal(LORA_ID, "gist");
+    t.hub.passes.prepare(LORA_ID);
+    let s = t.hub.author.status(LORA_ID);
+    expect(s).toMatchObject({ state: "idle", mode: "ask", proposals: [{ key: "map", label: "Bản đồ paper", maxTurns: 3 }] });
+    expect(a.sent).toEqual([]);
+    t.hub.author.start(LORA_ID, "map");
+    expect(t.hub.author.status(LORA_ID).state).toBe("running");
+    expect(t.hub.author.status(LORA_ID).proposals).toBeUndefined();
+    t.hub.author.stop(LORA_ID);
+    await vi.waitFor(() => expect(t.hub.author.status(LORA_ID).state).toBe("stopped"), { timeout: 3000, interval: 10 });
+    expect(t.hub.author.status(LORA_ID)).toMatchObject({ locked: true, proposals: [{ key: "map" }] });
+    // Even in mode auto, what the passes prepare waits while the paper is locked.
+    settings.mode = "auto";
+    const sent = a.sent.length;
+    t.hub.passes.prepare(LORA_ID);
+    expect(t.hub.author.status(LORA_ID).state).toBe("stopped");
+    expect(a.sent.length).toBe(sent);
+    // Mode off: nothing runs, even on a click.
+    settings.mode = "off";
+    expect(() => t.hub.author.start(LORA_ID, "map")).toThrow(/Agent nền đang tắt/);
+    settings.mode = "ask";
+    // Locked: a click does not run it either, nor does Soạn lại; unlocking runs nothing by itself.
+    expect(() => t.hub.author.start(LORA_ID, "map")).toThrow(/đang khóa agent/);
+    expect(() => t.hub.author.retry(LORA_ID)).toThrow(/đang khóa agent/);
+    t.hub.author.unlock(LORA_ID);
+    s = t.hub.author.status(LORA_ID);
+    expect(s).toMatchObject({ state: "idle", proposals: [{ key: "map" }] });
+    expect(s.locked).toBeUndefined();
+    expect(a.sent.length).toBe(sent);
+    t.hub.author.start(LORA_ID, "map");
+    s = t.hub.author.status(LORA_ID);
+    expect(s.state).toBe("running");
+    t.hub.author.stop(LORA_ID);
+    await vi.waitFor(() => expect(t.hub.author.status(LORA_ID).state).toBe("stopped"), { timeout: 3000, interval: 10 });
+  });
+
   it("opens a pretest answer once its section is read; a guess is kept", async () => {
     const r = await reading();
     r.passes.goal(LORA_ID, "use");
@@ -153,6 +197,26 @@ describe("pass 2: checkpoints, one step ahead, solved blind", () => {
     expect(ids).toContain(fixedId);
     expect(ids).not.toContain(ZERO_ID);
     expect(r.passes.pack(LORA_ID, "S4")!.checked).toBe(true);
+  });
+
+  it("with the checker off, opens no checker chat and marks the questions as not checked", async () => {
+    const r = await inPass2({ settings: { mode: "auto", checker: false, rounds: 2 } });
+    expect(r.a.sent.filter((s) => s.kind === "checker")).toEqual([]);
+    const pack = r.passes.pack(LORA_ID, "S4")!;
+    expect(pack.checked).toBe(false);
+    expect(pack.items.every((i) => i.unchecked)).toBe(true);
+  });
+
+  it("tells the reader how many agent turns a checkpoint may take", async () => {
+    const r = await reading({ settings: { mode: "ask", checker: true, rounds: 1 } });
+    r.passes.goal(LORA_ID, "deep");
+    r.hub.author.start(LORA_ID, "map");
+    await r.idle();
+    r.passes.pass(LORA_ID, 2);
+    const proposals = r.hub.author.status(LORA_ID).proposals ?? [];
+    // Three author turns, two checks of up to two turns, one fix.
+    expect(proposals.map((p) => [p.key, p.maxTurns])).toEqual([["unit:S1", 3 + 2 * 2 + 1], ["unit:S2", 3 + 2 * 2 + 1]]);
+    expect(r.passes.guide(LORA_ID).units.slice(0, 2).map((u) => u.state)).toEqual(["proposed", "proposed"]);
   });
 
   it("relabels a question's level as the checker sees it", async () => {

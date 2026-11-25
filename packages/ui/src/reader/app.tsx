@@ -11,7 +11,7 @@ import { READER_ASK_LABEL, readerCiteLabel, readerSessionRemaining, type ReaderA
 import { anchorFor, selectionText } from "./anchors.js";
 import { HtmlDoc } from "./doc-html.js";
 import { PdfDoc } from "./doc-pdf.js";
-import { AuthorLine, GuidePanel, PassBar, type GuideActions } from "./guide.js";
+import { AgentTurns, AuthorLine, GuidePanel, PassBar, type GuideActions } from "./guide.js";
 import type { DocHandle, ReaderInit, ReaderPageHost } from "./host.js";
 import { ReaderWidgets } from "./widget-host.js";
 import { Cite, Md } from "./bits.js";
@@ -238,6 +238,7 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
           </div>
         </div>
         {guide && <PassBar guide={guide} onOpen={() => setAside((a) => (a === "guide" ? null : "guide"))} />}
+        {guide && <AgentTurns guide={guide} />}
         <StudyClock session={view.session} change={async (action) => {
           try { setView(await host.request<ReaderView>("reader.session", { action })); }
           catch (e) { say((e as Error).message); }
@@ -252,7 +253,7 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
         </button>
         <button class="er-btn primary" onClick={() => void host.request("chat.focus")} title="Khung chat bên cạnh là gia sư của paper này">Hỏi gia sư</button>
       </header>
-      {(view.warnings.length > 0 || view.arxivHint || textState || cover || (guide && guide.author.state !== "idle")) && (
+      {(view.warnings.length > 0 || view.arxivHint || textState || cover || guide) && (
         <div class="er-notices">
           {cover && <div class="er-notice">Mục đang được gập để bạn nhớ lại. Viết xong (hoặc bấm “Mở lại mục”) thì nó hiện lại.</div>}
           {guide && <AuthorLine guide={guide} act={act} />}
