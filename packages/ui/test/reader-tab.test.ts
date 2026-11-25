@@ -225,14 +225,20 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
     await item.locator(".er-option").nth(1).locator("label").click();
     await item.getByText("3 Rất chắc").click();
     await page.evaluate(() => {
-      window.answer = { correct: true, confidence: 3, points: 3, choice: { options: [1] }, right: { options: [1] }, why: ["Nghĩ A ngẫu nhiên thì BA cũng ngẫu nhiên", "B = 0 nên BA = 0", "Nhầm với W0"], explain: "B = 0 nên $\\Delta W = BA = 0$ [[S4.SS1.p2]].", evidence: [{ anchor: "S4.SS1.p2", quote: "zero for B" }], at: 1 };
+      window.answer = { correct: true, confidence: 3, points: 3, choice: { options: [1] }, right: { options: [1] }, why: ["Nghĩ A ngẫu nhiên thì BA cũng ngẫu nhiên", "$B = 0$ nên $BA = 0$", "Nhầm với W0"], explain: "B = 0 nên $\\Delta W = BA = 0$ [[S4.SS1.p2]].", evidence: [{ anchor: "S4.SS1.p2", quote: "zero for $B$" }], at: 1 };
       const unit = window.guide.units[0]!;
       window.guide = { ...window.guide, units: [{ ...unit, items: [{ ...unit.items[0]!, result: window.answer as never }] }] };
     });
     await item.getByText("Trả lời").click();
     expect(await page.evaluate(() => window.calls.filter((c) => c[0] === "reader.answer").map((c) => c[1]))).toEqual([{ item: "q-1", choice: { options: [1] }, confidence: 3 }]);
     await item.locator(".er-result-head").getByText("✓ Đúng · +3 điểm").waitFor();
-    expect(await item.locator(".er-why").allTextContents()).toEqual(["Vì sao đúng: B = 0 nên BA = 0"]);
+    // Every part of the panel draws its formulas: the reasons and the paper's words too, not only the stem.
+    const why = item.locator(".er-why");
+    expect(await why.count()).toBe(1);
+    expect(await why.locator(".katex").count()).toBe(2);
+    expect(await why.innerText()).not.toContain("$");
+    expect(await item.locator(".er-quote-line .katex").count()).toBe(1);
+    expect(await item.locator(".er-result").innerText()).not.toContain("$");
     await item.locator(".er-result .cite-chip").first().click();
     await page.waitForFunction(() => (CSS as unknown as { highlights: Map<string, unknown> }).highlights.has("er-cite"));
   });
@@ -251,13 +257,14 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
     await page.evaluate(() => {
       window.guide = { ...window.guide, widgets: [{
         id: "lora-rank", anchor: { id: "S4.E3" }, title: "Số tham số theo rank", goal: "Đổi rank để hiểu kích thước",
-        tryThis: [], prediction: { question: "Tăng rank gấp đôi thì sao?", choices: ["Tăng gấp đôi", "Giữ nguyên"] },
+        tryThis: [], prediction: { question: "Tăng rank $r$ gấp đôi thì sao?", choices: ["Tăng gấp đôi", "Giữ nguyên"] },
       }] };
       window.emit("updated", { ...(window as unknown as { view: ReaderView }).view, guideRev: 10 });
     });
     const widget = page.locator(".er-widget-slot .er-widget");
     await widget.getByText("Số tham số theo rank").click();
     expect(await widget.locator("input[type=range]").count()).toBe(0);
+    expect(await widget.locator(".katex").count()).toBe(1);
     await widget.getByLabel("Tăng gấp đôi").check();
     await widget.getByRole("button", { name: "Chốt dự đoán" }).click();
     await widget.getByText("Dự đoán đúng.").waitFor();

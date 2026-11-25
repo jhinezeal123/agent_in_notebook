@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import type { ReaderCardGrade, ReaderCardView, ReaderGuide } from "@ainb/protocol";
-import { Cite } from "./bits.js";
+import { Cite, Md } from "./bits.js";
 import type { GuideActions } from "./guide.js";
 
 export function ReviewCard({ card, grade, buttonClass = "er-btn" }: { card: ReaderCardView; grade: (g: ReaderCardGrade) => Promise<unknown>; buttonClass?: string }) {
@@ -20,9 +20,9 @@ export function ReviewCard({ card, grade, buttonClass = "er-btn" }: { card: Read
     }
   }
   return <div class="er-review-card">
-    <p><b>{card.front}</b></p>
+    <b><Md text={card.front} /></b>
     {revealed ? <>
-      <p>{card.back}</p>
+      <Md text={card.back} />
       <div class="er-row">
         <button class={buttonClass} disabled={busy} onClick={() => void review("again")}>Quên</button>{" "}
         <button class={buttonClass} disabled={busy} onClick={() => void review("hard")}>Khó</button>{" "}
@@ -41,8 +41,8 @@ export function ReaderCards({ guide, actions }: { guide: ReaderGuide; actions: G
     <h4>Thẻ ôn</h4>
     {due && <ReviewCard key={due.id} card={due} grade={(grade) => actions.act("reader.cards.review", { card: due.id, grade })} />}
     {cards.map((card) => <div class="er-step" key={card.id}>
-      <b>{card.front}</b>{card.kept && <span class="er-muted"> · {card.due ? `ôn ${new Date(card.due).toLocaleDateString("vi")}` : "đã qua lịch ôn"}</span>}
-      {!card.kept && <p>{card.back}</p>}
+      <b><Md text={card.front} onCite={actions.cite} class="er-inline" /></b>{card.kept && <span class="er-muted"> · {card.due ? `ôn ${new Date(card.due).toLocaleDateString("vi")}` : "đã qua lịch ôn"}</span>}
+      {!card.kept && <Md text={card.back} onCite={actions.cite} />}
       <div class="er-row">
         <Cite anchor={card.anchor} onCite={actions.cite} />
         {!card.kept && <button class="er-btn" onClick={() => void actions.act("reader.cards.keep", { card: card.id }).catch(() => {})}>Giữ</button>}

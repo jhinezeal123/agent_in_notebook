@@ -41,6 +41,8 @@ beforeAll(async () => {
     { id: "fake", name: "Fake Agent", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 3, env: { FAKE_AGENT_LOG: agentLog, FAKE_AGENT_TAG: "fake" } },
     { id: "fake-checker", name: "Fake Checker", command: process.execPath, args: [FAKE_AGENT], toolWaitSeconds: 3, env: { FAKE_AGENT_LOG: agentLog, FAKE_AGENT_TAG: "fake-checker" } },
   ]));
+  // These tests follow the author as it prepares ahead on its own; by default it waits for the reader's Soạn (tested below).
+  writeFileSync(join(home, "reader.json"), JSON.stringify({ agentMode: "auto" }));
   bridge = new Bridge({ port: 0, token: TOKEN, mcpCommand: { command: process.execPath, args: [CLI, "mcp"] }, research: NO_ORX, log: () => {} });
   port = await bridge.listen();
   editor = new FakeExtension(new FakeNotebook([]), 300);
@@ -376,16 +378,47 @@ describe("checker settings (reader.settings)", () => {
   });
 
   it("reads defaults, persists to reader.json, validates agent ids, reflects env hint, and clears fields", async () => {
-    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual({});
+    // reader.json holds agentMode "auto" for this file (top beforeAll); the other agent settings are the defaults, always answered.
+    const effective = { agentMode: "auto", checker: true, checkerRounds: 2 };
+    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual(effective);
     await expect(editor.request("reader.settings", { checkerAgentId: "no-such-agent" })).rejects.toThrow(/Unknown agent/);
-    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "smart" })).toEqual({ checkerAgentId: "fake-checker", checkerModel: "smart" });
-    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ checkerAgentId: "fake-checker", checkerModel: "smart" });
+    await expect(editor.request("reader.settings", { agentMode: "sometimes" })).rejects.toThrow(/agentMode/);
+    await expect(editor.request("reader.settings", { checkerRounds: 5 })).rejects.toThrow(/checkerRounds/);
+    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "smart" })).toEqual({ ...effective, checkerAgentId: "fake-checker", checkerModel: "smart" });
+    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ agentMode: "auto", checkerAgentId: "fake-checker", checkerModel: "smart" });
     process.env.AINB_READER_CHECKER_MODEL = "env-fast";
-    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual({ checkerAgentId: "fake-checker", checkerModel: "smart", checkerEnvModel: "env-fast" });
-    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "", checkerModel: "" })).toEqual({ checkerEnvModel: "env-fast" });
-    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({});
+    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual({ ...effective, checkerAgentId: "fake-checker", checkerModel: "smart", checkerEnvModel: "env-fast" });
+    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "", checkerModel: "" })).toEqual({ ...effective, checkerEnvModel: "env-fast" });
+    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ agentMode: "auto" });
     delete process.env.AINB_READER_CHECKER_MODEL;
+    expect(await editor.request<ReaderSettings>("reader.settings", { checker: false, checkerRounds: 0 })).toEqual({ ...effective, checker: false, checkerRounds: 0 });
+    expect(await editor.request<ReaderSettings>("reader.settings", { checker: true, checkerRounds: 2 })).toEqual(effective);
   });
+
+  it("in mode ask, runs the author only on Soạn, counts its turns, and proposes the next checkpoints", async () => {
+    const id = await openSamplePaper("ask-first.pdf");
+    await editor.request("reader.settings", { agentMode: "ask" });
+    try {
+      const logBefore = readLog().length;
+      let g = await editor.request<ReaderGuide>("reader.goal", { paperId: id, goal: "use", agentId: "fake" });
+      expect(g.author).toMatchObject({ state: "idle", mode: "ask", proposals: [{ key: "map", label: "Bản đồ paper", maxTurns: 3 }] });
+      g = await editor.request<ReaderGuide>("reader.guide", { paperId: id, agentId: "fake" });
+      expect(g.author.state).toBe("idle");
+      expect(readLog().length).toBe(logBefore);
+      expect(g.agentTurns).toEqual({ author: 0, checker: 0, peer: 0 });
+      await editor.request("reader.author", { paperId: id, action: "run", task: "map", agentId: "fake" });
+      g = await settled(id, "the map", (x) => x.map.has.pretest);
+      expect(g.agentTurns!.author).toBeGreaterThan(0);
+      expect(g.agentTurns!.checker).toBe(0);
+      await editor.request("reader.pass", { paperId: id, pass: 2, agentId: "fake" });
+      g = await editor.request<ReaderGuide>("reader.guide", { paperId: id, agentId: "fake" });
+      expect(g.author.state).toBe("idle");
+      expect(g.author.proposals?.map((p) => p.key)).toEqual(["unit:page-1", "unit:page-3"]);
+      expect(g.units.slice(0, 2).map((u) => u.state)).toEqual(["proposed", "proposed"]);
+    } finally {
+      await editor.request("reader.settings", { agentMode: "auto" });
+    }
+  }, 60_000);
 
   it("runs the blind checker on the configured agent and model", async () => {
     const id = await openSamplePaper("checker-custom.pdf");

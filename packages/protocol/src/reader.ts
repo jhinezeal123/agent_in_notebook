@@ -402,8 +402,8 @@ export interface ReaderUnitView {
   sections: string[];
   /** All its sections read. */
   read: boolean;
-  /** The author's work on it. */
-  state: "waiting" | "preparing" | "ready" | "failed";
+  /** The author's work on it ("proposed": waiting for the reader to press Soạn). */
+  state: "waiting" | "proposed" | "preparing" | "ready" | "failed";
   error?: string;
   /** The question to read it for. */
   guide?: string;
@@ -446,6 +446,20 @@ export interface ReaderAuthorView {
   note?: string;
   error?: string;
   queued: number;
+  /** When background agents may run (reader.json): ask first, on their own, or never. */
+  mode?: ReaderAgentMode;
+  /** Work the author would do, waiting for the reader to press Soạn; maxTurns = agent turns it may take at most. */
+  proposals?: { key: string; label: string; maxTurns: number }[];
+}
+
+/** "ask": each background job waits for the reader's click; "auto": jobs start on their own; "off": none run. */
+export type ReaderAgentMode = "ask" | "auto" | "off";
+
+/** Agent turns the hidden chats of a paper have taken (each one a request billed by the agent's provider). */
+export interface ReaderAgentTurns {
+  author: number;
+  checker: number;
+  peer: number;
 }
 
 /** Everything the passes need: the paper's map, the units with their checkpoints, what the reader wrote and answered. */
@@ -456,6 +470,8 @@ export interface ReaderGuide {
   /** Passes finished. */
   passed: ReaderPass[];
   author: ReaderAuthorView;
+  /** Agent turns spent on this paper by the hidden chats. */
+  agentTurns?: ReaderAgentTurns;
   map: {
     /** The parts written so far (the author writes them one by one). */
     has: Record<ReaderMapPart, boolean>;
@@ -578,6 +594,12 @@ export interface ReaderSettings {
   checkerModel?: string;
   /** Read-only hint: AINB_READER_CHECKER_MODEL when set in the bridge's environment. */
   checkerEnvModel?: string;
+  /** When background agents (author, checker) run; the bridge always answers with the effective value (default "ask"). */
+  agentMode?: ReaderAgentMode;
+  /** The blind checker runs with each checkpoint the reader asks for (default true); off: questions arrive marked "chưa kiểm". */
+  checker?: boolean;
+  /** Times the checker's disagreements go back to the author, 0–2 (default 2). */
+  checkerRounds?: number;
 }
 
 /** Points for an answer by how sure the reader was (Gardner-Medwin): 1 → +1/0, 2 → +2/−2, 3 → +3/−6. */

@@ -13,7 +13,7 @@ import { exportChatMarkdown } from "./export-chat.js";
 import { contextualSuggestions, matchSlashCommands, type SlashCommand } from "./slash-commands.js";
 import { resolveLang, t, type LangPref, type UiLang } from "./i18n.js";
 import type { MentorStage } from "@ainb/protocol";
-import type { ReaderGuide, ReaderSettings } from "@ainb/protocol";
+import type { ReaderAgentMode, ReaderGuide, ReaderSettings } from "@ainb/protocol";
 
 const PLATFORM = { colab: "Colab", kaggle: "Kaggle", jupyter: "Jupyter", vscode: "VS Code" } as const;
 
@@ -347,7 +347,7 @@ export function App() {
   };
 
   const manageAgents = () => void run(client.request("studio.open", { view: "settings", section: "agents" }));
-  const updateReaderSettings = (patch: { checkerAgentId?: string; checkerModel?: string }) => {
+  const updateReaderSettings = (patch: { checkerAgentId?: string; checkerModel?: string; agentMode?: ReaderAgentMode; checker?: boolean; checkerRounds?: number }) => {
     void run(client.request<ReaderSettings>("reader.settings", patch)).then((res) => {
       if (!res) return;
       setReaderSettings(res);
@@ -724,7 +724,34 @@ export function App() {
                     const defaultModelLabel = readerSettings.checkerEnvModel ? `${baseDefault} (env: ${readerSettings.checkerEnvModel})` : baseDefault;
                     return (
                       <>
+                        <div class="options-caption">{t("options.agentCaption", lang)}</div>
+                        <div class="option-row">
+                          <span class="option-name" title={t("options.agentModeHint", lang)}>{t("options.agentMode", lang)}</span>
+                          <Picker
+                            label={t("options.agentMode", lang)}
+                            value={readerSettings.agentMode ?? "ask"}
+                            options={[
+                              { value: "ask", label: t("options.agentMode.ask", lang) },
+                              { value: "auto", label: t("options.agentMode.auto", lang) },
+                              { value: "off", label: t("options.agentMode.off", lang) },
+                            ]}
+                            onChange={(v) => updateReaderSettings({ agentMode: v as ReaderAgentMode })}
+                          />
+                        </div>
                         <div class="options-caption">{t("options.checkerCaption", lang)}</div>
+                        <div class="option-row">
+                          <span class="option-name" title={t("options.checkerOnHint", lang)}>{t("options.checkerOn", lang)}</span>
+                          <input type="checkbox" class="switch" aria-label={t("options.checkerOn", lang)} checked={readerSettings.checker !== false} onChange={(e) => updateReaderSettings({ checker: e.currentTarget.checked })} />
+                        </div>
+                        <div class="option-row">
+                          <span class="option-name">{t("options.checkerRounds", lang)}</span>
+                          <Picker
+                            label={t("options.checkerRounds", lang)}
+                            value={String(readerSettings.checkerRounds ?? 2)}
+                            options={[0, 1, 2].map((n) => ({ value: String(n), label: String(n) }))}
+                            onChange={(v) => updateReaderSettings({ checkerRounds: Number(v) })}
+                          />
+                        </div>
                         <div class="option-row">
                           <span class="option-name">{t("options.checkerAgent", lang)}</span>
                           <Picker

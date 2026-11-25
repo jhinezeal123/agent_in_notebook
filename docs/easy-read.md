@@ -24,7 +24,7 @@ Nghiên cứu đầy đủ kèm nguồn: [`docs/easy-read-nghien-cuu.md`](easy-r
 3. **Luật do máy giữ, không chỉ do prompt**: thứ tự các bước, đáp án bị ẩn, câu hỏi phải qua kiểm.
 4. **Mỗi buổi ≤ 40 phút.** Thanh đọc đếm ngược theo đồng hồ của buổi; mốc bắt đầu và kết thúc còn khi mở lại tab. Khi hết giờ, bấm **Bắt đầu buổi mới** để tiếp tục nộp checkpoint. Tiến độ và lịch ôn lấy từ nhật ký.
 
-**Đội agent**: *gia sư* (chat với bạn) · *người soạn* (chạy nền, soạn trước một bước so với bạn: bản đồ paper, câu hỏi, widget) · *người kiểm* (giải mù từng câu trắc nghiệm, không thấy đáp án) · *đồng nghiệp lề* (phản biện ở lượt 3). Tất cả chạy trên agent ACP bạn đang dùng.
+**Đội agent**: *gia sư* (chat với bạn) · *người soạn* (chạy nền, soạn trước một bước so với bạn: bản đồ paper, câu hỏi, widget) · *người kiểm* (giải mù từng câu trắc nghiệm, không thấy đáp án) · *đồng nghiệp lề* (phản biện ở lượt 3). Tất cả chạy trên agent ACP bạn đang dùng. Mặc định agent nền **không tự chạy**: mỗi việc của người soạn (kèm người kiểm) chờ bạn bấm **Soạn**, xem E.4.5.
 
 Bảy quyết định triển khai đã chốt ở G.3.
 
@@ -331,6 +331,20 @@ Một phiên mới, **không thấy đáp án**: nhận câu hỏi trắc nghi�
 #### E.4.4 Đồng nghiệp lề (`ReaderPeer`, chat ẩn, lượt 3)
 
 Một chat ẩn cho mỗi góc nhìn bạn chọn (tối đa hai), khóa `reader-peer:<paperId>:<persona>`. Mỗi ghi chú lề của bạn thành một lượt; câu trả lời hiện thành luồng ở lề (không vào khung chat), có mốc. Tool: `paper_read`, `paper_find`, `reader_margin_reply`. Persona là một đoạn trong playbook (`<reader-peer persona="experimentalist">`), không phải agent khác.
+
+#### E.4.5 Bạn quyết định khi nào agent nền chạy
+
+Mỗi lượt của agent nền là một yêu cầu tính phí, nên bạn quyết định khi nào nó chạy. Cài đặt nằm trong `reader.json`, chỉnh ở mục **Agent nền (Easy-read)** của khung chat:
+
+- **Chạy** (`agentMode`):
+  - `ask` (mặc định): việc các lượt chuẩn bị trước (bản đồ paper khi chọn mục tiêu; checkpoint hai mục kế tiếp khi sang lượt 2 hay đọc tới; bài đào sâu; thẻ ôn) chỉ hiện thành **đề xuất** trên thanh người soạn, kèm số lượt agent tối đa. Agent chỉ chạy khi bạn bấm **Soạn** (hoặc **Soạn tất cả**, hay **Soạn checkpoint mục này** trên thẻ của mục).
+  - `auto`: các việc đó tự chạy, như trước.
+  - `off`: không việc nào chạy, kể cả khi bấm.
+- **Dừng** được lưu trong `reader/author.json` của paper. Việc đang làm quay về danh sách đề xuất, và không việc nào tự chạy cho paper đó (kể cả ở `auto`, kể cả sau khi khởi động lại) cho tới khi bạn bấm Soạn.
+- **Giải mù câu hỏi** (`checker`, mặc định bật) chạy kèm mỗi checkpoint bạn bấm Soạn. Tắt thì câu hỏi tới tay bạn với nhãn "chưa kiểm". **Số vòng sửa** (`checkerRounds`, 0–2, mặc định 2) giới hạn số lần câu bị trả lại cho người soạn.
+- Số lượt tối đa của một checkpoint: 3 lượt soạn, mỗi lần kiểm tối đa 2 lượt (`checkerRounds + 1` lần), mỗi vòng sửa 1 lượt soạn. Với cài đặt mặc định là 11 lượt.
+- Mỗi lượt gửi tới chat ẩn (soạn, kiểm, đồng nghiệp lề) được đếm trong `reader/usage.json` và hiện trên thanh người soạn. Lượt chat với gia sư không tính vào đây.
+- Việc bạn tự yêu cầu (ví dụ tương tác từ một đoạn chọn, nhận ví dụ gia sư đề xuất, Soạn lại) chạy ngay, trừ khi chế độ là `off`.
 
 ### E.5 Tool
 

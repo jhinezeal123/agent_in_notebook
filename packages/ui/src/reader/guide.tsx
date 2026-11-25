@@ -69,26 +69,59 @@ export function PassBar({ guide, onOpen }: { guide: ReaderGuide; onOpen: () => v
   );
 }
 
-/** What the hidden author is doing, with Stop / Try again. */
+/** Agent turns the hidden chats spent on this paper, for the reader to keep an eye on the bill. */
+function TurnCount({ guide }: { guide: ReaderGuide }) {
+  const t = guide.agentTurns;
+  const total = t ? t.author + t.checker + t.peer : 0;
+  if (!t || !total) return null;
+  return <span class="er-muted small" title="Mỗi lượt là một yêu cầu gửi tới agent (tính phí theo nhà cung cấp của agent). Không tính lượt chat với gia sư."> · agent nền đã chạy {total} lượt (soạn {t.author} · kiểm {t.checker} · đồng nghiệp {t.peer})</span>;
+}
+
+/**
+ * The hidden author: what it does now (with Dừng), what it would do and waits
+ * for the reader's Soạn (the agent turns it may take at most), why it stopped.
+ */
 export function AuthorLine({ guide, act }: { guide: ReaderGuide; act: GuideActions["act"] }) {
   const a = guide.author;
+  const run = (task: string) => void act("reader.author", { action: "run", task }).catch(() => {});
+  const proposals = a.proposals ?? [];
+  const parts: preact.ComponentChildren[] = [];
   if (a.state === "running") {
-    return (
-      <div class="er-notice author">
+    parts.push(
+      <div key="run" class="er-notice author">
         Người soạn đang chuẩn bị: <b>{a.task}</b>{a.note ? ` (${a.note})` : ""}{a.queued ? ` · còn ${a.queued} việc` : ""}…{" "}
         <button class="er-link" onClick={() => void act("reader.author", { action: "stop" })}>Dừng</button>
-      </div>
+        <TurnCount guide={guide} />
+      </div>,
     );
-  }
-  if (a.state === "failed" || a.state === "stopped") {
-    return (
-      <div class="er-notice">
-        {a.state === "stopped" ? "Người soạn đã dừng." : `Người soạn chưa làm xong: ${a.error ?? ""}`}{" "}
+  } else if (a.state === "failed") {
+    parts.push(
+      <div key="failed" class="er-notice">
+        Người soạn chưa làm xong: {a.error ?? ""}{" "}
         <button class="er-link" onClick={() => void act("reader.author", { action: "retry" })}>Soạn lại</button>
-      </div>
+      </div>,
+    );
+  } else if (a.state === "stopped") {
+    parts.push(<div key="stopped" class="er-notice">Người soạn đã dừng: không việc nào tự chạy cho paper này cho tới khi bạn bấm Soạn.<TurnCount guide={guide} /></div>);
+  }
+  if (a.mode === "off") {
+    parts.push(<div key="off" class="er-notice">Agent nền đang tắt (cài đặt Easy-read ở khung chat): người soạn và người kiểm không chạy.<TurnCount guide={guide} /></div>);
+  } else if (proposals.length) {
+    parts.push(
+      <div key="proposals" class="er-notice">
+        <div>Việc chờ bạn duyệt (agent chỉ chạy khi bạn bấm Soạn):</div>
+        {proposals.map((p) => (
+          <div key={p.key} class="er-row small">
+            <span>{p.label} <span class="er-muted">· tối đa {p.maxTurns} lượt agent</span></span>
+            <button class="er-btn" onClick={() => run(p.key)}>Soạn</button>
+          </div>
+        ))}
+        {proposals.length > 1 && <button class="er-link small" onClick={() => run("all")}>Soạn tất cả ({proposals.reduce((n, p) => n + p.maxTurns, 0)} lượt tối đa)</button>}
+        {a.state !== "running" && a.state !== "stopped" && <TurnCount guide={guide} />}
+      </div>,
     );
   }
-  return null;
+  return parts.length ? <>{parts}</> : null;
 }
 
 type Tab = "pass" | "notation" | "misses" | "related";
@@ -128,7 +161,7 @@ export function GuidePanel({ guide, view, current, actions, skim, quizRequest, o
           <button class="er-btn" onClick={askQuestion}>Hỏi tôi một câu</button>
         </div>}
         {guide.widgetRequests?.map((r) => <div key={r.id} class="er-step">
-          <p><Cite anchor={r.anchor} sections={view.sections} onCite={actions.cite} /> {r.goal}</p>
+          <p><Cite anchor={r.anchor} sections={view.sections} onCite={actions.cite} /> <Md text={r.goal} onCite={actions.cite} class="er-inline" /></p>
           {(r.offered || guide.author.state !== "running") && <button class="er-btn" onClick={() => void actions.act("reader.widget.request", r).catch(() => {})}>
             {r.offered ? "Tạo ví dụ gia sư đề xuất" : "Tiếp tục soạn ví dụ"}
           </button>}
@@ -157,7 +190,7 @@ function GoalChooser({ actions }: { actions: GuideActions }) {
   return (
     <div class="er-goals">
       <p><b>Bạn đọc paper này để làm gì?</b></p>
-      <p class="er-muted small">Mục tiêu quyết định đọc mấy lượt. Trong lúc bạn bắt đầu lượt 1, người soạn (chạy nền) làm bản đồ paper: vai trò từng đoạn, ký hiệu, khái niệm, kiến thức nền, câu đoán trước.</p>
+      <p class="er-muted small">Mục tiêu quyết định đọc mấy lượt. Sau khi chọn, người soạn (agent nền) có thể làm bản đồ paper: vai trò từng đoạn, ký hiệu, khái niệm, kiến thức nền, câu đoán trước. Mặc định nó chờ bạn bấm Soạn ở thanh phía trên.</p>
       {READER_GOALS.map((g) => (
         <button key={g.id} class="er-goal" onClick={() => void actions.act("reader.goal", { goal: g.id })}>
           <b>{g.label}</b>
@@ -172,7 +205,8 @@ function GoalChooser({ actions }: { actions: GuideActions }) {
 
 function Pass1({ guide, view, actions, skim }: { guide: ReaderGuide; view: ReaderView; actions: GuideActions; skim: { on: boolean; roles: boolean; set(next: { on?: boolean; roles?: boolean }): void } }) {
   const { map } = guide;
-  const writing = (part: keyof ReaderGuide["map"]["has"]) => !map.has[part] && <p class="er-muted small">{guide.author.state === "running" ? "Người soạn đang viết phần này…" : "Chưa có (người soạn chưa viết)."}</p>;
+  const mapProposed = guide.author.proposals?.some((p) => p.key === "map");
+  const writing = (part: keyof ReaderGuide["map"]["has"]) => !map.has[part] && <p class="er-muted small">{guide.author.state === "running" ? "Người soạn đang viết phần này…" : mapProposed ? "Chưa có: bấm Soạn “Bản đồ paper” ở thanh phía trên." : "Chưa có (người soạn chưa viết)."}</p>;
   const pretestOpen = map.pretest.filter((p) => !p.guess && !p.answer).length;
   const fivecDone = !!guide.fivec || guide.skipped.includes("5c");
   const gist = guide.goal === "gist";
@@ -225,7 +259,7 @@ function Pass1({ guide, view, actions, skim }: { guide: ReaderGuide; view: Reade
         {map.has.background && !map.background.length && <p class="er-muted small">Người soạn thấy paper này không đòi kiến thức nền gì đặc biệt.</p>}
         {map.background.map((b) => (
           <div key={b.name} class="er-bg">
-            <b>{b.name}</b> <span class="er-muted small">— {b.why}</span>
+            <b><Md text={b.name} onCite={actions.cite} class="er-inline" /></b> <span class="er-muted small">— <Md text={b.why} onCite={actions.cite} class="er-inline" /></span>
             <Md text={b.explain} onCite={actions.cite} />
             {b.link && <button class="er-link small" onClick={() => void actions.act("link.open", { url: b.link })}>Đọc bản dễ hơn ↗</button>}
           </div>
@@ -310,7 +344,13 @@ function UnitCard({ unit, guide, view, actions }: { unit: ReaderUnitView; guide:
       <div class="er-unitcard">
         <h4>{label} {unit.title}</h4>
         {unit.state === "preparing" && <p class="er-muted small">Người soạn đang đọc mục này và viết câu dẫn, checkpoint…</p>}
-        {unit.state === "waiting" && <p class="er-muted small">Checkpoint của mục này được soạn khi bạn đọc tới mục trước nó (soạn trước một bước, không soạn cả paper một lúc).</p>}
+        {unit.state === "waiting" && <p class="er-muted small">Checkpoint của mục này được đề xuất soạn khi bạn đọc tới mục trước nó (soạn trước một bước, không soạn cả paper một lúc).</p>}
+        {(unit.state === "waiting" || unit.state === "proposed") && guide.author.mode !== "off" && (
+          <div class="er-row">
+            <button class="er-btn" onClick={() => void actions.act("reader.author", { action: "run", task: `unit:${unit.id}` }).catch(() => {})}>Soạn checkpoint mục này</button>
+            {guide.author.proposals?.find((p) => p.key === `unit:${unit.id}`) && <span class="er-muted small">tối đa {guide.author.proposals.find((p) => p.key === `unit:${unit.id}`)!.maxTurns} lượt agent</span>}
+          </div>
+        )}
         {unit.state === "failed" && (
           <p class="small">Người soạn chưa soạn được: {unit.error} <button class="er-link" onClick={() => void actions.act("reader.author", { action: "retry" })}>Soạn lại</button></p>
         )}
@@ -343,14 +383,14 @@ function UnitCard({ unit, guide, view, actions }: { unit: ReaderUnitView; guide:
               </div>
               {figure === f.id && (
                 <>
-                  <ol class="er-questions small">{[...READER_FIGURE_QUESTIONS, ...f.questions].map((q) => <li key={q}>{q}</li>)}</ol>
+                  <ol class="er-questions small">{[...READER_FIGURE_QUESTIONS, ...f.questions].map((q) => <li key={q}><Md text={q} onCite={actions.cite} class="er-inline" /></li>)}</ol>
                   {!f.message && (
                     <WriteBox rows={2} placeholder="Thông điệp chính của hình, trong một câu…" busyLabel="Lưu" onCite={actions.cite}
                       onSubmit={(input) => write(actions, "figure", { ...input, key: f.id })} onSkip={() => void actions.act("reader.skip", { task: `fig:${f.id}` })} />
                   )}
                 </>
               )}
-              {f.message && <div class="er-reference small"><b>Thông điệp (tham chiếu):</b> {f.message}</div>}
+              {f.message && <div class="er-reference small"><b>Thông điệp (tham chiếu):</b> <Md text={f.message} onCite={actions.cite} class="er-inline" /></div>}
             </div>
           ))}
         </Fold>
@@ -363,7 +403,7 @@ function UnitCard({ unit, guide, view, actions }: { unit: ReaderUnitView; guide:
             <div key={p.id} class="er-figure">
               <div class="er-row"><Cite anchor={{ id: p.id }} sections={view.sections} onCite={actions.cite} /> <Md text={p.question} class="er-inline" /></div>
               {p.answer
-                ? <div class="er-reference small"><b>Kết quả:</b> {p.answer}</div>
+                ? <div class="er-reference small"><b>Kết quả:</b> <Md text={p.answer} onCite={actions.cite} class="er-inline" /></div>
                 : <WriteBox rows={2} placeholder="Bạn đoán…" busyLabel="Đoán rồi mở bảng" onCite={actions.cite}
                     onSubmit={(input) => write(actions, "predict", { ...input, key: p.id })} onSkip={() => void actions.act("reader.skip", { task: `predict:${p.id}` })} />}
             </div>
@@ -393,7 +433,7 @@ function UnitCard({ unit, guide, view, actions }: { unit: ReaderUnitView; guide:
           {unit.points && (
             <div class="er-reference">
               <div class="er-sub">Ý chính (tham chiếu)</div>
-              <ul>{unit.points.map((p) => <li key={p.text}>{p.text} <Cite anchor={{ id: p.anchor }} sections={view.sections} onCite={actions.cite} /></li>)}</ul>
+              <ul>{unit.points.map((p) => <li key={p.text}><Md text={p.text} onCite={actions.cite} class="er-inline" /> <Cite anchor={{ id: p.anchor }} sections={view.sections} onCite={actions.cite} /></li>)}</ul>
             </div>
           )}
         </div>
@@ -410,7 +450,7 @@ function UnitCard({ unit, guide, view, actions }: { unit: ReaderUnitView; guide:
 
         <div class="er-step">
           <div class="er-sub">{unit.explain ? "3" : "2"} · Câu hỏi</div>
-          {unit.light && !unit.items.length && <p class="er-muted small">{unit.light}</p>}
+          {unit.light && !unit.items.length && <Md text={unit.light} onCite={actions.cite} class="er-muted small" />}
           {unit.items.map((item, i) => (
             <ItemCard key={item.id} item={item} n={i + 1} retry={retry && !!item.again} sections={view.sections} onCite={actions.cite}
               onAnswer={(choice: ReaderChoice, confidence) => actions.act("reader.answer", { item: item.id, choice, confidence })}
@@ -457,7 +497,7 @@ function NotationTable({ guide, view, actions }: { guide: ReaderGuide; view: Rea
         {guide.map.notation.map((n) => (
           <tr key={n.symbol}>
             <td class="er-sym"><Md text={`$${n.symbol}$`} class="er-inline" /></td>
-            <td>{n.meaning}{n.shape && <span class="er-muted"> · {n.shape}</span>}</td>
+            <td><Md text={n.meaning} onCite={actions.cite} class="er-inline" />{n.shape && <span class="er-muted"> · <Md text={n.shape} class="er-inline" /></span>}</td>
             <td>{n.anchor && <Cite anchor={{ id: n.anchor }} sections={view.sections} onCite={actions.cite} />}</td>
           </tr>
         ))}
@@ -477,7 +517,7 @@ function Notation({ guide, view, actions }: { guide: ReaderGuide; view: ReaderVi
           <div class="er-sub">Khái niệm chính</div>
           {weakFirst.map((c) => (
             <div key={c.id} class="er-concept">
-              <span class="er-concept-name">{c.name}</span>
+              <span class="er-concept-name"><Md text={c.name} class="er-inline" /></span>
               {c.anchor && <Cite anchor={{ id: c.anchor }} sections={view.sections} onCite={actions.cite} />}
               <span class="er-meter" title={c.mastery === undefined ? "Chưa trả lời câu nào" : `Độ vững ${Math.round(c.mastery * 100)} % (${c.answers} lần trả lời)`}>
                 <span style={{ width: `${Math.round((c.mastery ?? 0) * 100)}%` }} class={c.mastery === undefined ? "" : c.mastery < 0.6 ? "weak" : "ok"} />
@@ -497,8 +537,8 @@ function Misses({ guide, actions }: { guide: ReaderGuide; actions: GuideActions 
       <p class="er-muted small">Những hiểu sai đã lộ ra khi đọc paper này. Mentor hỏi lại chúng sau 2 ngày.</p>
       {guide.misses.map((m, i) => (
         <div key={i} class="er-miss">
-          <b>{m.name}</b>
-          <div>{m.note}</div>
+          <b><Md text={m.name} class="er-inline" /></b>
+          <Md text={m.note} onCite={actions.cite} />
           <button class="er-link small" onClick={() => actions.ask(`Mình từng hiểu sai về “${m.name}”: ${m.note}. Giải thích lại giúp mình chỗ này, kèm mốc trong paper.`)}>Hỏi gia sư</button>
         </div>
       ))}

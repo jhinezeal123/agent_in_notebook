@@ -140,6 +140,23 @@ export function saveResearchConfig(cfg: ResearchConfig): void {
 export interface ReaderConfig {
   checkerAgentId?: string;
   checkerModel?: string;
+  /** When background agents run: "ask" (default) waits for the reader's click. */
+  agentMode?: "ask" | "auto" | "off";
+  /** The blind checker runs with each checkpoint (default true). */
+  checker?: boolean;
+  /** Times the checker's disagreements go back to the author, 0–2 (default 2). */
+  checkerRounds?: number;
+}
+
+/** What the hidden author goes by, with the defaults filled in. */
+export interface ReaderAgentSettings {
+  mode: "ask" | "auto" | "off";
+  checker: boolean;
+  rounds: number;
+}
+
+export function readerAgentSettings(cfg: ReaderConfig): ReaderAgentSettings {
+  return { mode: cfg.agentMode ?? "ask", checker: cfg.checker ?? true, rounds: cfg.checkerRounds ?? 2 };
 }
 
 export function loadReaderConfig(): ReaderConfig {
@@ -147,12 +164,15 @@ export function loadReaderConfig(): ReaderConfig {
   const out: ReaderConfig = {};
   if (typeof cfg.checkerAgentId === "string" && cfg.checkerAgentId) out.checkerAgentId = cfg.checkerAgentId;
   if (typeof cfg.checkerModel === "string" && cfg.checkerModel) out.checkerModel = cfg.checkerModel;
+  if (cfg.agentMode === "ask" || cfg.agentMode === "auto" || cfg.agentMode === "off") out.agentMode = cfg.agentMode;
+  if (typeof cfg.checker === "boolean") out.checker = cfg.checker;
+  if (typeof cfg.checkerRounds === "number" && [0, 1, 2].includes(cfg.checkerRounds)) out.checkerRounds = cfg.checkerRounds;
   return out;
 }
 
 /** Write reader.json, keeping fields this version does not know. */
 export function saveReaderConfig(cfg: ReaderConfig): void {
-  saveJsonObject(join(dataDir(), "reader.json"), ["checkerAgentId", "checkerModel"], cfg as Record<string, unknown>);
+  saveJsonObject(join(dataDir(), "reader.json"), ["checkerAgentId", "checkerModel", "agentMode", "checker", "checkerRounds"], cfg as Record<string, unknown>);
 }
 
 /** A user-defined ACP agent from agents.json. */

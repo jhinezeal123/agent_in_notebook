@@ -37,10 +37,10 @@ import { DAY_MS } from "./cards.js";
 
 /** What the passes ask of the hidden author (author.ts). */
 export interface ReaderAuthorQueue {
-  /** Write the paper's map; a unit's checkpoint. Already done, queued or running: nothing. */
-  enqueue(paperId: string, task: ReaderTask): void;
+  /** Write the paper's map; a unit's checkpoint. Already done, queued or running: nothing. Not asked by the reader: a proposal unless mode "auto". */
+  enqueue(paperId: string, task: ReaderTask, user?: boolean): void;
   status(paperId: string): ReaderGuide["author"];
-  unitState(paperId: string, unit: string): { state: "preparing" | "failed" | "waiting"; error?: string };
+  unitState(paperId: string, unit: string): { state: "preparing" | "failed" | "waiting" | "proposed"; error?: string };
 }
 
 /** Where the reader's own words go to be graded: the paper's tutor chat. */
@@ -168,6 +168,18 @@ export class ReaderPasses {
     }
     this.hub.touch(paperId);
     return this.guide(paperId);
+  }
+
+  /** Everything the reader is at would need (the map, the next checkpoints, a later pass's work): proposals, or jobs in mode "auto". */
+  prepare(paperId: string): void {
+    this.prepareMap(paperId);
+    const state = this.state(paperId);
+    if (state.goal && state.pass === 2) {
+      const units = this.units(paperId);
+      const ahead = units.findIndex((u) => !this.unitDone(paperId, u));
+      if (ahead >= 0) for (const u of units.slice(ahead, ahead + 2)) if (!this.pack(paperId, u.id)) this.author.enqueue(paperId, { kind: "unit", unit: u.id });
+    }
+    this.prepareLater(paperId);
   }
 
   prepareLater(paperId: string): void {
@@ -381,6 +393,7 @@ export class ReaderPasses {
       pass: state.pass,
       passed: [...state.passed].sort(),
       author: this.author.status(paperId),
+      agentTurns: this.hub.agentTurns(paperId),
       map: {
         has: {
           roles: !!map.roles?.length, fivec: !!map.fivec, concepts: !!map.concepts?.length, notation: !!map.notation?.length,
@@ -458,7 +471,7 @@ export class ReaderPasses {
       && items.every((i) => i.result);
     return {
       id: u.id, ...(u.number ? { number: u.number } : {}), title: u.title, sections: u.sections, read,
-      state: author.state === "preparing" || author.state === "failed" ? author.state : pack ? "ready" : "waiting",
+      state: author.state === "preparing" || author.state === "failed" || author.state === "proposed" ? author.state : pack ? "ready" : "waiting",
       ...("error" in author && author.error ? { error: author.error } : {}),
       ...(pack ? { guide: pack.guide } : {}),
       ...(pack?.explain ? { explain: { anchor: pack.explain.anchor, prompt: pack.explain.prompt } } : {}),

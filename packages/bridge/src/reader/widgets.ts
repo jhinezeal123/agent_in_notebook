@@ -107,7 +107,8 @@ export class ReaderWidgets {
     } else if (previous.offered && !offered) {
       this.hub.store.writeJsonFile(paperId, "widgets/requests.json", all.map((r) => r.id === request.id ? request : r));
     }
-    if (!offered) this.hub.author.enqueue(paperId, { kind: "widget", request });
+    // The reader asked (a selection, or accepting the tutor's suggestion): it runs now.
+    if (!offered) this.hub.author.enqueue(paperId, { kind: "widget", request }, true);
     this.hub.touch(paperId);
     return request;
   }

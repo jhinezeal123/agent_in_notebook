@@ -40,7 +40,7 @@ import {
 } from "@ainb/protocol";
 import { describeAgents, findAgent } from "./agents/registry.js";
 import { Chat, type ChatHost, type ChatProjectHost } from "./chat.js";
-import { BRIDGE_VERSION, dataDir, loadReaderConfig, loadResearchConfig, removeCustomAgent, saveReaderConfig, saveResearchConfig, type ReaderConfig } from "./config.js";
+import { BRIDGE_VERSION, dataDir, loadReaderConfig, loadResearchConfig, readerAgentSettings, removeCustomAgent, saveReaderConfig, saveResearchConfig, type ReaderConfig } from "./config.js";
 import { Orx, type OrxOptions } from "./research/orx.js";
 import { saveAgent, testAgent } from "./agents/manage.js";
 import { listTools } from "./notebook/tools.js";
@@ -220,8 +220,12 @@ export class Bridge {
       },
       emit: (event, params) => this.toEditor(event, params),
       log: (m) => this.log(m),
-      // The hidden author and checker of a paper (ER-2), shown nowhere.
-      author: () => ({ chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind), log: (m) => this.log(m) }),
+      // The hidden author and checker of a paper (ER-2), shown nowhere; when they may run is the reader's (reader.json).
+      author: () => ({
+        chat: (paperId, role, kind) => this.readerHiddenChat(paperId, role, kind),
+        log: (m) => this.log(m),
+        settings: () => readerAgentSettings(loadReaderConfig()),
+      }),
       // A misconception about a paper goes into Mentor's book too (asked again in two days).
       misconception: ({ paperId, title, concept, note }) => this.mentor.record({ t: "misconception", attemptId: paperEventId(paperId), tag: `paper:${paperId}:${concept}`.slice(0, 80), note, title: title.slice(0, 200) }),
       learning: (paperId) => {
@@ -749,7 +753,8 @@ export class Bridge {
       const paperId = String(p.paperId);
       this.reader.meta(paperId);
       this.readerAgent(paperId, p.agentId);
-      this.reader.passes.prepareLater(paperId);
+      // What the reader is at would need: proposals the reader starts (mode "ask"), or jobs (mode "auto").
+      this.reader.passes.prepare(paperId);
       return this.reader.passes.guide(paperId);
     }));
     rpc.handle("reader.appeal", guard<"reader.appeal">((p) => {
@@ -842,12 +847,22 @@ export class Bridge {
       this.reader.meta(paperId);
       this.readerAgent(paperId, p.agentId);
       if (p.action === "stop") this.reader.author.stop(paperId);
+      else if (p.action === "run") this.reader.author.start(paperId, String(p.task ?? "all"));
       else this.reader.author.retry(paperId);
       return this.reader.passes.guide(paperId);
     }));
     rpc.handle("reader.settings", guard<"reader.settings">((p) => {
-      if (p?.checkerAgentId !== undefined || p?.checkerModel !== undefined) {
+      if (p?.checkerAgentId !== undefined || p?.checkerModel !== undefined || p?.agentMode !== undefined || p?.checker !== undefined || p?.checkerRounds !== undefined) {
         const next: ReaderConfig = { ...loadReaderConfig() };
+        if (p.agentMode !== undefined) {
+          if (p.agentMode !== "ask" && p.agentMode !== "auto" && p.agentMode !== "off") throw new Error("agentMode is ask, auto or off.");
+          next.agentMode = p.agentMode;
+        }
+        if (p.checker !== undefined) next.checker = !!p.checker;
+        if (p.checkerRounds !== undefined) {
+          if (![0, 1, 2].includes(Number(p.checkerRounds))) throw new Error("checkerRounds is 0, 1 or 2.");
+          next.checkerRounds = Number(p.checkerRounds);
+        }
         if (p.checkerAgentId !== undefined) {
           const id = typeof p.checkerAgentId === "string" ? p.checkerAgentId.trim() : "";
           if (id) {
@@ -865,8 +880,9 @@ export class Bridge {
         saveReaderConfig(next);
       }
       const saved = loadReaderConfig();
+      const effective = readerAgentSettings(saved);
       const envModel = process.env.AINB_READER_CHECKER_MODEL;
-      return { ...saved, ...(envModel ? { checkerEnvModel: envModel } : {}) };
+      return { ...saved, agentMode: effective.mode, checker: effective.checker, checkerRounds: effective.rounds, ...(envModel ? { checkerEnvModel: envModel } : {}) };
     }));
     rpc.handle("research.status", guard<"research.status">((p) => (p?.start ? this.orx.start() : this.orx.status)));
     rpc.handle("research.configure", guard<"research.configure">((p) => {
@@ -1181,8 +1197,11 @@ export class Bridge {
         }
       }).catch((e: Error) => this.log(`Reader: cannot select the ${kind} model: ${e.message}`));
     }
+    const counted = kind.startsWith("peer:") ? "peer" : kind as "author" | "checker";
     return {
       send: (text, context) => {
+        // Each turn is a request the agent's provider bills: counted for the reader to see.
+        this.reader.countTurn(paperId, counted);
         ready = ready.then(() => { if (chat.status !== "closed") chat.send(text, context ? { context } : {}); });
       },
       whenIdle: async (signal) => {

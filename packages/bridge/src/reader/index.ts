@@ -2,7 +2,7 @@
 // notes, and what the reading tab and the tutor ask of them. Like Mentor, it
 // stands apart from the chat: the chat knows it only as a role (chat.ts here).
 
-import { readerSessionRemaining, type ReaderAnchor, type ReaderLibraryItem, type ReaderNote, type ReaderSectionView, type ReaderView } from "@ainb/protocol";
+import { readerSessionRemaining, type ReaderAgentTurns, type ReaderAnchor, type ReaderLibraryItem, type ReaderNote, type ReaderSectionView, type ReaderView } from "@ainb/protocol";
 import { parseArxivId, paperIdFor } from "../mentor/fetch.js";
 import { arxivIdInPdf, docFromPages, docText, type ReaderDoc } from "./doc.js";
 import { ReaderAuthor, type ReaderAuthorHost } from "./author.js";
@@ -228,6 +228,23 @@ export class ReaderHub {
       }
     }
     return out.sort((a, b) => b.lastAt - a.lastAt);
+  }
+
+  /** Agent turns the hidden chats spent on this paper (reader/usage.json). */
+  agentTurns(paperId: string): ReaderAgentTurns {
+    const saved = this.store.readJson<Partial<ReaderAgentTurns>>(paperId, "usage.json") ?? {};
+    return { author: saved.author ?? 0, checker: saved.checker ?? 0, peer: saved.peer ?? 0 };
+  }
+
+  /** One more turn sent to a hidden chat of the paper. */
+  countTurn(paperId: string, kind: keyof ReaderAgentTurns): void {
+    try {
+      const turns = this.agentTurns(paperId);
+      turns[kind] += 1;
+      this.store.writeJsonFile(paperId, "usage.json", turns);
+    } catch {
+      // A paper not on disk (a test's hub): nothing to count in.
+    }
   }
 
   /** Time spent in a section, in slices from the tab. */

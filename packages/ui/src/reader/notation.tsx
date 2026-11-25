@@ -1,6 +1,7 @@
 import katex from "katex";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type { ReaderGuide } from "@ainb/protocol";
+import { Md } from "./bits.js";
 
 export function EquationNotation({ root, notation }: { root: HTMLElement | null; notation: ReaderGuide["map"]["notation"] }) {
   const [tip, setTip] = useState<{ text: string; top: number; left: number }>();
@@ -43,5 +44,5 @@ export function EquationNotation({ root, notation }: { root: HTMLElement | null;
       root.removeEventListener("scroll", hide);
     };
   }, [root, meanings]);
-  return tip ? <div class="er-notation-tip" role="tooltip" style={{ top: tip.top, left: tip.left }}>{tip.text}</div> : null;
+  return tip ? <div class="er-notation-tip" role="tooltip" style={{ top: tip.top, left: tip.left }}><Md text={tip.text} class="er-inline" /></div> : null;
 }
