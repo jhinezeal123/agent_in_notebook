@@ -94,10 +94,8 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       if (q.proposed.delete(key)) this.hub.touch(paperId);
       return;
     }
-    if (!this.host()) {
-      if (user) throw new Error("Chưa có agent để soạn: mở khung chat và chọn một agent.");
-      return;
-    }
+    // No agent to write with (a hub without one): the request stays, as before.
+    if (!this.host()) return;
     const s = this.settings();
     if (s.mode === "off") {
       if (user) throw new Error("Agent nền đang tắt trong cài đặt Easy-read: bật lại (Hỏi trước hoặc Tự động) để soạn.");
