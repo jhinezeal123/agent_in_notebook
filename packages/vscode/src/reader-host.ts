@@ -204,8 +204,7 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
       case "reader.pdfText":
       case "reader.rendered":
       case "reader.get": {
-        // The reader's agent goes with what may start the hidden author (time in a section, in pass 2).
-        const result = await this.deps.request(method, { ...p, paperId, ...(method === "reader.progress" ? { agentId: this.deps.prefs().agentId } : {}) });
+        const result = await this.deps.request(method, { ...p, paperId });
         if (method !== "reader.progress" && method !== "reader.rendered" && result && typeof result === "object") {
           tab.view = result as ReaderView;
           tab.panel.title = tabTitle(tab.view.title);
@@ -223,13 +222,15 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
       case "reader.cards.review":
         return this.deps.request(method, { ...p, paperId });
       case "reader.guide":
+        return this.deps.request(method, { ...p, paperId });
       case "reader.goal":
       case "reader.pass":
       case "reader.author":
       case "reader.widget.request":
       case "reader.peer":
-        // These start the hidden author: it uses the reader's agent when no tutor chat is open.
-        return this.deps.request(method, { ...p, paperId, agentId: this.deps.prefs().agentId });
+        // These may start a background agent, which runs only on the tutor's agent and settings: its chat is opened first.
+        if (method !== "reader.author" || p.action === "run" || p.action === "retry") await this.tutorChat(tab);
+        return this.deps.request(method, { ...p, paperId });
       case "write":
         return this.write(tab, p);
       case "appeal": {

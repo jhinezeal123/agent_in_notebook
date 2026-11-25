@@ -137,9 +137,8 @@ export function saveResearchConfig(cfg: ResearchConfig): void {
 }
 
 /** Easy-read settings, in reader.json. */
+/** Easy-read's background agents always run on the paper's tutor's agent and settings: only when they run is configured here. */
 export interface ReaderConfig {
-  checkerAgentId?: string;
-  checkerModel?: string;
   /** When background agents run: "ask" (default) waits for the reader's click. */
   agentMode?: "ask" | "auto" | "off";
   /** The blind checker runs with each checkpoint (default true). */
@@ -162,15 +161,13 @@ export function readerAgentSettings(cfg: ReaderConfig): ReaderAgentSettings {
 export function loadReaderConfig(): ReaderConfig {
   const cfg = loadJsonObject(join(dataDir(), "reader.json"));
   const out: ReaderConfig = {};
-  if (typeof cfg.checkerAgentId === "string" && cfg.checkerAgentId) out.checkerAgentId = cfg.checkerAgentId;
-  if (typeof cfg.checkerModel === "string" && cfg.checkerModel) out.checkerModel = cfg.checkerModel;
   if (cfg.agentMode === "ask" || cfg.agentMode === "auto" || cfg.agentMode === "off") out.agentMode = cfg.agentMode;
   if (typeof cfg.checker === "boolean") out.checker = cfg.checker;
   if (typeof cfg.checkerRounds === "number" && [0, 1, 2].includes(cfg.checkerRounds)) out.checkerRounds = cfg.checkerRounds;
   return out;
 }
 
-/** Write reader.json, keeping fields this version does not know. */
+/** Write reader.json, keeping fields this version does not know (the checker's own agent and model of older versions are dropped). */
 export function saveReaderConfig(cfg: ReaderConfig): void {
   saveJsonObject(join(dataDir(), "reader.json"), ["checkerAgentId", "checkerModel", "agentMode", "checker", "checkerRounds"], cfg as Record<string, unknown>);
 }

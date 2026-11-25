@@ -135,7 +135,7 @@ describe("reading tabs (easy-read)", () => {
 
   it("forwards reader.settings to the bridge", async () => {
     const { c, requests } = withReader();
-    await c.handle("reader.settings", { checkerAgentId: "codex", checkerModel: "gpt-5-mini" });
-    expect(requests).toEqual([["reader.settings", { checkerAgentId: "codex", checkerModel: "gpt-5-mini" }]]);
+    await c.handle("reader.settings", { agentMode: "ask", checker: false });
+    expect(requests).toEqual([["reader.settings", { agentMode: "ask", checker: false }]]);
   });
 });

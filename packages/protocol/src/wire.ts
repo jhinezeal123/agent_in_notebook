@@ -501,7 +501,7 @@ export interface BridgeMethods {
   "reader.lab.open": { params: { paperId: string; widget: string; tabId: number }; result: { tabId: number; added: number } };
   "reader.widget.request": { params: { paperId: string; anchor: ReaderAnchor; goal: string; agentId?: string }; result: ReaderGuide };
   "reader.widget.answer": { params: { paperId: string; id: string; choice: number }; result: ReaderGuide };
-  /** Why the reader reads it: the author starts on the paper's map (with `agentId`, the reader's agent, when no tutor chat is open). */
+  /** Why the reader reads it: the author starts on the paper's map (on the tutor's agent and settings; `agentId` is ignored). */
   "reader.goal": { params: { paperId: string; goal: ReaderGoal; agentId?: string }; result: ReaderGuide };
   /** Go to a pass (pass 2 has the author write the first units' checkpoints); `done`: finish it and stop there. */
   "reader.pass": { params: { paperId: string; pass: ReaderPass; done?: boolean; agentId?: string }; result: ReaderGuide };
@@ -515,8 +515,8 @@ export interface BridgeMethods {
   "reader.report": { params: { paperId: string; item: string; reason: string }; result: ReaderGuide };
   /** The hidden author: lock the paper ("stop", kept on disk) or unlock it, try failed work again, or run a proposal ("all": every one). */
   "reader.author": { params: { paperId: string; action: "stop" | "unlock" | "retry" | "run"; task?: string; agentId?: string }; result: ReaderGuide };
-  /** Easy-read settings (checker agent and model): omit fields to read; pass empty string to clear a field. */
-  "reader.settings": { params: { checkerAgentId?: string; checkerModel?: string; agentMode?: ReaderAgentMode; checker?: boolean; checkerRounds?: number }; result: ReaderSettings };
+  /** Easy-read settings (when background agents run, the blind checker): omit fields to read. Every background agent runs on the tutor's agent and settings. */
+  "reader.settings": { params: { agentMode?: ReaderAgentMode; checker?: boolean; checkerRounds?: number }; result: ReaderSettings };
 }
 
 /**

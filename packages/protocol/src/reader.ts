@@ -588,14 +588,8 @@ export interface ReaderRelated {
 
 export type ReaderMapPart = "roles" | "fivec" | "concepts" | "notation" | "background" | "pretest" | "units";
 
-/** Easy-read settings saved on the bridge (reader.json). */
+/** Easy-read settings saved on the bridge (reader.json). Every background agent runs on the paper's tutor's agent and settings. */
 export interface ReaderSettings {
-  /** Agent id for the blind question checker; absent = same as the tutor. */
-  checkerAgentId?: string;
-  /** Model value for the blind question checker; absent = AINB_READER_CHECKER_MODEL or tutor's model (when same agent). */
-  checkerModel?: string;
-  /** Read-only hint: AINB_READER_CHECKER_MODEL when set in the bridge's environment. */
-  checkerEnvModel?: string;
   /** When background agents (author, checker) run; the bridge always answers with the effective value (default "ask"). */
   agentMode?: ReaderAgentMode;
   /** The blind checker runs with each checkpoint the reader asks for (default true); off: questions arrive marked "chưa kiểm". */

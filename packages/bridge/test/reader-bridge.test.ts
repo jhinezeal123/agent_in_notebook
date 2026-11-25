@@ -262,6 +262,9 @@ describe("passes 1–2 through the bridge (ER-2)", () => {
   });
 
   it("writes the map in a hidden chat once the reader chooses a goal; the editor hears nothing of that chat", async () => {
+    // Background agents run on the tutor's agent and settings: its chat is open (the reading tab opens it first).
+    const snap = await editor.request<ChatSnapshot>("chat.open", { tabId: TAB, agentId: "fake", settings: { scope: "auto", review: false, targetCellIds: [] }, reader: { paperId: id2 } });
+    tutorId = snap.chatId;
     const before = editor.snapshots.length;
     const chosen = await editor.request<ReaderGuide>("reader.goal", { paperId: id2, goal: "use", agentId: "fake" });
     expect(chosen.author.state).toBe("running");
@@ -282,8 +285,6 @@ describe("passes 1–2 through the bridge (ER-2)", () => {
   });
 
   it("keeps a waiting question's answer out of the tutor's prompt, until it is answered", async () => {
-    const snap = await editor.request<ChatSnapshot>("chat.open", { tabId: TAB, agentId: "fake", settings: { scope: "auto", review: false, targetCellIds: [] }, reader: { paperId: id2 } });
-    tutorId = snap.chatId;
     await editor.waitFor(() => editor.snapshots.some((x) => x.chatId === tutorId), 30_000, "tutor");
     let text = await turn(tutorId, "ECHO_PROMPT");
     let prompt = text.slice(text.lastIndexOf("[prompt]"));
@@ -313,7 +314,7 @@ describe("passes 1–2 through the bridge (ER-2)", () => {
   });
 });
 
-describe("checker settings (reader.settings)", () => {
+describe("background agents: settings (reader.settings) and the tutor's agent", () => {
   const ARCH = "We use scaled dot-product attention.";
   const BLEU = "The Transformer reaches 28.4 BLEU on English-to-German.";
   const ev = (page: number, quote: string) => [{ anchor: `page-${page}`, quote }];
@@ -372,26 +373,25 @@ describe("checker settings (reader.settings)", () => {
   });
 
   afterAll(async () => {
-    await editor.request("reader.settings", { checkerAgentId: "", checkerModel: "" }).catch(() => {});
+    await editor.request("reader.settings", { agentMode: "auto", checker: true, checkerRounds: 2 }).catch(() => {});
     delete process.env.FAKE_AUTHOR;
-    delete process.env.AINB_READER_CHECKER_MODEL;
   });
+  let tabs = 0;
+  const openTutor = async (paperId: string, model?: string) => {
+    const snap = await editor.request<ChatSnapshot>("chat.open", { tabId: READER_TAB + 20 + ++tabs, agentId: "fake", settings: { scope: "auto", review: false, targetCellIds: [] }, reader: { paperId } });
+    if (model) await editor.request("chat.option", { chatId: snap.chatId, optionId: "model", value: model });
+    return snap.chatId;
+  };
 
-  it("reads defaults, persists to reader.json, validates agent ids, reflects env hint, and clears fields", async () => {
-    // reader.json holds agentMode "auto" for this file (top beforeAll); the other agent settings are the defaults, always answered.
+  it("reads the defaults, persists to reader.json, validates, and drops an older version's checker agent and model", async () => {
+    // reader.json holds agentMode "auto" for this file (top beforeAll); the other settings are the defaults, always answered.
     const effective = { agentMode: "auto", checker: true, checkerRounds: 2 };
+    writeFileSync(join(home, "reader.json"), JSON.stringify({ agentMode: "auto", checkerAgentId: "fake-checker", checkerModel: "smart" }));
     expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual(effective);
-    await expect(editor.request("reader.settings", { checkerAgentId: "no-such-agent" })).rejects.toThrow(/Unknown agent/);
     await expect(editor.request("reader.settings", { agentMode: "sometimes" })).rejects.toThrow(/agentMode/);
     await expect(editor.request("reader.settings", { checkerRounds: 5 })).rejects.toThrow(/checkerRounds/);
-    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "smart" })).toEqual({ ...effective, checkerAgentId: "fake-checker", checkerModel: "smart" });
-    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ agentMode: "auto", checkerAgentId: "fake-checker", checkerModel: "smart" });
-    process.env.AINB_READER_CHECKER_MODEL = "env-fast";
-    expect(await editor.request<ReaderSettings>("reader.settings", {})).toEqual({ ...effective, checkerAgentId: "fake-checker", checkerModel: "smart", checkerEnvModel: "env-fast" });
-    expect(await editor.request<ReaderSettings>("reader.settings", { checkerAgentId: "", checkerModel: "" })).toEqual({ ...effective, checkerEnvModel: "env-fast" });
-    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ agentMode: "auto" });
-    delete process.env.AINB_READER_CHECKER_MODEL;
     expect(await editor.request<ReaderSettings>("reader.settings", { checker: false, checkerRounds: 0 })).toEqual({ ...effective, checker: false, checkerRounds: 0 });
+    expect(JSON.parse(readFileSync(join(home, "reader.json"), "utf8"))).toEqual({ agentMode: "auto", checker: false, checkerRounds: 0 });
     expect(await editor.request<ReaderSettings>("reader.settings", { checker: true, checkerRounds: 2 })).toEqual(effective);
   });
 
@@ -406,6 +406,10 @@ describe("checker settings (reader.settings)", () => {
       expect(g.author.state).toBe("idle");
       expect(readLog().length).toBe(logBefore);
       expect(g.agentTurns).toEqual({ author: 0, checker: 0, peer: 0 });
+      await openTutor(id);
+      // The tutor opened: still nothing runs in mode ask.
+      g = await editor.request<ReaderGuide>("reader.guide", { paperId: id });
+      expect(g.author.state).toBe("idle");
       await editor.request("reader.author", { paperId: id, action: "run", task: "map", agentId: "fake" });
       g = await settled(id, "the map", (x) => x.map.has.pretest);
       expect(g.agentTurns!.author).toBeGreaterThan(0);
@@ -420,31 +424,29 @@ describe("checker settings (reader.settings)", () => {
     }
   }, 60_000);
 
-  it("runs the blind checker on the configured agent and model", async () => {
-    const id = await openSamplePaper("checker-custom.pdf");
-    await editor.request("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "smart" });
+  it("runs no background agent while the paper's tutor is closed, even in mode auto", async () => {
+    const id = await openSamplePaper("no-tutor.pdf");
     const logBefore = readLog().length;
-    await editor.request("reader.goal", { paperId: id, goal: "use", agentId: "fake" });
-    await settled(id, "the map", (x) => x.map.has.pretest);
-    await editor.request("reader.pass", { paperId: id, pass: 2, agentId: "fake" });
-    await settled(id, "the checkpoints", (x) => x.units.filter((u) => u.state === "ready").length === 2);
-    const entries = readLog().slice(logBefore);
-    expect(entries.filter((e) => e.role === "author").every((e) => e.tag === "fake")).toBe(true);
-    expect(entries.filter((e) => e.role === "checker")).toEqual([{ tag: "fake-checker", model: "smart", role: "checker" }]);
+    const g = await editor.request<ReaderGuide>("reader.goal", { paperId: id, goal: "use" });
+    expect(g.author).toMatchObject({ state: "idle", mode: "auto", proposals: [{ key: "map" }] });
+    expect(readLog().length).toBe(logBefore);
+    // A click without the tutor (the reading tab opens it first): the task fails, saying why; no other agent runs.
+    await editor.request("reader.author", { paperId: id, action: "run", task: "map" });
+    await vi.waitFor(async () => expect((await editor.request<ReaderGuide>("reader.guide", { paperId: id })).author.error).toMatch(/Mở chat gia sư/), { timeout: 10_000, interval: 100 });
+    expect(readLog().length).toBe(logBefore);
   }, 60_000);
 
-  it("does not inherit the tutor's model when the checker runs on a different agent and checkerModel is unset", async () => {
-    const id = await openSamplePaper("checker-no-inherit.pdf");
-    const snap = await editor.request<ChatSnapshot>("chat.open", { tabId: READER_TAB + 2, agentId: "fake", settings: { scope: "auto", review: false, targetCellIds: [] }, reader: { paperId: id } });
-    await editor.request("chat.option", { chatId: snap.chatId, optionId: "model", value: "smart" });
-    await editor.request("reader.settings", { checkerAgentId: "fake-checker", checkerModel: "" });
+  it("runs the author and the blind checker on the tutor's agent and settings", async () => {
+    const id = await openSamplePaper("tutor-config.pdf");
+    await openTutor(id, "smart");
     const logBefore = readLog().length;
-    await editor.request("reader.goal", { paperId: id, goal: "use", agentId: "fake" });
+    await editor.request("reader.goal", { paperId: id, goal: "use" });
     await settled(id, "the map", (x) => x.map.has.pretest);
-    await editor.request("reader.pass", { paperId: id, pass: 2, agentId: "fake" });
+    await editor.request("reader.pass", { paperId: id, pass: 2 });
     await settled(id, "the checkpoints", (x) => x.units.filter((u) => u.state === "ready").length === 2);
-    const entries = readLog().slice(logBefore);
-    expect(entries.some((e) => e.role === "author" && e.tag === "fake" && e.model === "smart")).toBe(true);
-    expect(entries.filter((e) => e.role === "checker")).toEqual([{ tag: "fake-checker", model: "fast", role: "checker" }]);
+    const entries = readLog().slice(logBefore).filter((e) => e.role === "author" || e.role === "checker");
+    expect(entries.some((e) => e.role === "author")).toBe(true);
+    expect(entries.some((e) => e.role === "checker")).toBe(true);
+    expect(entries.every((e) => e.tag === "fake" && e.model === "smart")).toBe(true);
   }, 60_000);
 });

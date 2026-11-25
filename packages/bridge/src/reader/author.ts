@@ -33,6 +33,8 @@ export interface ReaderAuthorHost {
   log?(m: string): void;
   /** When the author may run, and the checker with it (reader.json). Absent: on its own, checker on, two fix rounds. */
   settings?(): ReaderAgentSettings;
+  /** The agent to run on is there (the paper's tutor chat is open); false: work prepared ahead waits as a proposal. */
+  canRun?(paperId: string): boolean;
 }
 
 export interface ReaderAgentSettings {
@@ -104,7 +106,7 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     if (user && this.stopped(paperId)) throw new Error("Paper này đang khóa agent: mở khóa trên thanh người soạn để soạn.");
     if (!user) {
       if (q.failed.has(key)) return;
-      if (s.mode === "ask" || this.stopped(paperId)) {
+      if (s.mode === "ask" || this.stopped(paperId) || this.host()?.canRun?.(paperId) === false) {
         if (!q.proposed.has(key)) {
           q.proposed.set(key, task);
           this.hub.touch(paperId);
