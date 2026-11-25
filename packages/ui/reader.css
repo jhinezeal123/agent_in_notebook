@@ -318,3 +318,20 @@ button { font: inherit; color: inherit; }
 .er-notation-tip { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - 16px)); padding: 6px 9px; pointer-events: none; color: var(--vscode-editorHoverWidget-foreground); background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-editorHoverWidget-border); border-radius: 4px; }
 .er-session { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .er-session-time { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* The Vietnamese translation (translate.tsx, doc-html.tsx) */
+.er-seg { display: inline-flex; border: 1px solid var(--er-line); border-radius: 4px; overflow: hidden; }
+.er-seg button { font: inherit; color: inherit; background: var(--er-btn2); border: 0; padding: 3px 9px; cursor: pointer; }
+.er-seg button + button { border-left: 1px solid var(--er-line); }
+.er-seg button.on { background: var(--er-btn); color: var(--er-btn-fg); }
+.er-translate { border-left-color: var(--er-line); }
+.er-translate.running { border-left-color: var(--er-accent); }
+.er-translate .er-row { flex-wrap: wrap; gap: 4px 10px; }
+.er-translate-bar { display: inline-block; width: 90px; height: 5px; border-radius: 3px; background: var(--er-line); overflow: hidden; vertical-align: middle; }
+.er-translate-bar > span { display: block; height: 100%; background: var(--er-accent); }
+.er-err-text { color: var(--er-err); }
+/* Not translated yet (or left in English): a little quieter, so what is in Vietnamese reads first. */
+.er-doc-vi [data-er-u]:not([data-er-vi]) { opacity: 0.78; }
+.er-doc-vi [data-er-vi] [data-er-u]:not([data-er-vi]) { opacity: 1; }
+/* A passage shown in English on Alt+click. */
+.er-doc-vi .er-original { opacity: 1; outline: 1px dashed var(--er-line); outline-offset: 2px; }

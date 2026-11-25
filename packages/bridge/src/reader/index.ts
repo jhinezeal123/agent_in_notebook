@@ -2,7 +2,7 @@
 // notes, and what the reading tab and the tutor ask of them. Like Mentor, it
 // stands apart from the chat: the chat knows it only as a role (chat.ts here).
 
-import { readerSessionRemaining, type ReaderAgentTurns, type ReaderAnchor, type ReaderLibraryItem, type ReaderNote, type ReaderSectionView, type ReaderView } from "@ainb/protocol";
+import { readerSessionRemaining, type ReaderAgentTurns, type ReaderAnchor, type ReaderLibraryItem, type ReaderNote, type ReaderSectionView, type ReaderTranslationView, type ReaderView } from "@ainb/protocol";
 import { parseArxivId, paperIdFor } from "../mentor/fetch.js";
 import { arxivIdInPdf, docFromPages, docText, type ReaderDoc } from "./doc.js";
 import { ReaderAuthor, type ReaderAuthorHost } from "./author.js";
@@ -14,6 +14,7 @@ import { ReaderDeep } from "./deep.js";
 import { ReaderCards } from "./cards.js";
 import { ReaderPeers } from "./peer.js";
 import { ReaderRelatedPapers } from "./related.js";
+import { ReaderTranslator } from "./translator.js";
 
 /** What the reader needs of Mentor's shelf (the paper's folder is shared with it). */
 export interface ReaderShelf {
@@ -58,11 +59,14 @@ export class ReaderHub {
   readonly cards: ReaderCards;
   readonly peers: ReaderPeers;
   readonly related: ReaderRelatedPapers;
+  /** The Vietnamese translation, on the tutor's agent like the author. */
+  readonly translator: ReaderTranslator;
   private readonly opening = new Map<string, Promise<ReaderView>>();
   private readonly renders = new Map<string, { resolve: (jpeg: Buffer) => void; reject: (e: Error) => void }[]>();
   /** Per paper, bumped whenever its guide changes (the tab asks for it again). */
   private readonly revs = new Map<string, number>();
   private readonly touched = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly refreshing = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly opts: ReaderHubOptions) {
     this.store = new ReaderStore(opts.root);
@@ -72,6 +76,7 @@ export class ReaderHub {
     this.cards = new ReaderCards(this);
     this.peers = new ReaderPeers(this);
     this.related = new ReaderRelatedPapers(this);
+    this.translator = new ReaderTranslator(this, () => opts.author?.());
     this.passes = new ReaderPasses(this, this.author, { misconception: opts.misconception });
     this.author.passes = this.passes;
   }
@@ -170,6 +175,7 @@ export class ReaderHub {
       openedAt: meta.openedAt, lastAt: Math.max(state.lastAt, meta.openedAt),
       ...(state.goal ? { goal: state.goal } : {}), pass: state.pass, guideRev: this.revs.get(paperId) ?? 0,
       ...(state.session ? { session: { ...state.session } } : {}),
+      ...translation(this.translator, paperId),
     };
   }
 
@@ -216,6 +222,19 @@ export class ReaderHub {
     }, 50));
   }
 
+  /** The paper's view changed, not its guide (the translation's progress): the tab hears it once for a burst. */
+  refresh(paperId: string): void {
+    if (this.refreshing.has(paperId)) return;
+    this.refreshing.set(paperId, setTimeout(() => {
+      this.refreshing.delete(paperId);
+      try {
+        this.opts.emit("reader.updated", { paperId, view: this.view(paperId) });
+      } catch {
+        // The paper went away meanwhile.
+      }
+    }, 150));
+  }
+
   list(): ReaderLibraryItem[] {
     const out: ReaderLibraryItem[] = [];
     for (const id of this.store.ids()) {
@@ -233,7 +252,7 @@ export class ReaderHub {
   /** Agent turns the hidden chats spent on this paper (reader/usage.json). */
   agentTurns(paperId: string): ReaderAgentTurns {
     const saved = this.store.readJson<Partial<ReaderAgentTurns>>(paperId, "usage.json") ?? {};
-    return { author: saved.author ?? 0, checker: saved.checker ?? 0, peer: saved.peer ?? 0 };
+    return { author: saved.author ?? 0, checker: saved.checker ?? 0, peer: saved.peer ?? 0, translator: saved.translator ?? 0 };
   }
 
   /** One more turn sent to a hidden chat of the paper. */
@@ -391,6 +410,16 @@ export class ReaderHub {
     } catch (e) {
       this.opts.log?.(`Reader: could not put ${meta.paperId} on the shelf: ${(e as Error).message}`);
     }
+  }
+}
+
+/** The translation's part of a view: absent for a PDF, and when it cannot be read. */
+function translation(translator: ReaderTranslator, paperId: string): { translation?: ReaderTranslationView } {
+  try {
+    const t = translator.view(paperId);
+    return t ? { translation: t } : {};
+  } catch {
+    return {};
   }
 }
 

@@ -222,6 +222,11 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
       case "reader.cards.review":
         return this.deps.request(method, { ...p, paperId });
       case "reader.guide":
+      case "reader.translation":
+        return this.deps.request(method, { ...p, paperId });
+      case "reader.translate":
+        // The translator runs on the tutor's agent and settings, like every background agent: its chat is opened first.
+        if (p.action === "start" || p.action === "retry") await this.tutorChat(tab);
         return this.deps.request(method, { ...p, paperId });
       case "reader.goal":
       case "reader.pass":
@@ -242,7 +247,7 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
       case "lab":
         return this.deps.lab(paperId, String(p.widget));
       case "ask":
-        return this.ask(tab, p.kind as ReaderAskKind, (p.anchor ?? {}) as ReaderAnchor, String(p.quote ?? ""));
+        return this.ask(tab, p.kind as ReaderAskKind, (p.anchor ?? {}) as ReaderAnchor, String(p.quote ?? ""), p.lang === "vi" ? "vi" : undefined);
       case "askText":
         return this.askText(tab, String(p.text ?? ""), p.anchor as ReaderAnchor | undefined);
       case "openArxiv": {
@@ -269,10 +274,10 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
   }
 
   /** A selected passage to the paper's tutor: its chat (opened if need be), then the chat comes to the front. */
-  private async ask(tab: ReaderTab, kind: ReaderAskKind, anchor: ReaderAnchor, quote: string): Promise<{ accepted: true }> {
+  private async ask(tab: ReaderTab, kind: ReaderAskKind, anchor: ReaderAnchor, quote: string, lang?: "vi"): Promise<{ accepted: true }> {
     if (!READER_ASK_LABEL[kind]) throw new Error(`Không rõ yêu cầu ${kind}.`);
     const chat = await this.tutorChat(tab);
-    await this.deps.request("reader.ask", { chatId: chat.chatId, kind, anchor, quote });
+    await this.deps.request("reader.ask", { chatId: chat.chatId, kind, anchor, quote, ...(lang ? { lang } : {}) });
     this.deps.follow(tab.tabId);
     await vscode.commands.executeCommand("ainb.chat.focus").then(undefined, () => {});
     return { accepted: true };

@@ -71,7 +71,7 @@ const app = agent({ name: "fake-agent" })
     s.turns++;
     const text = params.prompt.map((b) => (b.type === "text" ? b.text : "")).join("");
     if (process.env.FAKE_AGENT_LOG) {
-      const role = text.includes("<reader-checker>") ? "checker" : text.includes("<reader-author>") ? "author" : "other";
+      const role = text.includes("<reader-checker>") ? "checker" : text.includes("<reader-author>") ? "author" : text.includes("<reader-translate>") ? "translator" : "other";
       appendFileSync(process.env.FAKE_AGENT_LOG, `${JSON.stringify({ tag: process.env.FAKE_AGENT_TAG ?? "fake", model, role })}\n`);
     }
     if (text.includes("<reader>\n")) s.reader = true;
@@ -132,6 +132,9 @@ const app = agent({ name: "fake-agent" })
       const name = readerTask ? `reader:${readerTask[1]}${readerTask[2] ? `:${readerTask[2]}` : ""}` : "reader:check";
       steps = scripts[name] ?? [{ say: `no script for ${name}` }];
     }
+    // Easy-read's translator: each unit of the batch "translated" with its markers kept.
+    const batch = text.match(/<translate-batch[^>]*>[\s\S]*?\n(\[.*\])\n<\/translate-batch>/);
+    if (batch) steps = [{ tool: "reader_translation_save", args: { units: JSON.parse(batch[1]).map((u) => ({ n: u.n, vi: `VI ${u.text}` })) } }];
     let n = 0;
     // What the learner said about the exercise, for a script to use as {{reported}}.
     const vars = { reported: text.match(/reported it as wrong:\n"""\n([\s\S]*?)\n"""/)?.[1] ?? "" };

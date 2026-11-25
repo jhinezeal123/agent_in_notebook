@@ -153,7 +153,7 @@ export class ReaderChat implements ChatRole, ReaderToolHost {
   }
 
   /** A passage the reader selected, with what they want: sent as their message. */
-  ask(kind: ReaderAskKind, anchor: ReaderAnchor, quote: string): void {
+  ask(kind: ReaderAskKind, anchor: ReaderAnchor, quote: string, lang?: "vi"): void {
     if (!this.port || this.port.closed()) throw new Error("Chat của paper đã đóng.");
     const text = quote.replace(/\s+/g, " ").trim().slice(0, QUOTE_MAX);
     if (!text) throw new Error("Chọn một đoạn trong paper trước đã.");
@@ -162,8 +162,10 @@ export class ReaderChat implements ChatRole, ReaderToolHost {
     const doc = this.hub.doc(this.paperId);
     const id = anchor.id && (sectionOf(doc, anchor.id) || doc.equations.some((e) => e.id === anchor.id)) ? anchor.id : undefined;
     const shown = text.length > 220 ? `${text.slice(0, 220)}…` : text;
-    const attrs = [`kind="${kind}"`, id ? `anchor="${escapeAttr(id)}"` : "", anchor.page ? `page="${anchor.page}"` : ""].filter(Boolean).join(" ");
-    this.port.send(`${label}: “${shown}”`, { context: `<reader-selection ${attrs}>\n${text}\n</reader-selection>` });
+    const attrs = [`kind="${kind}"`, id ? `anchor="${escapeAttr(id)}"` : "", anchor.page ? `page="${anchor.page}"` : "", lang ? `lang="${lang}"` : ""].filter(Boolean).join(" ");
+    // Selected in the Vietnamese translation: the paper's own words are at the anchor, and citations quote those.
+    const translated = lang === "vi" ? "\n(The reader selected this in the Vietnamese translation shown in place of the paper's English. Read the original at the anchor with paper_read, and quote the English when you cite.)" : "";
+    this.port.send(`${label}: “${shown}”`, { context: `<reader-selection ${attrs}>\n${text}${translated}\n</reader-selection>` });
   }
 }
 

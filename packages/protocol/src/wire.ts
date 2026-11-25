@@ -5,7 +5,7 @@
 import type { ChatImageMime } from "./chat-image.js";
 import type { MentorAttemptDetail, MentorCardBody, MentorChat, MentorHome, MentorKind, MentorPaper, MentorPlace, MentorStage, MentorWorkshop } from "./mentor.js";
 import type { ChatSettings } from "./modes.js";
-import type { ReaderAnchor, ReaderAgentMode, ReaderAnswerResult, ReaderAskKind, ReaderCardGrade, ReaderCardView, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderSettings, ReaderView, ReaderWriteKind } from "./reader.js";
+import type { ReaderAnchor, ReaderAgentMode, ReaderAnswerResult, ReaderAskKind, ReaderCardGrade, ReaderCardView, ReaderChat, ReaderChoice, ReaderGoal, ReaderGuide, ReaderLibraryItem, ReaderNote, ReaderPass, ReaderSettings, ReaderTranslationUnits, ReaderTranslationView, ReaderView, ReaderWriteKind } from "./reader.js";
 import type { AppliedChange, CellRun, NotebookEvent, NotebookInfo, NotebookOp, Platform, ReviewInfo } from "./notebook.js";
 
 export const BRIDGE_DEFAULT_PORT = 47821;
@@ -488,7 +488,7 @@ export interface BridgeMethods {
   /** What `reader.render` asked for, drawn by the tab as a JPEG (base64); `error` when it could not be. */
   "reader.rendered": { params: { paperId: string; page?: number; asset?: string; jpeg?: string; error?: string }; result: { ok: true } };
   /** A selected passage to the paper's tutor: "Giải thích", "Ví dụ cụ thể", "Ký hiệu", "Vì sao?". */
-  "reader.ask": { params: { chatId: string; kind: ReaderAskKind; anchor: ReaderAnchor; quote: string }; result: { accepted: true } };
+  "reader.ask": { params: { chatId: string; kind: ReaderAskKind; anchor: ReaderAnchor; quote: string; lang?: "vi" }; result: { accepted: true } };
   /** The passes (ER-2): the paper's map, units and checkpoints, what the reader wrote and answered. */
   "reader.guide": { params: { paperId: string; agentId?: string }; result: ReaderGuide };
   "reader.appeal": { params: { paperId: string; chatId: string; write: string; reason: string }; result: ReaderGuide };
@@ -516,6 +516,10 @@ export interface BridgeMethods {
   /** The hidden author: lock the paper ("stop", kept on disk) or unlock it, try failed work again, or run a proposal ("all": every one). */
   "reader.author": { params: { paperId: string; action: "stop" | "unlock" | "retry" | "run"; task?: string; agentId?: string }; result: ReaderGuide };
   /** Easy-read settings (when background agents run, the blind checker): omit fields to read. Every background agent runs on the tutor's agent and settings. */
+  /** The Vietnamese translation: "estimate" counts the units and turns; "start" translates what is left (on the tutor's agent); "retry" also the units that failed; "stop" stops. */
+  "reader.translate": { params: { paperId: string; action: "estimate" | "start" | "retry" | "stop" }; result: ReaderTranslationView };
+  /** The translated units, for the tab to put in place of the English. */
+  "reader.translation": { params: { paperId: string }; result: ReaderTranslationUnits };
   "reader.settings": { params: { agentMode?: ReaderAgentMode; checker?: boolean; checkerRounds?: number }; result: ReaderSettings };
 }
 
