@@ -252,7 +252,7 @@ export function ReaderApp({ host }: { host: ReaderPageHost }) {
         </button>
         <button class="er-btn primary" onClick={() => void host.request("chat.focus")} title="Khung chat bên cạnh là gia sư của paper này">Hỏi gia sư</button>
       </header>
-      {(view.warnings.length > 0 || view.arxivHint || textState || cover || (guide && guide.author.state !== "idle")) && (
+      {(view.warnings.length > 0 || view.arxivHint || textState || cover || (guide && (guide.author.state !== "idle" || !!guide.author.proposals?.length || guide.author.mode === "off"))) && (
         <div class="er-notices">
           {cover && <div class="er-notice">Mục đang được gập để bạn nhớ lại. Viết xong (hoặc bấm “Mở lại mục”) thì nó hiện lại.</div>}
           {guide && <AuthorLine guide={guide} act={act} />}
