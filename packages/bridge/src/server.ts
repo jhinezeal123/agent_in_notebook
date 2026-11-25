@@ -847,6 +847,7 @@ export class Bridge {
       this.reader.meta(paperId);
       this.readerAgent(paperId, p.agentId);
       if (p.action === "stop") this.reader.author.stop(paperId);
+      else if (p.action === "unlock") this.reader.author.unlock(paperId);
       else if (p.action === "run") this.reader.author.start(paperId, String(p.task ?? "all"));
       else this.reader.author.retry(paperId);
       return this.reader.passes.guide(paperId);

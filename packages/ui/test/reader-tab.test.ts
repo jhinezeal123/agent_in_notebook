@@ -272,4 +272,27 @@ describe.skipIf(!process.env.E2E_MARKDOWN && !process.env.E2E_READER)("the readi
     expect(await widget.locator("tbody td").textContent()).toBe("16");
     expect(await page.evaluate(() => window.calls.filter(([method]) => method === "reader.widget.answer").at(-1)?.[1])).toEqual({ id: "lora-rank", choice: 0 });
   });
+  it("shows the background agents' bar while idle: proposals fold out, Soạn tất cả asks first, the paper can be locked", async () => {
+    await page.evaluate(() => {
+      window.guide = { ...window.guide, agentTurns: { author: 4, checker: 2, peer: 1 }, author: { state: "idle", queued: 0, mode: "ask", proposals: [
+        { key: "deep", label: "Bài tập đào sâu", maxTurns: 3 }, { key: "unit:S4", label: "Checkpoint §4", maxTurns: 11 },
+      ] } };
+      window.emit("updated", { ...(window as unknown as { view: ReaderView }).view, guideRev: 11 });
+    });
+    const bar = page.locator(".er-authorbar");
+    await bar.getByText("2 việc chờ duyệt · tối đa 14 lượt agent").waitFor();
+    expect(await page.locator(".er-turns").innerText()).toBe("Agent nền: 7 lượt");
+    expect(await bar.locator("select").inputValue()).toBe("ask");
+    await bar.getByText("2 việc chờ duyệt").click();
+    // A checkpoint is started from its unit's card; the bar only counts it.
+    expect(await bar.getByRole("button", { name: "Soạn", exact: true }).count()).toBe(1);
+    await bar.getByRole("button", { name: "Soạn", exact: true }).click();
+    await bar.getByText("Soạn tất cả (14 lượt tối đa)").click();
+    await bar.getByText("Soạn 2 việc, tối đa").waitFor();
+    await bar.getByRole("button", { name: "Xác nhận" }).click();
+    // The box follows the bridge's answer (locked), not the click: the fake host does not lock.
+    await bar.getByRole("checkbox", { name: "Khóa agent cho paper này" }).click();
+    const calls = await page.evaluate(() => window.calls.filter((c) => c[0] === "reader.author").map((c) => c[1]));
+    expect(calls).toEqual([{ action: "run", task: "deep" }, { action: "run", task: "all" }, { action: "stop" }]);
+  });
 });

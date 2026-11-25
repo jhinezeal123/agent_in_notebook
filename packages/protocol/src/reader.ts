@@ -448,6 +448,8 @@ export interface ReaderAuthorView {
   queued: number;
   /** When background agents may run (reader.json): ask first, on their own, or never. */
   mode?: ReaderAgentMode;
+  /** The reader locked this paper: no background agent runs for it until unlocked (reader/author.json). */
+  locked?: boolean;
   /** Work the author would do, waiting for the reader to press Soạn; maxTurns = agent turns it may take at most. */
   proposals?: { key: string; label: string; maxTurns: number }[];
 }

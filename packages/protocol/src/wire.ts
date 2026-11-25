@@ -513,9 +513,8 @@ export interface BridgeMethods {
   "reader.skip": { params: { paperId: string; task: string }; result: ReaderGuide };
   /** "Báo câu sai": the question is withdrawn. */
   "reader.report": { params: { paperId: string; item: string; reason: string }; result: ReaderGuide };
-  /** The hidden author: stop it, or try a failed task again. */
-  /** The hidden author: stop (kept until the reader starts it again), try failed work again, or run a proposal ("all": every one). */
-  "reader.author": { params: { paperId: string; action: "stop" | "retry" | "run"; task?: string; agentId?: string }; result: ReaderGuide };
+  /** The hidden author: lock the paper ("stop", kept on disk) or unlock it, try failed work again, or run a proposal ("all": every one). */
+  "reader.author": { params: { paperId: string; action: "stop" | "unlock" | "retry" | "run"; task?: string; agentId?: string }; result: ReaderGuide };
   /** Easy-read settings (checker agent and model): omit fields to read; pass empty string to clear a field. */
   "reader.settings": { params: { checkerAgentId?: string; checkerModel?: string; agentMode?: ReaderAgentMode; checker?: boolean; checkerRounds?: number }; result: ReaderSettings };
 }

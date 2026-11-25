@@ -83,8 +83,8 @@ export class ReaderAuthor implements ReaderAuthorQueue {
   /**
    * A task for the author. `user`: the reader asked for it (a click), so it
    * runs now; otherwise (the passes preparing ahead) it runs on its own only
-   * in mode "auto" and when the reader has not pressed Dừng, else it waits as
-   * a proposal the reader can start. In mode "off" nothing runs.
+   * in mode "auto" and when the paper is not locked, else it waits as a
+   * proposal the reader can start. In mode "off", or locked, nothing runs.
    */
   enqueue(paperId: string, task: Task, user = false): void {
     const q = this.queue(paperId);
@@ -101,6 +101,7 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       if (user) throw new Error("Agent nền đang tắt trong cài đặt Easy-read: bật lại (Hỏi trước hoặc Tự động) để soạn.");
       return;
     }
+    if (user && this.stopped(paperId)) throw new Error("Paper này đang khóa agent: mở khóa trên thanh người soạn để soạn.");
     if (!user) {
       if (q.failed.has(key)) return;
       if (s.mode === "ask" || this.stopped(paperId)) {
@@ -112,7 +113,6 @@ export class ReaderAuthor implements ReaderAuthorQueue {
       }
     } else {
       q.failed.delete(key);
-      if (this.stopped(paperId)) this.setStopped(paperId, false);
     }
     q.proposed.delete(key);
     // The map first: the checkpoints use its concepts.
@@ -136,7 +136,7 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     this.enqueue(paperId, task, true);
   }
 
-  /** Dừng: the work in hand goes back to proposals, and nothing starts on its own for this paper until the reader starts something (kept on disk). */
+  /** Khóa: the work in hand stops and goes back to proposals; no agent runs for this paper, on its own or on a click, until the reader unlocks it (kept on disk). */
   stop(paperId: string): void {
     const q = this.queue(paperId);
     for (const task of [...(q.current ? [q.current] : []), ...q.tasks]) q.proposed.set(taskKey(task), task);
@@ -146,13 +146,19 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     this.hub.touch(paperId);
   }
 
+  /** Mở khóa: proposals stay proposals; nothing starts until a click (or mode "auto" prepares again). */
+  unlock(paperId: string): void {
+    this.setStopped(paperId, false);
+    this.hub.touch(paperId);
+  }
+
   /** The tasks that failed, again; nothing failed: every proposal (the reader pressed Soạn lại). */
   retry(paperId: string): void {
+    if (this.stopped(paperId)) throw new Error("Paper này đang khóa agent: mở khóa trên thanh người soạn để soạn.");
     const q = this.queue(paperId);
     const again = [...q.failed.values()].map((f) => f.task);
     q.failed.clear();
     if (q.state !== "running") q.state = "idle";
-    if (this.stopped(paperId)) this.setStopped(paperId, false);
     for (const t of again) this.enqueue(paperId, t, true);
     if (!again.length) {
       // Nothing failed: what the reader is at, again (a stop left it undone).
@@ -169,8 +175,10 @@ export class ReaderAuthor implements ReaderAuthorQueue {
     const proposals = [...q.proposed.entries()]
       .filter(([, task]) => !this.done(paperId, task))
       .map(([key, task]) => ({ key, label: this.taskLabel(paperId, task), maxTurns: this.maxTurns(task, s) }));
+    const locked = this.stopped(paperId);
     return {
-      state: q.current ? "running" : this.stopped(paperId) ? "stopped" : q.state === "stopped" ? "idle" : q.state,
+      state: q.current ? "running" : locked ? "stopped" : q.state === "stopped" ? "idle" : q.state,
+      ...(locked ? { locked: true } : {}),
       ...(q.current ? { task: this.taskLabel(paperId, q.current) } : {}),
       ...(q.note ? { note: q.note } : {}),
       ...(failed.length && !q.current ? { error: failed.map((f) => `${this.taskLabel(paperId, f.task)}: ${f.why}`).join(" · ") } : {}),

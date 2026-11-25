@@ -16,6 +16,7 @@ import {
   READER_QALMRI,
   READER_ROLE_LABEL,
   readerLastPass,
+  type ReaderAgentMode,
   type ReaderAnchor,
   type ReaderChoice,
   type ReaderGuide,
@@ -69,59 +70,99 @@ export function PassBar({ guide, onOpen }: { guide: ReaderGuide; onOpen: () => v
   );
 }
 
-/** Agent turns the hidden chats spent on this paper, for the reader to keep an eye on the bill. */
-function TurnCount({ guide }: { guide: ReaderGuide }) {
-  const t = guide.agentTurns;
-  const total = t ? t.author + t.checker + t.peer : 0;
-  if (!t || !total) return null;
-  return <span class="er-muted small" title="Mỗi lượt là một yêu cầu gửi tới agent (tính phí theo nhà cung cấp của agent). Không tính lượt chat với gia sư."> · agent nền đã chạy {total} lượt (soạn {t.author} · kiểm {t.checker} · đồng nghiệp {t.peer})</span>;
+const MODES: { value: ReaderAgentMode; label: string; hint: string }[] = [
+  { value: "ask", label: "Hỏi trước", hint: "Mỗi việc chờ bạn bấm Soạn" },
+  { value: "auto", label: "Tự động", hint: "Người soạn tự chuẩn bị trước một bước" },
+  { value: "off", label: "Tắt", hint: "Không agent nền nào chạy" },
+];
+/** "Soạn tất cả" above this many agent turns asks once more. */
+const CONFIRM_TURNS = 10;
+
+/** Agent turns the hidden chats spent on this paper, always in the tab's header, for the reader to keep an eye on the bill. */
+export function AgentTurns({ guide }: { guide: ReaderGuide }) {
+  const t = guide.agentTurns ?? { author: 0, checker: 0, peer: 0 };
+  const total = t.author + t.checker + t.peer;
+  return (
+    <span class="er-turns" title={`Lượt agent nền đã chạy cho paper này: soạn ${t.author} · kiểm ${t.checker} · đồng nghiệp lề ${t.peer}. Mỗi lượt là một yêu cầu tính phí theo nhà cung cấp của agent; không tính lượt chat với gia sư.`}>
+      Agent nền: {total} lượt
+    </span>
+  );
 }
 
 /**
- * The hidden author: what it does now (with Dừng), what it would do and waits
- * for the reader's Soạn (the agent turns it may take at most), why it stopped.
+ * The background agents of this paper, always in view above it: when they
+ * may run (the mode, for every paper), a lock for this paper (stops what runs
+ * now; nothing runs until unlocked), what runs now, and the work waiting for
+ * the reader's Soạn, folded into one line with the agent turns it may take.
+ * A unit's checkpoint is started from its card in pass 2; here it is counted.
  */
 export function AuthorLine({ guide, act }: { guide: ReaderGuide; act: GuideActions["act"] }) {
   const a = guide.author;
-  const run = (task: string) => void act("reader.author", { action: "run", task }).catch(() => {});
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const proposals = a.proposals ?? [];
-  const parts: preact.ComponentChildren[] = [];
-  if (a.state === "running") {
-    parts.push(
-      <div key="run" class="er-notice author">
-        Người soạn đang chuẩn bị: <b>{a.task}</b>{a.note ? ` (${a.note})` : ""}{a.queued ? ` · còn ${a.queued} việc` : ""}…{" "}
-        <button class="er-link" onClick={() => void act("reader.author", { action: "stop" })}>Dừng</button>
-        <TurnCount guide={guide} />
-      </div>,
-    );
-  } else if (a.state === "failed") {
-    parts.push(
-      <div key="failed" class="er-notice">
-        Người soạn chưa làm xong: {a.error ?? ""}{" "}
-        <button class="er-link" onClick={() => void act("reader.author", { action: "retry" })}>Soạn lại</button>
-      </div>,
-    );
-  } else if (a.state === "stopped") {
-    parts.push(<div key="stopped" class="er-notice">Người soạn đã dừng: không việc nào tự chạy cho paper này cho tới khi bạn bấm Soạn.<TurnCount guide={guide} /></div>);
-  }
-  if (a.mode === "off") {
-    parts.push(<div key="off" class="er-notice">Agent nền đang tắt (cài đặt Easy-read ở khung chat): người soạn và người kiểm không chạy.<TurnCount guide={guide} /></div>);
-  } else if (proposals.length) {
-    parts.push(
-      <div key="proposals" class="er-notice">
-        <div>Việc chờ bạn duyệt (agent chỉ chạy khi bạn bấm Soạn):</div>
-        {proposals.map((p) => (
-          <div key={p.key} class="er-row small">
-            <span>{p.label} <span class="er-muted">· tối đa {p.maxTurns} lượt agent</span></span>
-            <button class="er-btn" onClick={() => run(p.key)}>Soạn</button>
-          </div>
-        ))}
-        {proposals.length > 1 && <button class="er-link small" onClick={() => run("all")}>Soạn tất cả ({proposals.reduce((n, p) => n + p.maxTurns, 0)} lượt tối đa)</button>}
-        {a.state !== "running" && a.state !== "stopped" && <TurnCount guide={guide} />}
-      </div>,
-    );
-  }
-  return parts.length ? <>{parts}</> : null;
+  const units = proposals.filter((p) => p.key.startsWith("unit:"));
+  const others = proposals.filter((p) => !p.key.startsWith("unit:"));
+  const total = proposals.reduce((n, p) => n + p.maxTurns, 0);
+  const mode = a.mode ?? "ask";
+  const blocked = a.locked ? "Paper đang khóa agent: bỏ khóa để soạn." : mode === "off" ? "Agent nền đang tắt: chọn Hỏi trước hoặc Tự động để soạn." : undefined;
+  useEffect(() => setConfirming(false), [proposals.length, a.locked]);
+  const run = (task: string) => {
+    setConfirming(false);
+    void act("reader.author", { action: "run", task }).catch(() => {});
+  };
+  const runAll = () => (total > CONFIRM_TURNS && !confirming ? setConfirming(true) : run("all"));
+  const setMode = (value: string) => void act("reader.settings", { agentMode: value }).then(() => act("reader.guide")).catch(() => {});
+  return (
+    <div class={`er-notice er-authorbar${a.state === "running" ? " author" : ""}`}>
+      <div class="er-row small">
+        <b>Agent nền</b>
+        <label title={MODES.find((m) => m.value === mode)?.hint}>
+          Chạy:{" "}
+          <select value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value)} aria-label="Khi nào agent nền được chạy (mọi paper)">
+            {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </label>
+        <label class="er-toggle" title="Dừng ngay việc đang chạy; không agent nền nào chạy cho paper này (kể cả khi bấm Soạn hay khi khởi động lại) cho tới khi bỏ khóa.">
+          <input type="checkbox" checked={!!a.locked} onChange={() => void act("reader.author", { action: a.locked ? "unlock" : "stop" }).catch(() => {})} /> Khóa agent cho paper này
+        </label>
+        {a.state === "running" && <span>· Người soạn đang chuẩn bị: <b>{a.task}</b>{a.note ? ` (${a.note})` : ""}{a.queued ? ` · còn ${a.queued} việc` : ""}…</span>}
+        {a.state === "failed" && (
+          <span>· Chưa làm xong: {a.error ?? ""} <button class="er-link" disabled={!!blocked} title={blocked} onClick={() => void act("reader.author", { action: "retry" }).catch(() => {})}>Soạn lại</button></span>
+        )}
+        {proposals.length > 0 && (
+          <button class="er-link" aria-expanded={open} onClick={() => setOpen(!open)}>
+            · {proposals.length} việc chờ duyệt · tối đa {total} lượt agent {open ? "▾" : "▸"}
+          </button>
+        )}
+      </div>
+      {open && proposals.length > 0 && (
+        <div class="er-proposals">
+          {blocked && <p class="er-muted small">{blocked}</p>}
+          {others.map((p) => (
+            <div key={p.key} class="er-row small">
+              <span>{p.label} <span class="er-muted">· tối đa {p.maxTurns} lượt agent</span></span>
+              <button class="er-btn" disabled={!!blocked} title={blocked} onClick={() => run(p.key)}>Soạn</button>
+            </div>
+          ))}
+          {units.length > 0 && (
+            <div class="er-row small">
+              <span>{units.map((u) => u.label).join(", ")} <span class="er-muted">· tối đa {units.reduce((n, u) => n + u.maxTurns, 0)} lượt agent · soạn từ thẻ của từng mục ở lượt 2</span></span>
+            </div>
+          )}
+          {proposals.length > 1 && (confirming
+            ? (
+              <div class="er-row small">
+                <span>Soạn {proposals.length} việc, tối đa <b>{total}</b> lượt agent?</span>
+                <button class="er-btn primary" onClick={() => run("all")}>Xác nhận</button>
+                <button class="er-link" onClick={() => setConfirming(false)}>Hủy</button>
+              </div>
+            )
+            : <button class="er-link small" disabled={!!blocked} title={blocked} onClick={runAll}>Soạn tất cả ({total} lượt tối đa)</button>)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 type Tab = "pass" | "notation" | "misses" | "related";
@@ -345,12 +386,13 @@ function UnitCard({ unit, guide, view, actions }: { unit: ReaderUnitView; guide:
         <h4>{label} {unit.title}</h4>
         {unit.state === "preparing" && <p class="er-muted small">Người soạn đang đọc mục này và viết câu dẫn, checkpoint…</p>}
         {unit.state === "waiting" && <p class="er-muted small">Checkpoint của mục này được đề xuất soạn khi bạn đọc tới mục trước nó (soạn trước một bước, không soạn cả paper một lúc).</p>}
-        {(unit.state === "waiting" || unit.state === "proposed") && guide.author.mode !== "off" && (
+        {(unit.state === "waiting" || unit.state === "proposed") && guide.author.mode !== "off" && !guide.author.locked && (
           <div class="er-row">
             <button class="er-btn" onClick={() => void actions.act("reader.author", { action: "run", task: `unit:${unit.id}` }).catch(() => {})}>Soạn checkpoint mục này</button>
             {guide.author.proposals?.find((p) => p.key === `unit:${unit.id}`) && <span class="er-muted small">tối đa {guide.author.proposals.find((p) => p.key === `unit:${unit.id}`)!.maxTurns} lượt agent</span>}
           </div>
         )}
+        {(unit.state === "waiting" || unit.state === "proposed") && guide.author.locked && <p class="er-muted small">Paper đang khóa agent: bỏ khóa trên thanh Agent nền để soạn checkpoint này.</p>}
         {unit.state === "failed" && (
           <p class="small">Người soạn chưa soạn được: {unit.error} <button class="er-link" onClick={() => void actions.act("reader.author", { action: "retry" })}>Soạn lại</button></p>
         )}

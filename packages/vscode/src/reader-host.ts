@@ -253,6 +253,9 @@ export class ReaderHost implements vscode.Disposable, ReaderTabs {
       }
       case "chat.focus":
         return vscode.commands.executeCommand("ainb.chat.focus");
+      case "reader.settings":
+        // The mode of background agents, changed from the author bar too (it is global: reader.json).
+        return this.deps.request("reader.settings", p);
       case "link.open": {
         // Outside links of the paper (its code, a dataset): the browser, never a command.
         const url = String(p.url ?? "");

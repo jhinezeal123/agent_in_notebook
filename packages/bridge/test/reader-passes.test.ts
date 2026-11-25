@@ -110,7 +110,7 @@ describe("pass 1: the map", () => {
     await vi.waitFor(() => expect(t.hub.author.status(LORA_ID).state).toBe("stopped"), { timeout: 3000, interval: 10 });
   });
 
-  it("in mode ask, runs nothing until the reader presses Soạn, and Dừng holds until the reader starts again", async () => {
+  it("in mode ask, runs nothing until the reader presses Soạn; a locked paper runs nothing until unlocked", async () => {
     const settings: ReaderAgentSettings = { mode: "ask", checker: true, rounds: 2 };
     const a = scriptedAuthor(() => {});
     const t = testHub(undefined, { author: () => ({ ...a.host, settings: () => settings }) });
@@ -125,8 +125,8 @@ describe("pass 1: the map", () => {
     expect(t.hub.author.status(LORA_ID).proposals).toBeUndefined();
     t.hub.author.stop(LORA_ID);
     await vi.waitFor(() => expect(t.hub.author.status(LORA_ID).state).toBe("stopped"), { timeout: 3000, interval: 10 });
-    expect(t.hub.author.status(LORA_ID).proposals?.map((p) => p.key)).toEqual(["map"]);
-    // Even in mode auto, what the passes prepare waits while the reader's Dừng holds.
+    expect(t.hub.author.status(LORA_ID)).toMatchObject({ locked: true, proposals: [{ key: "map" }] });
+    // Even in mode auto, what the passes prepare waits while the paper is locked.
     settings.mode = "auto";
     const sent = a.sent.length;
     t.hub.passes.prepare(LORA_ID);
@@ -136,6 +136,14 @@ describe("pass 1: the map", () => {
     settings.mode = "off";
     expect(() => t.hub.author.start(LORA_ID, "map")).toThrow(/Agent nền đang tắt/);
     settings.mode = "ask";
+    // Locked: a click does not run it either, nor does Soạn lại; unlocking runs nothing by itself.
+    expect(() => t.hub.author.start(LORA_ID, "map")).toThrow(/đang khóa agent/);
+    expect(() => t.hub.author.retry(LORA_ID)).toThrow(/đang khóa agent/);
+    t.hub.author.unlock(LORA_ID);
+    s = t.hub.author.status(LORA_ID);
+    expect(s).toMatchObject({ state: "idle", proposals: [{ key: "map" }] });
+    expect(s.locked).toBeUndefined();
+    expect(a.sent.length).toBe(sent);
     t.hub.author.start(LORA_ID, "map");
     s = t.hub.author.status(LORA_ID);
     expect(s.state).toBe("running");
